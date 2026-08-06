@@ -1,6 +1,18 @@
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { computed, reactive, watch } from "vue";
 import { createEmptyVault, createSeedVault } from "../data/seed";
 import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from "../lib";
+import {
+  bootstrapWorkspace,
+  createWorkspace,
+  forgetWorkspace,
+  getWorkspaceRevision,
+  isTauri,
+  openWorkspace,
+  pickFolder,
+  saveWorkspace,
+} from "../services/native";
 import type {
   CssSnippet,
   EditorMode,
@@ -13,10 +25,15 @@ import type {
   NoteTemplate,
   ToolView,
   VaultData,
+  VaultDescriptor,
+  VaultSessionState,
+  WorkspaceLoad,
 } from "../types";
 
 const STORAGE_KEY = "obsidian-at-home.vault.v1";
+const LEGACY_MIGRATED_KEY = "obsidian-at-home.vault.filesystem-migrated.v1";
 const PERSIST_DELAY = 220;
+const EXTERNAL_CHECK_DELAY = 3_000;
 
 type FolderSelection = VaultData["selectedFolderId"];
 type SaveStatus = "saved" | "saving" | "error";
@@ -28,70 +45,27 @@ interface UiState {
   commandOpen: boolean;
   contextOpen: boolean;
   explorerOpen: boolean;
+  vaultChooserOpen: boolean;
   inspectorTab: "links" | "info";
   saveStatus: SaveStatus;
   lastSavedAt: number;
   toast: { id: number; message: string; tone: ToastTone } | null;
 }
 
-function loadVault(): VaultData {
-  const fallback = createSeedVault();
-  if (typeof localStorage === "undefined") return fallback;
+export const vaultState = reactive<VaultData>(createEmptyVault());
 
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as Partial<VaultData>;
-    if (!Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) return fallback;
-
-    const currentReadingSnippet = fallback.snippets.find(
-      (snippet) => snippet.id === "snippet-editor-serif",
-    );
-    const currentWideSnippet = fallback.snippets.find(
-      (snippet) => snippet.id === "snippet-wide-page",
-    );
-    const snippets = (Array.isArray(parsed.snippets) ? parsed.snippets : fallback.snippets)
-      .map((snippet) => {
-        if (snippet.id === "snippet-editor-serif" && snippet.builtIn && currentReadingSnippet) {
-          return {
-            ...snippet,
-            name: currentReadingSnippet.name,
-            description: currentReadingSnippet.description,
-            css: currentReadingSnippet.css,
-          };
-        }
-        if (snippet.id === "snippet-wide-page" && snippet.builtIn && currentWideSnippet) {
-          return {
-            ...snippet,
-            name: currentWideSnippet.name,
-            description: currentWideSnippet.description,
-          };
-        }
-        return snippet;
-      });
-
-    return {
-      name: typeof parsed.name === "string" ? parsed.name : fallback.name,
-      notes: parsed.notes,
-      folders: parsed.folders,
-      templates: Array.isArray(parsed.templates) && parsed.templates.length
-        ? parsed.templates
-        : fallback.templates,
-      snippets,
-      activeNoteId: typeof parsed.activeNoteId === "string" || parsed.activeNoteId === null
-        ? parsed.activeNoteId
-        : parsed.notes[0]?.id ?? null,
-      selectedFolderId: parsed.selectedFolderId ?? "all",
-      editorMode: ["source", "split", "reading"].includes(parsed.editorMode ?? "")
-        ? parsed.editorMode as EditorMode
-        : "source",
-    };
-  } catch {
-    return fallback;
-  }
-}
-
-export const vaultState = reactive<VaultData>(loadVault());
+export const vaultSession = reactive<VaultSessionState>({
+  phase: "loading",
+  backend: isTauri() ? "native" : "browser",
+  path: null,
+  recentVaults: [],
+  error: null,
+  busy: false,
+  legacyAvailable: false,
+  revision: 0,
+  conflict: false,
+  warnings: [],
+});
 
 export const uiState = reactive<UiState>({
   tool: "notes",
@@ -99,6 +73,7 @@ export const uiState = reactive<UiState>({
   commandOpen: false,
   contextOpen: true,
   explorerOpen: true,
+  vaultChooserOpen: false,
   inspectorTab: "links",
   saveStatus: "saved",
   lastSavedAt: Date.now(),
@@ -107,15 +82,28 @@ export const uiState = reactive<UiState>({
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let externalCheckTimer: ReturnType<typeof setInterval> | undefined;
+let initialized = false;
+let suppressPersistence = 0;
+let dirtyVersion = 0;
+let savedVersion = 0;
+let sessionGeneration = 0;
+let saveInFlight: Promise<boolean> | null = null;
+let checkingExternalChanges = false;
+let initializePromise: Promise<void> | null = null;
+let closeHandlerInstalled = false;
+let closingAfterSave = false;
 
 watch(
   vaultState,
   () => {
+    if (!initialized || suppressPersistence) return;
+    dirtyVersion += 1;
     uiState.saveStatus = "saving";
     clearTimeout(persistTimer);
-    persistTimer = setTimeout(persistVault, PERSIST_DELAY);
+    persistTimer = setTimeout(() => void flushVault(), PERSIST_DELAY);
   },
-  { deep: true },
+  { deep: true, flush: "sync" },
 );
 
 watch(
@@ -123,6 +111,290 @@ watch(
   applyEnabledSnippets,
   { deep: true, immediate: true },
 );
+
+export function initializeVault(): Promise<void> {
+  if (initializePromise) return initializePromise;
+  initializePromise = initializeVaultStorage();
+  return initializePromise;
+}
+
+async function initializeVaultStorage(): Promise<void> {
+  vaultSession.error = null;
+  vaultSession.phase = "loading";
+
+  if (!isTauri()) {
+    const browserVault = readStoredVault()?.vault ?? createSeedVault();
+    hydrateVault(browserVault);
+    vaultSession.backend = "browser";
+    vaultSession.phase = "ready";
+    vaultSession.path = null;
+    vaultSession.recentVaults = [];
+    vaultSession.legacyAvailable = false;
+    vaultSession.revision = 0;
+    vaultSession.conflict = false;
+    vaultSession.warnings = [];
+    initialized = true;
+    savedVersion = dirtyVersion;
+    installVaultLifecycleHandlers();
+    return;
+  }
+
+  vaultSession.backend = "native";
+  const legacy = readStoredVault();
+  vaultSession.legacyAvailable = Boolean(
+    legacy && safeStorageGet(LEGACY_MIGRATED_KEY) !== storageFingerprint(legacy.raw),
+  );
+
+  try {
+    const result = await bootstrapWorkspace(createEmptyVault());
+    vaultSession.recentVaults = result.recentVaults;
+    if (result.workspace) {
+      applyWorkspace(result.workspace, result.recentVaults);
+    } else {
+      hydrateVault(createEmptyVault());
+      vaultSession.phase = "needs-vault";
+      vaultSession.path = null;
+      vaultSession.revision = 0;
+      vaultSession.conflict = false;
+      vaultSession.warnings = [];
+      uiState.vaultChooserOpen = true;
+    }
+  } catch (error) {
+    hydrateVault(createEmptyVault());
+    vaultSession.phase = "error";
+    vaultSession.error = errorMessage(error, "The vault list could not be opened.");
+    uiState.vaultChooserOpen = true;
+  } finally {
+    initialized = true;
+    savedVersion = dirtyVersion;
+    installVaultLifecycleHandlers();
+  }
+}
+
+export async function createFilesystemVault(name: string, useLegacy = false): Promise<boolean> {
+  if (vaultSession.backend !== "native" || vaultSession.busy) return false;
+  const cleanName = name.trim();
+  if (!cleanName) return false;
+  if (!(await flushBeforeVaultChange())) return false;
+
+  vaultSession.busy = true;
+  vaultSession.error = null;
+  try {
+    const parentPath = await pickFolder();
+    if (!parentPath) return false;
+    const legacy = useLegacy ? readStoredVault() : null;
+    if (useLegacy && !legacy) {
+      throw new Error("The previous notes could not be read from app storage.");
+    }
+    const initial = legacy?.vault ?? createSeedVault();
+    const workspace = await createWorkspace(parentPath, cleanName, initial);
+    applyWorkspace(workspace);
+
+    if (useLegacy && legacy) {
+      safeStorageSet(LEGACY_MIGRATED_KEY, storageFingerprint(legacy.raw));
+      vaultSession.legacyAvailable = false;
+      notify(`Saved ${legacy.vault.notes.length} ${legacy.vault.notes.length === 1 ? "note" : "notes"} as Markdown files`, "success");
+    } else {
+      notify(`Created ${workspace.descriptor.name}`, "success");
+    }
+    return true;
+  } catch (error) {
+    setVaultError(error, "The vault could not be created.");
+    return false;
+  } finally {
+    vaultSession.busy = false;
+  }
+}
+
+export async function openFilesystemVault(): Promise<boolean> {
+  if (vaultSession.backend !== "native" || vaultSession.busy) return false;
+  if (!(await flushBeforeVaultChange())) return false;
+
+  vaultSession.busy = true;
+  vaultSession.error = null;
+  try {
+    const path = await pickFolder();
+    if (!path) return false;
+    const workspace = await openWorkspace(path, createEmptyVault());
+    applyWorkspace(workspace);
+    notify(`Opened ${workspace.descriptor.name}`, "success");
+    return true;
+  } catch (error) {
+    setVaultError(error, "That folder could not be opened as a vault.");
+    return false;
+  } finally {
+    vaultSession.busy = false;
+  }
+}
+
+export async function switchFilesystemVault(path: string): Promise<boolean> {
+  if (vaultSession.backend !== "native" || vaultSession.busy || path === vaultSession.path) {
+    return path === vaultSession.path;
+  }
+  if (!(await flushBeforeVaultChange())) return false;
+
+  vaultSession.busy = true;
+  vaultSession.error = null;
+  try {
+    const workspace = await openWorkspace(path, createEmptyVault());
+    applyWorkspace(workspace);
+    notify(`Switched to ${workspace.descriptor.name}`, "success");
+    return true;
+  } catch (error) {
+    setVaultError(error, "That recent vault is no longer available.");
+    return false;
+  } finally {
+    vaultSession.busy = false;
+  }
+}
+
+export async function forgetCurrentVault(): Promise<boolean> {
+  const path = vaultSession.path;
+  if (vaultSession.backend !== "native" || !path || vaultSession.busy) return false;
+  if (!(await flushBeforeVaultChange())) return false;
+
+  vaultSession.busy = true;
+  vaultSession.error = null;
+  try {
+    const recentVaults = await forgetWorkspace(path);
+    sessionGeneration += 1;
+    vaultSession.recentVaults = recentVaults;
+    vaultSession.path = null;
+    vaultSession.revision = 0;
+    vaultSession.conflict = false;
+    vaultSession.warnings = [];
+    vaultSession.phase = "needs-vault";
+    hydrateVault(createEmptyVault());
+    dirtyVersion = 0;
+    savedVersion = 0;
+    uiState.vaultChooserOpen = true;
+    notify("Vault forgotten; its files are still on disk", "neutral");
+    return true;
+  } catch (error) {
+    setVaultError(error, "The vault could not be removed from the recent list.");
+    return false;
+  } finally {
+    vaultSession.busy = false;
+  }
+}
+
+export async function showCurrentVaultInFolder(): Promise<void> {
+  if (!vaultSession.path || vaultSession.backend !== "native") return;
+  try {
+    await revealItemInDir(vaultSession.path);
+  } catch (error) {
+    setVaultError(error, "The vault folder could not be shown.");
+    throw error;
+  }
+}
+
+export async function reloadFilesystemVault(): Promise<boolean> {
+  const path = vaultSession.path;
+  if (vaultSession.backend !== "native" || !path || vaultSession.busy) return false;
+  vaultSession.busy = true;
+  try {
+    const workspace = await openWorkspace(path, createEmptyVault());
+    applyWorkspace(workspace);
+    notify("Reloaded the vault from disk", "success");
+    return true;
+  } catch (error) {
+    setVaultError(error, "The vault could not be reloaded from disk.");
+    return false;
+  } finally {
+    vaultSession.busy = false;
+  }
+}
+
+export async function overwriteFilesystemVault(): Promise<boolean> {
+  const path = vaultSession.path;
+  if (vaultSession.backend !== "native" || !path || vaultSession.busy) return false;
+  vaultSession.busy = true;
+  clearTimeout(persistTimer);
+  try {
+    const targetVersion = dirtyVersion;
+    const currentRevision = await getWorkspaceRevision(path);
+    const result = await saveWorkspace(path, snapshotVault(), currentRevision);
+    vaultSession.revision = result.revision;
+    vaultSession.error = null;
+    vaultSession.conflict = false;
+    vaultSession.warnings = result.warnings;
+    savedVersion = targetVersion;
+    uiState.saveStatus = "saved";
+    uiState.lastSavedAt = result.savedAt || Date.now();
+    notify("Saved the app version over the changed files", "success");
+    return true;
+  } catch (error) {
+    const message = errorMessage(error, "The app version could not be saved.");
+    vaultSession.error = message;
+    vaultSession.conflict = isRevisionConflict(message);
+    uiState.saveStatus = "error";
+    return false;
+  } finally {
+    vaultSession.busy = false;
+  }
+}
+
+export async function flushVault(): Promise<boolean> {
+  clearTimeout(persistTimer);
+  if (!initialized || savedVersion >= dirtyVersion) return true;
+
+  if (saveInFlight) {
+    const saved = await saveInFlight;
+    if (!saved) return false;
+    return savedVersion < dirtyVersion ? flushVault() : true;
+  }
+
+  const targetVersion = dirtyVersion;
+  const generation = sessionGeneration;
+  const path = vaultSession.path;
+  const snapshot = snapshotVault();
+  uiState.saveStatus = "saving";
+
+  const operation = (async (): Promise<boolean> => {
+    if (vaultSession.backend === "browser") {
+      const saved = persistBrowserVault(snapshot);
+      if (saved && generation === sessionGeneration) savedVersion = targetVersion;
+      return saved;
+    }
+
+    if (vaultSession.phase !== "ready" || !path) {
+      uiState.saveStatus = "error";
+      return false;
+    }
+
+    try {
+      const result = await saveWorkspace(path, snapshot, vaultSession.revision);
+      if (generation !== sessionGeneration || path !== vaultSession.path) return true;
+      vaultSession.revision = result.revision;
+      vaultSession.error = null;
+      vaultSession.conflict = false;
+      vaultSession.warnings = result.warnings;
+      savedVersion = targetVersion;
+      uiState.saveStatus = "saved";
+      uiState.lastSavedAt = result.savedAt || Date.now();
+      if (result.warnings.length) notify(result.warnings[0], "warning");
+      return true;
+    } catch (error) {
+      if (generation !== sessionGeneration) return false;
+      uiState.saveStatus = "error";
+      const message = errorMessage(error, "Changes could not be written to the vault folder.");
+      vaultSession.error = message;
+      vaultSession.conflict = isRevisionConflict(message);
+      uiState.commandOpen = false;
+      uiState.vaultChooserOpen = true;
+      notify(message, "warning");
+      return false;
+    }
+  })();
+
+  saveInFlight = operation;
+  const saved = await operation;
+  if (saveInFlight === operation) saveInFlight = null;
+  if (saved && generation === sessionGeneration && savedVersion < dirtyVersion) {
+    return flushVault();
+  }
+  return saved;
+}
 
 export const activeNote = computed<Note | undefined>(() =>
   vaultState.notes.find((note) => note.id === vaultState.activeNoteId),
@@ -194,6 +466,7 @@ export function createNote(folderId?: string | null, title = "Untitled note", co
     id: createId("note"),
     title: uniqueNoteTitle(title.trim() || "Untitled note"),
     content: content ?? "# Untitled note\n\n",
+    relativePath: "",
     folderId: folderId === undefined ? currentFolderId() : folderId,
     tags: [],
     pinned: false,
@@ -222,11 +495,14 @@ export function createLinkedNote(target: string): Note {
 export function updateNote(id: string, patch: Partial<Pick<Note, "title" | "content" | "folderId" | "tags" | "pinned">>): void {
   const note = vaultState.notes.find((candidate) => candidate.id === id);
   if (!note) return;
+  const locationChanged = (patch.title !== undefined && patch.title !== note.title)
+    || (patch.folderId !== undefined && patch.folderId !== note.folderId);
   if (patch.title !== undefined) note.title = patch.title;
   if (patch.content !== undefined) note.content = patch.content;
   if (patch.folderId !== undefined) note.folderId = patch.folderId;
   if (patch.tags !== undefined) note.tags = patch.tags;
   if (patch.pinned !== undefined) note.pinned = patch.pinned;
+  if (locationChanged) note.relativePath = "";
   note.updatedAt = Date.now();
 }
 
@@ -270,16 +546,25 @@ export function createFolder(name: string, parentId: string | null = null): Fold
 export function renameFolder(id: string, name: string): void {
   const folder = vaultState.folders.find((candidate) => candidate.id === id);
   const cleanName = name.trim().replace(/[\\/]/g, " ");
-  if (folder && cleanName) folder.name = cleanName;
+  if (folder && cleanName && folder.name !== cleanName) {
+    const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
+    folder.name = cleanName;
+    for (const note of vaultState.notes) {
+      if (note.folderId && affectedFolders.has(note.folderId)) note.relativePath = "";
+    }
+  }
 }
 
 export function deleteFolder(id: string): void {
   const folder = vaultState.folders.find((candidate) => candidate.id === id);
   if (!folder) return;
+  const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
   const children = vaultState.folders.filter((candidate) => candidate.parentId === id);
   for (const child of children) child.parentId = folder.parentId;
-  for (const note of vaultState.notes.filter((candidate) => candidate.folderId === id)) {
-    note.folderId = null;
+  for (const note of vaultState.notes) {
+    if (!note.folderId || !affectedFolders.has(note.folderId)) continue;
+    note.relativePath = "";
+    if (note.folderId === id) note.folderId = folder.parentId;
   }
   vaultState.folders.splice(vaultState.folders.indexOf(folder), 1);
   if (vaultState.selectedFolderId === id) vaultState.selectedFolderId = "all";
@@ -348,24 +633,28 @@ export function deleteSnippet(id: string): void {
   if (index >= 0) vaultState.snippets.splice(index, 1);
 }
 
-export function mergeImportedVault(
+export async function mergeImportedVault(
   result: ImportResult,
   replace = false,
-): { noteCount: number; saved: boolean } {
+): Promise<{ noteCount: number; saved: boolean }> {
+  if (!(await flushVault())) return { noteCount: result.notes.length, saved: false };
   clearTimeout(persistTimer);
+  const previousVault = snapshotVault();
+  const previousSavedVersion = savedVersion;
   if (replace) {
     vaultState.notes.splice(0);
     vaultState.folders.splice(0);
-    vaultState.name = result.vaultName || "Imported vault";
   }
 
   const now = Date.now();
   for (const imported of result.notes) {
     const folderId = ensureFolderPath(imported.folderPath);
+    const title = uniqueNoteTitle(imported.title || "Untitled note");
     vaultState.notes.push({
       id: createId("note"),
-      title: imported.title || "Untitled note",
+      title,
       content: imported.content,
+      relativePath: "",
       folderId,
       tags: imported.tags,
       pinned: false,
@@ -395,7 +684,12 @@ export function mergeImportedVault(
       ? null
       : vaultState.activeNoteId;
   vaultState.selectedFolderId = "all";
-  const saved = persistVault();
+  const saved = await flushVault();
+  if (!saved) {
+    hydrateVault(previousVault);
+    dirtyVersion = previousSavedVersion;
+    savedVersion = previousSavedVersion;
+  }
   notify(
     saved
       ? `Imported ${result.notes.length} Markdown ${result.notes.length === 1 ? "note" : "notes"}`
@@ -461,8 +755,11 @@ export function notify(message: string, tone: ToastTone = "neutral"): void {
   }, 3200);
 }
 
-export function clearVault(): boolean {
+export async function clearVault(): Promise<boolean> {
+  if (!(await flushVault())) return false;
   clearTimeout(persistTimer);
+  const previousVault = snapshotVault();
+  const previousSavedVersion = savedVersion;
   vaultState.notes.splice(0);
   vaultState.folders.splice(0);
   vaultState.activeNoteId = null;
@@ -471,20 +768,13 @@ export function clearVault(): boolean {
   uiState.commandOpen = false;
   uiState.contextOpen = false;
   uiState.explorerOpen = true;
-  const saved = persistVault();
+  const saved = await flushVault();
+  if (!saved) {
+    hydrateVault(previousVault);
+    dirtyVersion = previousSavedVersion;
+    savedVersion = previousSavedVersion;
+  }
   notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
-  return saved;
-}
-
-export function deleteVault(): boolean {
-  clearTimeout(persistTimer);
-  Object.assign(vaultState, createEmptyVault());
-  uiState.noteFilter = "";
-  uiState.commandOpen = false;
-  uiState.contextOpen = false;
-  uiState.explorerOpen = true;
-  const saved = persistVault();
-  notify(saved ? "Vault deleted" : "Vault deleted, but not saved", saved ? "success" : "warning");
   return saved;
 }
 
@@ -550,10 +840,142 @@ function createId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
-function persistVault(): boolean {
-  if (typeof localStorage === "undefined") return false;
+interface StoredVault {
+  raw: string;
+  vault: VaultData;
+}
+
+function readStoredVault(): StoredVault | null {
+  const raw = safeStorageGet(STORAGE_KEY);
+  if (!raw) return null;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(vaultState));
+    const parsed = JSON.parse(raw) as Partial<VaultData>;
+    if (!Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) return null;
+    return { raw, vault: normalizeVault(parsed) };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeVault(input: Partial<VaultData>): VaultData {
+  const fallback = createSeedVault();
+  const rawNotes = Array.isArray(input.notes) ? input.notes : fallback.notes;
+  const notes: Note[] = rawNotes.map((note) => ({
+    ...note,
+    relativePath: typeof note.relativePath === "string" ? note.relativePath : "",
+    tags: Array.isArray(note.tags) ? note.tags : [],
+  }));
+  const folders = Array.isArray(input.folders) ? input.folders : fallback.folders;
+
+  const currentReadingSnippet = fallback.snippets.find(
+    (snippet) => snippet.id === "snippet-editor-serif",
+  );
+  const currentWideSnippet = fallback.snippets.find(
+    (snippet) => snippet.id === "snippet-wide-page",
+  );
+  const snippets = (Array.isArray(input.snippets) ? input.snippets : fallback.snippets)
+    .map((snippet) => {
+      if (snippet.id === "snippet-editor-serif" && snippet.builtIn && currentReadingSnippet) {
+        return {
+          ...snippet,
+          name: currentReadingSnippet.name,
+          description: currentReadingSnippet.description,
+          css: currentReadingSnippet.css,
+        };
+      }
+      if (snippet.id === "snippet-wide-page" && snippet.builtIn && currentWideSnippet) {
+        return {
+          ...snippet,
+          name: currentWideSnippet.name,
+          description: currentWideSnippet.description,
+        };
+      }
+      return snippet;
+    });
+
+  const activeNoteId = typeof input.activeNoteId === "string"
+    && notes.some((note) => note.id === input.activeNoteId)
+    ? input.activeNoteId
+    : notes[0]?.id ?? null;
+  const selectedFolderId = input.selectedFolderId ?? "all";
+  const selectionIsValid = ["all", "favorites", "unfiled"].includes(selectedFolderId)
+    || folders.some((folder) => folder.id === selectedFolderId);
+
+  return {
+    name: typeof input.name === "string" && input.name.trim() ? input.name : fallback.name,
+    notes,
+    folders,
+    templates: Array.isArray(input.templates) && input.templates.length
+      ? input.templates
+      : fallback.templates,
+    snippets,
+    activeNoteId,
+    selectedFolderId: selectionIsValid ? selectedFolderId : "all",
+    editorMode: ["source", "split", "reading"].includes(input.editorMode ?? "")
+      ? input.editorMode as EditorMode
+      : "source",
+  };
+}
+
+function snapshotVault(): VaultData {
+  return JSON.parse(JSON.stringify(vaultState)) as VaultData;
+}
+
+function hydrateVault(vault: Partial<VaultData>): void {
+  suppressPersistence += 1;
+  try {
+    Object.assign(vaultState, normalizeVault(vault));
+  } finally {
+    suppressPersistence -= 1;
+  }
+}
+
+function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.recentVaults): void {
+  sessionGeneration += 1;
+  hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
+  vaultSession.phase = "ready";
+  vaultSession.path = workspace.descriptor.path;
+  vaultSession.revision = workspace.revision;
+  vaultSession.error = null;
+  vaultSession.conflict = false;
+  vaultSession.warnings = workspace.warnings;
+  vaultSession.recentVaults = mergeRecentVaults(workspace.descriptor, recentVaults);
+  dirtyVersion = 0;
+  savedVersion = 0;
+  uiState.saveStatus = "saved";
+  uiState.lastSavedAt = Date.now();
+  uiState.noteFilter = "";
+  uiState.commandOpen = false;
+  uiState.vaultChooserOpen = false;
+  if (workspace.warnings.length) {
+    notify(`${workspace.warnings.length} ${workspace.warnings.length === 1 ? "file warning" : "file warnings"} while opening the vault`, "warning");
+  }
+}
+
+function mergeRecentVaults(
+  current: VaultDescriptor,
+  recentVaults: VaultDescriptor[],
+): VaultDescriptor[] {
+  const merged = [current, ...recentVaults.filter((vault) => vault.path !== current.path)];
+  return merged.slice(0, 12);
+}
+
+async function flushBeforeVaultChange(): Promise<boolean> {
+  if (savedVersion >= dirtyVersion) return true;
+  if (vaultSession.phase !== "ready") {
+    vaultSession.error = "Choose a vault before saving changes.";
+    return false;
+  }
+  const saved = await flushVault();
+  if (!saved) {
+    vaultSession.error = "Save the current changes before switching vaults.";
+  }
+  return saved;
+}
+
+function persistBrowserVault(vault: VaultData): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(vault));
     uiState.saveStatus = "saved";
     uiState.lastSavedAt = Date.now();
     return true;
@@ -561,6 +983,133 @@ function persistVault(): boolean {
     uiState.saveStatus = "error";
     return false;
   }
+}
+
+function installVaultLifecycleHandlers(): void {
+  if (typeof window === "undefined" || externalCheckTimer) return;
+
+  window.addEventListener("blur", () => void flushVault());
+  window.addEventListener("focus", () => void refreshWorkspaceFromDisk());
+  window.addEventListener("beforeunload", () => void flushVault());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") void flushVault();
+    else void refreshWorkspaceFromDisk();
+  });
+
+  if (vaultSession.backend === "native") void installNativeCloseHandler();
+
+  externalCheckTimer = setInterval(
+    () => void refreshWorkspaceFromDisk(),
+    EXTERNAL_CHECK_DELAY,
+  );
+}
+
+async function installNativeCloseHandler(): Promise<void> {
+  if (closeHandlerInstalled) return;
+  closeHandlerInstalled = true;
+  const appWindow = getCurrentWindow();
+  try {
+    await appWindow.onCloseRequested(async (event) => {
+      if (closingAfterSave) return;
+      if (vaultSession.busy) {
+        event.preventDefault();
+        notify("Wait for the current vault action to finish before closing", "warning");
+        return;
+      }
+      if (savedVersion >= dirtyVersion && !saveInFlight) return;
+      event.preventDefault();
+      const saved = await flushVault();
+      if (!saved) {
+        notify(vaultSession.error || "Save the current changes before closing", "warning");
+        return;
+      }
+      closingAfterSave = true;
+      await appWindow.destroy();
+    });
+  } catch (error) {
+    closeHandlerInstalled = false;
+    vaultSession.error = errorMessage(error, "Could not install the safe-close handler.");
+  }
+}
+
+async function refreshWorkspaceFromDisk(): Promise<void> {
+  const path = vaultSession.path;
+  if (
+    vaultSession.backend !== "native"
+    || vaultSession.phase !== "ready"
+    || !path
+    || vaultSession.busy
+    || uiState.vaultChooserOpen
+    || checkingExternalChanges
+    || document.visibilityState === "hidden"
+    || saveInFlight
+    || dirtyVersion > savedVersion
+  ) return;
+
+  checkingExternalChanges = true;
+  const generation = sessionGeneration;
+  try {
+    const revision = await getWorkspaceRevision(path);
+    if (revision === vaultSession.revision) return;
+    const workspace = await openWorkspace(path, createEmptyVault());
+    if (
+      generation !== sessionGeneration
+      || path !== vaultSession.path
+      || dirtyVersion > savedVersion
+    ) return;
+    applyWorkspace(workspace);
+    notify("Reloaded changes from the vault folder", "neutral");
+  } catch (error) {
+    if (generation === sessionGeneration && path === vaultSession.path) {
+      vaultSession.error = errorMessage(error, "The vault folder could not be checked for changes.");
+    }
+  } finally {
+    checkingExternalChanges = false;
+  }
+}
+
+function setVaultError(error: unknown, fallback: string): void {
+  vaultSession.error = errorMessage(error, fallback);
+  vaultSession.conflict = false;
+}
+
+function isRevisionConflict(message: string): boolean {
+  const normalized = message.toLocaleLowerCase();
+  return normalized.includes("changed")
+    && (normalized.includes("vault") || normalized.includes("file") || normalized.includes("disk"));
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return fallback;
+}
+
+function safeStorageGet(key: string): string | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(key: string, value: string): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The filesystem vault is already complete, and the original browser payload remains intact.
+  }
+}
+
+function storageFingerprint(value: string): string {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `v1-${value.length}-${(hash >>> 0).toString(16)}`;
 }
 
 function applyEnabledSnippets(): void {

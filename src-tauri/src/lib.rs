@@ -1,4 +1,5 @@
 mod vault;
+mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -9,6 +10,12 @@ pub fn run() {
             vault::pick_folder,
             vault::import_obsidian_vault,
             vault::export_obsidian_vault,
+            workspace::workspace_bootstrap,
+            workspace::workspace_open,
+            workspace::workspace_create,
+            workspace::workspace_save,
+            workspace::workspace_forget,
+            workspace::workspace_revision,
         ])
         .run(tauri::generate_context!())
         .expect("Obsidian At Home failed to start");

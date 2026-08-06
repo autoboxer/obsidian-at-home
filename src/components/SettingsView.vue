@@ -4,8 +4,11 @@ import type { ExportResult, ImportResult } from "../types";
 import {
   buildExportPayload,
   clearVault,
-  deleteVault,
+  forgetCurrentVault,
   mergeImportedVault,
+  showCurrentVaultInFolder,
+  uiState,
+  vaultSession,
   vaultState,
 } from "../stores/vault";
 import {
@@ -16,7 +19,7 @@ import {
 } from "../services/native";
 import AppIcon from "./AppIcon.vue";
 
-type ActiveTask = "import" | "export" | null;
+type ActiveTask = "import" | "export" | "show" | "clear" | "forget" | null;
 type FeedbackTone = "info" | "success" | "warning" | "error";
 
 interface Feedback {
@@ -34,7 +37,7 @@ const exportResult = ref<ExportResult | null>(null);
 const feedback = ref<Feedback | null>(null);
 const replaceConfirming = ref(false);
 const clearConfirming = ref(false);
-const deleteConfirming = ref(false);
+const forgetConfirming = ref(false);
 
 const wordCount = computed(() =>
   vaultState.notes.reduce((total, note) => {
@@ -97,7 +100,7 @@ async function chooseVaultToImport(): Promise<void> {
   feedback.value = null;
   replaceConfirming.value = false;
   clearConfirming.value = false;
-  deleteConfirming.value = false;
+  forgetConfirming.value = false;
 
   try {
     const selectedPath = await pickFolder();
@@ -141,28 +144,41 @@ function cancelImportReview(): void {
   };
 }
 
-function applyImport(replace: boolean): void {
+async function applyImport(replace: boolean): Promise<void> {
   if (activeTask.value) return;
   const result = importReview.value;
   if (!result) return;
 
-  const { noteCount, saved } = mergeImportedVault(result, replace);
-  const warnings = [...result.warnings];
-  importReview.value = null;
-  importSourcePath.value = "";
-  replaceConfirming.value = false;
-  clearConfirming.value = false;
-  deleteConfirming.value = false;
-  feedback.value = {
-    tone: !saved || warnings.length ? "warning" : "success",
-    title: saved
-      ? replace ? "Vault replaced" : "Vault merged"
-      : replace ? "Vault replaced, but not saved" : "Vault merged, but not saved",
-    message: saved
-      ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"} imported from ${result.vaultName || "the selected vault"}.`
-      : `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note is" : "notes are"} open, but the change could not be saved. Keep the app open and try again.`,
-    warnings,
-  };
+  activeTask.value = "import";
+  try {
+    const { noteCount, saved } = await mergeImportedVault(result, replace);
+    const warnings = [...result.warnings];
+    if (saved) {
+      importReview.value = null;
+      importSourcePath.value = "";
+      replaceConfirming.value = false;
+      clearConfirming.value = false;
+      forgetConfirming.value = false;
+    }
+    feedback.value = {
+      tone: !saved || warnings.length ? "warning" : "success",
+      title: saved
+        ? replace ? "Vault replaced" : "Vault merged"
+        : "Import not applied",
+      message: saved
+        ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"} copied from ${result.vaultName || "the selected vault"}.`
+        : "The current vault was restored because the imported notes could not be saved. Resolve the vault message, then try the import again.",
+      warnings,
+    };
+  } catch (error) {
+    feedback.value = {
+      tone: "error",
+      title: "Could not import the vault",
+      message: errorMessage(error, "The selected notes could not be copied into this vault."),
+    };
+  } finally {
+    activeTask.value = null;
+  }
 }
 
 async function exportVault(): Promise<void> {
@@ -172,7 +188,7 @@ async function exportVault(): Promise<void> {
   feedback.value = null;
   exportResult.value = null;
   clearConfirming.value = false;
-  deleteConfirming.value = false;
+  forgetConfirming.value = false;
 
   try {
     const parentPath = await pickFolder();
@@ -215,35 +231,79 @@ function resetTransferState(): void {
   replaceConfirming.value = false;
 }
 
-function clearCurrentVault(): void {
-  if (activeTask.value) return;
-  const saved = clearVault();
-  resetTransferState();
-  clearConfirming.value = false;
-  deleteConfirming.value = false;
-  feedback.value = {
-    tone: saved ? "success" : "warning",
-    title: saved ? "Vault cleared" : "Vault cleared, but not saved",
-    message: saved
-      ? "All notes and folders were removed. Templates and CSS snippets were kept."
-      : "The current view is empty, but the change could not be saved. Keep the app open and try again.",
-  };
+async function revealCurrentVault(): Promise<void> {
+  if (!nativeAvailable || !vaultSession.path || activeTask.value) return;
+  activeTask.value = "show";
+  try {
+    await showCurrentVaultInFolder();
+  } catch (error) {
+    feedback.value = {
+      tone: "error",
+      title: "Could not show the vault folder",
+      message: errorMessage(error, "The current vault folder could not be opened."),
+    };
+  } finally {
+    activeTask.value = null;
+  }
 }
 
-function deleteCurrentVault(): void {
-  if (activeTask.value) return;
-  const deletedName = vaultState.name;
-  const saved = deleteVault();
-  resetTransferState();
+function manageVaults(): void {
   clearConfirming.value = false;
-  deleteConfirming.value = false;
-  feedback.value = {
-    tone: saved ? "success" : "warning",
-    title: saved ? "Vault deleted" : "Vault deleted, but not saved",
-    message: saved
-      ? `${deletedName} was erased. A new empty vault with the built-in templates and CSS snippets is ready.`
-      : "A new empty vault is open, but the change could not be saved. Keep the app open and try again.",
-  };
+  forgetConfirming.value = false;
+  uiState.vaultChooserOpen = true;
+}
+
+async function clearCurrentVault(): Promise<void> {
+  if (activeTask.value) return;
+  activeTask.value = "clear";
+  try {
+    const saved = await clearVault();
+    resetTransferState();
+    clearConfirming.value = false;
+    forgetConfirming.value = false;
+    feedback.value = {
+      tone: saved ? "success" : "warning",
+      title: saved ? "Vault cleared" : "Vault cleared, but not saved",
+      message: saved
+        ? "The managed Markdown note files were deleted. Templates and CSS snippets were kept."
+        : "The vault was left unchanged because the note files could not be removed.",
+    };
+  } catch (error) {
+    feedback.value = {
+      tone: "error",
+      title: "Could not clear the vault",
+      message: errorMessage(error, "The Markdown note files could not be deleted."),
+    };
+  } finally {
+    activeTask.value = null;
+  }
+}
+
+async function forgetVault(): Promise<void> {
+  if (activeTask.value) return;
+  activeTask.value = "forget";
+  const forgottenName = vaultState.name;
+  try {
+    const forgotten = await forgetCurrentVault();
+    resetTransferState();
+    clearConfirming.value = false;
+    forgetConfirming.value = false;
+    feedback.value = {
+      tone: forgotten ? "success" : "warning",
+      title: forgotten ? "Vault forgotten" : "Could not forget the vault",
+      message: forgotten
+        ? `${forgottenName} was removed from the app. Its Markdown files and metadata remain on disk.`
+        : "The vault is still available in the app. No files were changed.",
+    };
+  } catch (error) {
+    feedback.value = {
+      tone: "error",
+      title: "Could not forget the vault",
+      message: errorMessage(error, "The vault could not be removed from the app. No files were changed."),
+    };
+  } finally {
+    activeTask.value = null;
+  }
 }
 </script>
 
@@ -254,7 +314,7 @@ function deleteCurrentVault(): void {
         <span class="settings-eyebrow">Preferences &amp; portability</span>
         <h1 class="settings-hero__title">Settings</h1>
         <p class="settings-hero__description">
-          Review vault details, import or export Markdown, and manage your data.
+          Review the current vault, open or create vaults, and manage Markdown files.
         </p>
       </div>
     </header>
@@ -278,6 +338,39 @@ function deleteCurrentVault(): void {
           <strong class="settings-stat-card__value">{{ formatCount(stat.value) }}</strong>
           <span class="settings-stat-card__label">{{ stat.label }}</span>
         </article>
+      </div>
+
+      <div class="settings-import-choice">
+        <div class="settings-import-choice__copy">
+          <strong>Current vault storage</strong>
+          <p v-if="vaultSession.path">
+            Notes are Markdown files in this folder:
+            <code class="settings-import-review__path" :title="vaultSession.path">{{ vaultSession.path }}</code>
+          </p>
+          <p v-else>
+            Browser preview notes stay in this browser and are separate from desktop vaults.
+          </p>
+        </div>
+        <div class="settings-import-choice__actions">
+          <button
+            type="button"
+            class="settings-button settings-button--secondary"
+            :disabled="!nativeAvailable || !vaultSession.path || activeTask !== null || vaultSession.busy"
+            @click="revealCurrentVault"
+          >
+            <AppIcon :name="activeTask === 'show' ? 'refresh' : 'folder-open'" :size="16" />
+            {{ activeTask === "show" ? "Opening…" : "Show in folder" }}
+          </button>
+          <button
+            type="button"
+            class="settings-button settings-button--primary"
+            :disabled="activeTask !== null || vaultSession.busy"
+            @click="manageVaults"
+          >
+            <AppIcon name="archive" :size="16" />
+            Manage vaults
+          </button>
+        </div>
       </div>
     </section>
 
@@ -344,7 +437,7 @@ function deleteCurrentVault(): void {
             <div>
               <h3 class="settings-transfer-card__title">Import from Obsidian</h3>
               <p class="settings-transfer-card__description">
-                Import Markdown notes, folders, frontmatter tags, and CSS snippets.
+                Copy Markdown notes, folders, frontmatter tags, and CSS snippets into this vault.
               </p>
             </div>
           </div>
@@ -492,8 +585,8 @@ function deleteCurrentVault(): void {
           <div class="settings-import-choice__copy">
             <strong>Choose an import method</strong>
             <p>
-              Merge keeps everything already here. Replace clears the current notes and
-              folder tree first; your templates and existing CSS snippets stay available.
+              Merge keeps everything already here. Replace permanently deletes the current
+              managed note files before copying; templates and CSS snippets stay available.
             </p>
           </div>
           <div class="settings-import-choice__actions">
@@ -524,8 +617,8 @@ function deleteCurrentVault(): void {
               <AppIcon name="info" :size="18" />
             </span>
             <div class="settings-confirmation__copy">
-              <strong>Replace the current note collection?</strong>
-              <p>This removes {{ formatCount(vaultState.notes.length) }} current notes before importing.</p>
+              <strong>Replace the current vault notes?</strong>
+              <p>This permanently deletes {{ formatCount(vaultState.notes.length) }} managed Markdown note files before copying the import.</p>
             </div>
             <div class="settings-confirmation__actions">
               <button
@@ -558,15 +651,19 @@ function deleteCurrentVault(): void {
         <div class="settings-danger-row__copy">
           <span class="settings-eyebrow">Vault content</span>
           <h2 id="settings-clear-title" class="settings-section__title">Clear vault</h2>
-          <p class="settings-section__description">
-            Remove every note, folder, and tag. The vault name, templates, and CSS snippets stay.
+          <p v-if="vaultSession.path" class="settings-section__description">
+            Permanently delete every managed Markdown note file from this vault folder.
+            The vault, templates, and CSS snippets stay.
+          </p>
+          <p v-else class="settings-section__description">
+            Remove every note and folder from browser preview storage. Templates and CSS snippets stay.
           </p>
         </div>
         <button
           type="button"
           class="settings-button settings-button--danger-ghost"
-          :disabled="activeTask !== null"
-          @click="clearConfirming = true; deleteConfirming = false"
+          :disabled="activeTask !== null || vaultSession.busy"
+          @click="clearConfirming = true; forgetConfirming = false"
         >
           Clear vault
         </button>
@@ -578,8 +675,10 @@ function deleteCurrentVault(): void {
             <AppIcon name="info" :size="18" />
           </span>
           <div class="settings-confirmation__copy">
-            <strong>Clear {{ formatCount(vaultState.notes.length) }} notes and {{ formatCount(vaultState.folders.length) }} folders?</strong>
-            <p>Templates and CSS snippets will stay. Export first if you need a backup.</p>
+            <strong v-if="vaultSession.path">Permanently delete {{ formatCount(vaultState.notes.length) }} managed Markdown note files?</strong>
+            <strong v-else>Permanently remove {{ formatCount(vaultState.notes.length) }} notes from browser preview storage?</strong>
+            <p v-if="vaultSession.path">This cannot be undone. Templates and CSS snippets will stay. Export or copy the vault folder first if you need a backup.</p>
+            <p v-else>This cannot be undone. Templates and CSS snippets will stay.</p>
           </div>
           <div class="settings-confirmation__actions">
             <button
@@ -588,7 +687,7 @@ function deleteCurrentVault(): void {
               :disabled="activeTask !== null"
               @click="clearCurrentVault"
             >
-              Yes, clear vault
+              {{ activeTask === "clear" ? "Clearing…" : "Yes, clear vault" }}
             </button>
             <button type="button" class="settings-button settings-button--quiet" @click="clearConfirming = false">
               Cancel
@@ -597,53 +696,56 @@ function deleteCurrentVault(): void {
         </div>
       </Transition>
 
-      <div class="settings-danger-divider" />
+      <template v-if="vaultSession.path">
+        <div class="settings-danger-divider" />
 
-      <div class="settings-danger-row">
-        <div class="settings-danger-row__icon">
-          <AppIcon name="trash" :size="19" />
+        <div class="settings-danger-row">
+          <div class="settings-danger-row__icon">
+            <AppIcon name="archive" :size="19" />
+          </div>
+          <div class="settings-danger-row__copy">
+            <span class="settings-eyebrow">Recent vaults</span>
+            <h2 class="settings-section__title">Forget vault</h2>
+            <p class="settings-section__description">
+              Remove this vault from the app without deleting its Markdown files or metadata.
+              You will need to create or open another vault.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="settings-button settings-button--danger-ghost"
+            :disabled="activeTask !== null || vaultSession.busy"
+            @click="forgetConfirming = true; clearConfirming = false"
+          >
+            Forget vault
+          </button>
         </div>
-        <div class="settings-danger-row__copy">
-          <span class="settings-eyebrow">Entire vault</span>
-          <h2 class="settings-section__title">Delete vault</h2>
-          <p class="settings-section__description">
-            Erase this vault and its custom templates and snippets. A new empty vault will keep only the built-in examples.
-          </p>
-        </div>
-        <button
-          type="button"
-          class="settings-button settings-button--danger-ghost"
-          :disabled="activeTask !== null"
-          @click="deleteConfirming = true; clearConfirming = false"
-        >
-          Delete vault
-        </button>
-      </div>
 
-      <Transition name="collapse-fade">
-        <div v-if="deleteConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
-          <span class="settings-confirmation__icon">
-            <AppIcon name="info" :size="18" />
-          </span>
-          <div class="settings-confirmation__copy">
-            <strong>Delete “{{ vaultState.name }}”?</strong>
-            <p>Notes, folders, and custom templates and snippets will be erased. Imported source folders and exported folders are not affected.</p>
+        <Transition name="collapse-fade">
+          <div v-if="forgetConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
+            <span class="settings-confirmation__icon">
+              <AppIcon name="info" :size="18" />
+            </span>
+            <div class="settings-confirmation__copy">
+              <strong>Forget “{{ vaultState.name }}”?</strong>
+              <p>All Markdown files and <code>.obsidian-at-home</code> metadata will remain on disk. You will need to create or open another vault to continue.</p>
+            </div>
+            <div class="settings-confirmation__actions">
+              <button
+                type="button"
+                class="settings-button settings-button--danger"
+                :disabled="activeTask !== null"
+                @click="forgetVault"
+              >
+                {{ activeTask === "forget" ? "Forgetting…" : "Yes, forget vault" }}
+              </button>
+              <button type="button" class="settings-button settings-button--quiet" @click="forgetConfirming = false">
+                Cancel
+              </button>
+            </div>
           </div>
-          <div class="settings-confirmation__actions">
-            <button
-              type="button"
-              class="settings-button settings-button--danger"
-              :disabled="activeTask !== null"
-              @click="deleteCurrentVault"
-            >
-              Yes, delete vault
-            </button>
-            <button type="button" class="settings-button settings-button--quiet" @click="deleteConfirming = false">
-              Cancel
-            </button>
-          </div>
-        </div>
-      </Transition>
+        </Transition>
+      </template>
     </section>
   </main>
 </template>

@@ -15,6 +15,13 @@ const folderInputOpen = ref(false);
 const folderName = ref("");
 const folderField = ref<HTMLInputElement>();
 
+const vaultMonogram = computed(() => {
+  const words = vaultState.name.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "VA";
+  if (words.length === 1) return Array.from(words[0]).slice(0, 2).join("").toLocaleUpperCase();
+  return `${Array.from(words[0])[0] ?? ""}${Array.from(words.at(-1) ?? "")[0] ?? ""}`.toLocaleUpperCase();
+});
+
 const topTags = computed(() => {
   const counts = new Map<string, number>();
   for (const note of vaultState.notes) {
@@ -39,17 +46,30 @@ function searchTag(tag: string): void {
   uiState.tool = "search";
   uiState.commandOpen = true;
 }
+
+function openVaultChooser(): void {
+  uiState.commandOpen = false;
+  uiState.vaultChooserOpen = true;
+}
 </script>
 
 <template>
   <aside class="explorer-sidebar">
     <header class="vault-header">
-      <div class="vault-identity">
-        <div class="vault-monogram">OH</div>
-        <div>
+      <button
+        type="button"
+        class="vault-identity"
+        :aria-label="`Switch vault. Current vault: ${vaultState.name}`"
+        title="Switch vault"
+        @click="openVaultChooser"
+      >
+        <span class="vault-monogram">{{ vaultMonogram }}</span>
+        <span class="vault-identity-copy">
           <strong>{{ vaultState.name }}</strong>
-        </div>
-      </div>
+          <small>Switch vault</small>
+        </span>
+        <AppIcon class="vault-identity-chevron" name="chevron-down" :size="12" />
+      </button>
       <button type="button" class="icon-button subtle" title="Hide vault panel" @click="uiState.explorerOpen = false">
         <AppIcon name="sidebar" :size="16" />
       </button>

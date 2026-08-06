@@ -11,13 +11,18 @@ import SearchWorkspace from "./components/SearchWorkspace.vue";
 import SettingsView from "./components/SettingsView.vue";
 import SnippetStudio from "./components/SnippetStudio.vue";
 import TemplateGallery from "./components/TemplateGallery.vue";
-import { activeNote, createNote, uiState, vaultState } from "./stores/vault";
+import VaultChooser from "./components/VaultChooser.vue";
+import { activeNote, createNote, uiState, vaultSession, vaultState } from "./stores/vault";
 import type { ToolView } from "./types";
 
 const requestedView = new URLSearchParams(window.location.search).get("view") as ToolView | null;
 if (requestedView && ["notes", "search", "templates", "snippets", "settings"].includes(requestedView)) {
   uiState.tool = requestedView;
 }
+
+const vaultChooserVisible = computed(
+  () => vaultSession.phase !== "ready" || uiState.vaultChooserOpen,
+);
 
 const titlebarContext = computed(() => {
   if (uiState.tool === "notes") return activeNote.value?.title || vaultState.name;
@@ -30,6 +35,19 @@ const titlebarContext = computed(() => {
 function handleKeyboard(event: KeyboardEvent): void {
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLocaleLowerCase();
+  const target = event.target;
+  const isEditing = target instanceof HTMLElement
+    && target.matches("input, textarea, select, [contenteditable='true']");
+  const appShortcut = (
+    modifier && ["k", "n", "\\"].includes(key)
+    || modifier && event.shiftKey && key === "t"
+    || !modifier && !isEditing && key === "/"
+  );
+
+  if (vaultSession.phase !== "ready" || uiState.vaultChooserOpen) {
+    if (appShortcut) event.preventDefault();
+    return;
+  }
 
   if (modifier && key === "k") {
     event.preventDefault();
@@ -61,8 +79,6 @@ function handleKeyboard(event: KeyboardEvent): void {
     return;
   }
 
-  const target = event.target as HTMLElement;
-  const isEditing = target.matches("input, textarea, select, [contenteditable='true']");
   if (!isEditing && event.key === "/" && uiState.tool === "notes") {
     event.preventDefault();
     document.querySelector<HTMLInputElement>(".list-filter input")?.focus();
@@ -75,7 +91,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
 
 <template>
   <div class="app-frame" :class="`tool-${uiState.tool}`">
-    <header class="desktop-titlebar" data-tauri-drag-region>
+    <header class="desktop-titlebar" data-tauri-drag-region :inert="vaultChooserVisible">
       <div class="traffic-light-space" data-tauri-drag-region />
       <div class="titlebar-title" data-tauri-drag-region>
         <span>Obsidian At Home</span>
@@ -85,7 +101,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
       <div data-tauri-drag-region />
     </header>
 
-    <div class="app-content">
+    <div class="app-content" :inert="vaultChooserVisible">
       <ActivityRail />
 
       <Transition name="workspace-switch" mode="out-in">
@@ -108,6 +124,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
 
     <Transition name="overlay-fade">
       <CommandPalette v-if="uiState.commandOpen" />
+    </Transition>
+
+    <Transition name="overlay-fade">
+      <VaultChooser v-if="vaultChooserVisible" />
     </Transition>
 
     <Transition name="toast">

@@ -1,4 +1,12 @@
-import type { ExportResult, ImportResult } from "../types";
+import type {
+  ExportResult,
+  ImportResult,
+  VaultData,
+  VaultDescriptor,
+  WorkspaceBootstrap,
+  WorkspaceLoad,
+  WorkspaceSaveResult,
+} from "../types";
 
 export const isTauri = (): boolean => Boolean(window.__TAURI__?.core?.invoke);
 
@@ -12,6 +20,38 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
 
 export async function pickFolder(): Promise<string | null> {
   return invoke<string | null>("pick_folder");
+}
+
+export async function bootstrapWorkspace(defaults: VaultData): Promise<WorkspaceBootstrap> {
+  return invoke<WorkspaceBootstrap>("workspace_bootstrap", { defaults });
+}
+
+export async function openWorkspace(path: string, defaults: VaultData): Promise<WorkspaceLoad> {
+  return invoke<WorkspaceLoad>("workspace_open", { path, defaults });
+}
+
+export async function createWorkspace(
+  parentPath: string,
+  name: string,
+  initial: VaultData,
+): Promise<WorkspaceLoad> {
+  return invoke<WorkspaceLoad>("workspace_create", { parentPath, name, initial });
+}
+
+export async function saveWorkspace(
+  path: string,
+  vault: VaultData,
+  expectedRevision: number,
+): Promise<WorkspaceSaveResult> {
+  return invoke<WorkspaceSaveResult>("workspace_save", { path, vault, expectedRevision });
+}
+
+export async function forgetWorkspace(path: string): Promise<VaultDescriptor[]> {
+  return invoke<VaultDescriptor[]>("workspace_forget", { path });
+}
+
+export async function getWorkspaceRevision(path: string): Promise<number> {
+  return invoke<number>("workspace_revision", { path });
 }
 
 export async function importObsidianVault(path: string): Promise<ImportResult> {

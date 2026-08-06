@@ -14,15 +14,16 @@
 
 ![Obsidian At Home note editor with the Inter interface](docs/screenshots/notes-inter.png)
 
-Obsidian At Home is a local-only Markdown notes app built with Vue and Tauri. You can organize notes into nested folders, connect them with `[[wiki links]]`, inspect backlinks, and search the whole notebook. The app does not require an account or send notes to a server.
+Obsidian At Home is a local-only Markdown notes app built with Vue and Tauri. You can organize notes into nested folders, connect them with `[[wiki links]]`, inspect backlinks, and search the current vault. The app does not require an account or send notes to a server.
 
-The scope is intentionally limited: there is **no heavy runtime, cloud sync, graph view, workflow engine, or plugin marketplace**. Obsidian import and export copy Markdown between the apps; they do not mount or continuously mirror an Obsidian vault.
+The scope is intentionally limited: there is **no heavy runtime, cloud sync, graph view, workflow engine, or plugin marketplace**. You can open a Markdown folder and edit it directly, or use import and export to copy notes between vaults.
 
 > [!NOTE]
 > This is an independent project. It is not affiliated with or endorsed by Obsidian or Dynalist Inc., and it is not intended to be a drop-in implementation of every Obsidian feature.
 
 ## Highlights
 
+- Directory-backed vaults with ordinary Markdown files, a recent-vault switcher, and support for creating or opening multiple vaults.
 - A source-first Markdown editor with line numbers, source/split/reading modes, formatting shortcuts, spellcheck, and `[[` link suggestions.
 - Nested folders, unfiled and favorites views, pinning, tags, note counts, and quick note creation.
 - Obsidian-style wiki links, clickable rendered links, unresolved-link note creation, outgoing links, and backlink excerpts.
@@ -39,21 +40,35 @@ The scope is intentionally limited: there is **no heavy runtime, cloud sync, gra
 | Design system | Custom components + CSS | Interface styling and reusable components; no third-party UI component framework |
 | Frontend tooling | Vite | Browser development and optimized frontend builds |
 | Desktop shell | Tauri 2 | Uses the operating system WebView rather than bundled Chromium |
-| Native core | Rust | Folder selection and bounded, non-overwriting Obsidian vault import/export |
+| Native core | Rust | Directory-backed vault management, Markdown persistence, folder selection, and bounded Obsidian import/export |
 
-The app automatically saves notebook data to the current WebView's `localStorage`. It does **not** continuously write notes to a folder of Markdown files. The browser preview and installed desktop app have separate storage, and removing the app's data can remove the notebook. Use **Settings → Export portable vault** to create a readable backup.
+## Vaults and storage
+
+In the desktop app, each vault is a folder you choose. Notes are ordinary `.md` or `.markdown` files inside that folder, and those files are the source of truth. Nested note folders are real directories. You can create vaults, open existing Markdown folders, and switch between recent vaults from the app.
+
+Changes made by another editor reload automatically when there are no unsaved app edits. If both copies change, Obsidian At Home asks whether to reload the files on disk or keep the version open in the app.
+
+Each desktop vault has an `.obsidian-at-home/state.json` file for app-specific metadata such as stable IDs, the current selection, templates, and CSS snippets. It does not contain note content.
+
+The Vite browser preview cannot access arbitrary folders. It stores a separate preview vault in the browser's `localStorage`; that data is not shared with the installed desktop app.
+
+When upgrading from the earlier browser-storage version, choose **Save existing notes to a folder** in the vault chooser. The original browser-storage copy is retained as a backup and is marked as migrated only after the Markdown files are written successfully.
 
 The app has no account or background sync service. Syncing, collaboration, graph visualization, automation/workflows, attachments, and Obsidian community plugins are outside its current scope.
 
-## Obsidian import and export
+## Opening, importing, and exporting vaults
 
-Import and export require the Tauri desktop build. The browser preview keeps its own notebook but cannot open arbitrary folders.
+Filesystem vaults, import, and export require the Tauri desktop build. The browser preview cannot open arbitrary folders.
+
+### Open an existing vault
+
+Choose **Open folder** to use a folder as the current vault. Obsidian At Home reads its `.md` and `.markdown` files and saves edits back to that folder. It works with the files in place; no copy is created.
 
 ### Import from Obsidian
 
-From **Settings → Import from Obsidian**, choose an Obsidian vault folder and review the import summary before applying it to the notebook. You can:
+From **Settings → Import from Obsidian**, choose an Obsidian vault folder and review the import summary before copying it into the current vault. You can:
 
-- **Merge with notebook** — append all imported notes. Notes are not deduplicated.
+- **Merge with current vault** — append all imported notes. Notes are not deduplicated.
 - **Replace notes & folders** — clear the current notes and folder tree, then import. Existing app templates and CSS snippets remain; imported snippets with a case-insensitive name match are skipped.
 
 The importer:
@@ -70,7 +85,7 @@ Imports are limited to 100,000 notes, 10 MiB per note, 512 MiB of note text in t
 
 ### Export to Obsidian
 
-From **Settings → Export portable vault**, choose a parent directory. The exporter always creates a new folder using the notebook name. If that name already exists, it uses `Name (1)`, `Name (2)`, and so on. Existing files and folders are never reused or overwritten.
+From **Settings → Export portable vault**, choose a parent directory. Export creates a separate copy in a new folder using the current vault name. If that name already exists, it uses `Name (1)`, `Name (2)`, and so on. Existing files and folders are never reused or overwritten.
 
 The exported vault contains:
 
@@ -103,7 +118,7 @@ Run the interface in a browser:
 npm run dev
 ```
 
-Vite serves the app at `http://localhost:1420`. Native folder import/export is disabled in this mode.
+Vite serves the app at `http://localhost:1420`. Filesystem vault access and native import/export are disabled in this mode.
 
 Run it as a desktop app with live frontend updates:
 

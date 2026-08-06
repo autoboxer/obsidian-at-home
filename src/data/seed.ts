@@ -9,6 +9,7 @@ export function createSeedVault(now = Date.now()): VaultData {
     {
       id: "note-getting-started",
       title: "Getting started",
+      relativePath: "Getting started.md",
       folderId: null,
       tags: ["getting-started"],
       pinned: false,
@@ -16,7 +17,16 @@ export function createSeedVault(now = Date.now()): VaultData {
       updatedAt: now,
       content: `# Getting started
 
-Obsidian At Home is a local-only app for writing, organizing, and linking Markdown notes. Changes save automatically. Use **Settings → Export portable vault** to create a backup or move notes to Obsidian.
+In the desktop app, your notes are ordinary Markdown files in the vault folder you selected. Changes save automatically, and the app does not require an account or sync notes to a server. The browser preview keeps a separate preview copy in that browser.
+
+## Work with vaults
+
+Use the vault name at the top of the left panel to switch between recent vaults, create a vault, or open an existing folder. In **Settings → Current vault**, you can see the full path and choose **Show in folder**.
+
+- **Create vault** makes a new folder for Markdown notes.
+- **Open folder** edits the Markdown files in that folder directly.
+- **Import from Obsidian** copies selected notes into the current vault; it does not change the source folder.
+- **Export portable vault** creates a separate copy that Obsidian can open.
 
 ## Write with Markdown
 
@@ -41,12 +51,13 @@ Type \`[[\` to search for another note and insert a wiki link. The right panel l
 
 | Feature | What it does |
 | --- | --- |
+| Vaults | Create, open, and switch between Markdown folders |
 | Folders and tags | Group and label notes |
 | Links and backlinks | Connect notes and show where links come from |
 | Search | Find text in titles, content, folders, and tags |
 | Templates | Create notes from reusable Markdown structures |
 | CSS snippets | Customize the interface |
-| Obsidian transfer | Import or export Markdown vaults in the desktop app |
+| Obsidian transfer | Copy notes into or out of the current vault |
 
 ### 5. Quotes and code blocks
 

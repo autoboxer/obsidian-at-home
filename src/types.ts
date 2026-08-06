@@ -5,6 +5,7 @@ export interface Note {
   id: string;
   title: string;
   content: string;
+  relativePath: string;
   folderId: string | null;
   tags: string[];
   pinned: boolean;
@@ -49,6 +50,43 @@ export interface VaultData {
   activeNoteId: string | null;
   selectedFolderId: string | "all" | "favorites" | "unfiled";
   editorMode: EditorMode;
+}
+
+export interface VaultDescriptor {
+  name: string;
+  path: string;
+  lastOpenedAt: number;
+}
+
+export interface WorkspaceLoad {
+  vault: VaultData;
+  descriptor: VaultDescriptor;
+  revision: number;
+  warnings: string[];
+}
+
+export interface WorkspaceBootstrap {
+  workspace: WorkspaceLoad | null;
+  recentVaults: VaultDescriptor[];
+}
+
+export interface WorkspaceSaveResult {
+  revision: number;
+  savedAt: number;
+  warnings: string[];
+}
+
+export interface VaultSessionState {
+  phase: "loading" | "needs-vault" | "ready" | "error";
+  backend: "native" | "browser";
+  path: string | null;
+  recentVaults: VaultDescriptor[];
+  error: string | null;
+  busy: boolean;
+  legacyAvailable: boolean;
+  revision: number;
+  conflict: boolean;
+  warnings: string[];
 }
 
 export interface SearchResult {
