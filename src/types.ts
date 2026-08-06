@@ -1,0 +1,121 @@
+export type EditorMode = "source" | "split" | "reading";
+export type ToolView = "notes" | "search" | "templates" | "snippets" | "settings";
+
+export interface Note {
+  id: string;
+  title: string;
+  content: string;
+  folderId: string | null;
+  tags: string[];
+  pinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  createdAt: number;
+}
+
+export interface NoteTemplate {
+  id: string;
+  name: string;
+  description: string;
+  titlePattern: string;
+  content: string;
+  glyph: string;
+  createdAt: number;
+  builtIn?: boolean;
+}
+
+export interface CssSnippet {
+  id: string;
+  name: string;
+  description: string;
+  css: string;
+  enabled: boolean;
+  createdAt: number;
+  builtIn?: boolean;
+}
+
+export interface VaultData {
+  name: string;
+  notes: Note[];
+  folders: Folder[];
+  templates: NoteTemplate[];
+  snippets: CssSnippet[];
+  activeNoteId: string | null;
+  selectedFolderId: string | "all" | "favorites" | "unfiled";
+  editorMode: EditorMode;
+}
+
+export interface SearchResult {
+  note: Note;
+  score: number;
+  snippet: string;
+  reason: "title" | "content" | "tag" | "folder";
+}
+
+export interface WikiLink {
+  raw: string;
+  target: string;
+  display: string;
+  heading?: string;
+  embedded: boolean;
+  index: number;
+}
+
+export interface Backlink {
+  note: Note;
+  link: WikiLink;
+  excerpt: string;
+}
+
+export interface ImportedNote {
+  title: string;
+  content: string;
+  folderPath: string;
+  relativePath: string;
+  tags: string[];
+}
+
+export interface ImportedSnippet {
+  name: string;
+  css: string;
+  enabled: boolean;
+}
+
+export interface ImportResult {
+  vaultName: string;
+  notes: ImportedNote[];
+  snippets: ImportedSnippet[];
+  warnings: string[];
+}
+
+export interface ExportNote {
+  title: string;
+  content: string;
+  folderPath: string;
+  tags: string[];
+}
+
+export interface ExportTemplate {
+  name: string;
+  content: string;
+}
+
+export interface ExportSnippet {
+  name: string;
+  css: string;
+  enabled: boolean;
+}
+
+export interface ExportResult {
+  path: string;
+  noteCount: number;
+  templateCount: number;
+  snippetCount: number;
+  warnings: string[];
+}

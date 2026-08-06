@@ -1,0 +1,38 @@
+{
+  "name": "obsidian-at-home",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A local-only desktop app for writing, organizing, and linking Markdown notes.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build",
+    "icons": "tauri icon src-tauri/icons/icon-source.png",
+    "desktop:mac": "npm run icons && tauri build --bundles app,dmg",
+    "tauri": "tauri",
+    "check": "npm run build && cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "keywords": [
+    "markdown",
+    "notes",
+    "tauri",
+    "local-only"
+  ],
+  "author": "Jared Collier",
+  "license": "MIT",
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "vue": "^3.5.39"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^26.1.2",
+    "@vitejs/plugin-vue": "^6.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.5",
+    "vue-tsc": "^2.2.12"
+  }
+}
