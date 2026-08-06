@@ -48,7 +48,7 @@ export interface VaultData {
   templates: NoteTemplate[];
   snippets: CssSnippet[];
   activeNoteId: string | null;
-  selectedFolderId: string | "all" | "favorites" | "unfiled";
+  selectedFolderId: "all" | "favorites";
   editorMode: EditorMode;
 }
 

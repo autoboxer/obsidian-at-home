@@ -36,8 +36,13 @@ const PERSIST_DELAY = 220;
 const EXTERNAL_CHECK_DELAY = 3_000;
 
 type FolderSelection = VaultData["selectedFolderId"];
+type SmartFolderSelection = "all" | "favorites";
 type SaveStatus = "saved" | "saving" | "error";
 type ToastTone = "neutral" | "success" | "warning";
+
+export const NOTE_DRAG_MIME = "application/x-obsidian-at-home-note-id";
+export const FOLDER_DRAG_MIME = "application/x-obsidian-at-home-folder-id";
+export const treeDragState = reactive<{ folderId: string | null }>({ folderId: null });
 
 interface UiState {
   tool: ToolView;
@@ -123,8 +128,12 @@ async function initializeVaultStorage(): Promise<void> {
   vaultSession.phase = "loading";
 
   if (!isTauri()) {
-    const browserVault = readStoredVault()?.vault ?? createSeedVault();
+    const storedVault = readStoredVault();
+    const browserVault = storedVault?.vault ?? createSeedVault();
     hydrateVault(browserVault);
+    if (storedVault?.needsRewrite) {
+      safeStorageSet(STORAGE_KEY, JSON.stringify(browserVault));
+    }
     vaultSession.backend = "browser";
     vaultSession.phase = "ready";
     vaultSession.path = null;
@@ -412,14 +421,8 @@ export const folderNameMap = computed(() => {
 
 export const visibleNotes = computed(() => {
   let notes = [...vaultState.notes];
-  const selected = vaultState.selectedFolderId;
 
-  if (selected === "favorites") notes = notes.filter((note) => note.pinned);
-  else if (selected === "unfiled") notes = notes.filter((note) => note.folderId === null);
-  else if (selected !== "all") {
-    const folderIds = new Set([selected, ...descendantFolderIds(selected)]);
-    notes = notes.filter((note) => note.folderId && folderIds.has(note.folderId));
-  }
+  if (vaultState.selectedFolderId === "favorites") notes = notes.filter((note) => note.pinned);
 
   const filter = uiState.noteFilter.trim();
   if (filter) {
@@ -447,11 +450,16 @@ export const backlinks = computed(() =>
 
 export function selectNote(id: string): void {
   if (!vaultState.notes.some((note) => note.id === id)) return;
+  const wasVisible = visibleNotes.value.some((note) => note.id === id);
   vaultState.activeNoteId = id;
+  if (!wasVisible) {
+    vaultState.selectedFolderId = "all";
+    uiState.noteFilter = "";
+  }
 }
 
 export function selectFolder(selection: FolderSelection): void {
-  vaultState.selectedFolderId = selection;
+  vaultState.selectedFolderId = isSmartFolderSelection(selection) ? selection : "all";
   uiState.tool = "notes";
   uiState.noteFilter = "";
 }
@@ -476,6 +484,7 @@ export function createNote(folderId?: string | null, title = "Untitled note", co
   if (content === undefined) note.content = `# ${note.title}\n\n`;
   vaultState.notes.unshift(note);
   vaultState.activeNoteId = note.id;
+  vaultState.selectedFolderId = "all";
   uiState.tool = "notes";
   uiState.noteFilter = "";
   notify("New note created", "success");
@@ -506,6 +515,41 @@ export function updateNote(id: string, patch: Partial<Pick<Note, "title" | "cont
   note.updatedAt = Date.now();
 }
 
+export function moveNoteToFolder(noteId: string, folderId: string | null): boolean {
+  const note = vaultState.notes.find((candidate) => candidate.id === noteId);
+  if (!note) {
+    notify("Could not move that note", "warning");
+    return false;
+  }
+
+  const folder = folderId === null
+    ? null
+    : vaultState.folders.find((candidate) => candidate.id === folderId);
+  if (folderId !== null && !folder) {
+    notify("That folder is no longer available", "warning");
+    return false;
+  }
+  if (note.folderId === folderId) return false;
+  const duplicateNote = vaultState.notes.some(
+    (candidate) => candidate.id !== noteId
+      && candidate.folderId === folderId
+      && noteStemKey(candidate) === noteStemKey(note),
+  );
+  const noteFileNames = noteFileNameKeys(note);
+  const duplicateFolder = vaultState.folders.some(
+    (candidate) => candidate.parentId === folderId
+      && noteFileNames.has(folderNameKey(candidate.name)),
+  );
+  if (duplicateNote || duplicateFolder) {
+    notify("A file with that name already exists there", "warning");
+    return false;
+  }
+
+  updateNote(noteId, { folderId });
+  notify(`Moved to ${folder?.name ?? "Vault root"}`, "success");
+  return true;
+}
+
 export function deleteNote(id: string): void {
   const index = vaultState.notes.findIndex((note) => note.id === id);
   if (index < 0) return;
@@ -525,10 +569,12 @@ export function createFolder(name: string, parentId: string | null = null): Fold
   const cleanName = name.trim().replace(/[\\/]/g, " ");
   if (!cleanName) return undefined;
   const duplicate = vaultState.folders.some(
-    (folder) => folder.parentId === parentId && folder.name.toLocaleLowerCase() === cleanName.toLocaleLowerCase(),
+    (folder) => folder.parentId === parentId && folderNameKey(folder.name) === folderNameKey(cleanName),
+  ) || vaultState.notes.some(
+    (note) => note.folderId === parentId && folderConflictsWithNote(cleanName, note),
   );
   if (duplicate) {
-    notify("That folder already exists here", "warning");
+    notify("A file or folder with that name already exists here", "warning");
     return undefined;
   }
   const folder: Folder = {
@@ -538,7 +584,9 @@ export function createFolder(name: string, parentId: string | null = null): Fold
     createdAt: Date.now(),
   };
   vaultState.folders.push(folder);
-  selectFolder(folder.id);
+  if (!isSmartFolderSelection(vaultState.selectedFolderId)) {
+    vaultState.selectedFolderId = "all";
+  }
   notify(`Created ${cleanName}`, "success");
   return folder;
 }
@@ -546,13 +594,67 @@ export function createFolder(name: string, parentId: string | null = null): Fold
 export function renameFolder(id: string, name: string): void {
   const folder = vaultState.folders.find((candidate) => candidate.id === id);
   const cleanName = name.trim().replace(/[\\/]/g, " ");
-  if (folder && cleanName && folder.name !== cleanName) {
-    const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
-    folder.name = cleanName;
-    for (const note of vaultState.notes) {
-      if (note.folderId && affectedFolders.has(note.folderId)) note.relativePath = "";
-    }
+  if (!folder || !cleanName || folder.name === cleanName) return;
+
+  const duplicate = vaultState.folders.some(
+    (candidate) => candidate.id !== id
+      && candidate.parentId === folder.parentId
+      && folderNameKey(candidate.name) === folderNameKey(cleanName),
+  ) || vaultState.notes.some(
+    (note) => note.folderId === folder.parentId && folderConflictsWithNote(cleanName, note),
+  );
+  if (duplicate) {
+    notify("A file or folder with that name already exists here", "warning");
+    return;
   }
+
+  const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
+  folder.name = cleanName;
+  for (const note of vaultState.notes) {
+    if (note.folderId && affectedFolders.has(note.folderId)) note.relativePath = "";
+  }
+}
+
+export function moveFolder(folderId: string, parentId: string | null): boolean {
+  const folder = vaultState.folders.find((candidate) => candidate.id === folderId);
+  if (!folder) {
+    notify("Could not move that folder", "warning");
+    return false;
+  }
+
+  const parent = parentId === null
+    ? null
+    : vaultState.folders.find((candidate) => candidate.id === parentId);
+  if (parentId !== null && !parent) {
+    notify("That folder is no longer available", "warning");
+    return false;
+  }
+  if (folder.parentId === parentId) return false;
+
+  const affectedFolders = new Set([folderId, ...descendantFolderIds(folderId)]);
+  if (parentId !== null && affectedFolders.has(parentId)) {
+    notify("A folder cannot be moved inside itself", "warning");
+    return false;
+  }
+
+  const duplicate = vaultState.folders.some(
+    (candidate) => candidate.id !== folderId
+      && candidate.parentId === parentId
+      && folderNameKey(candidate.name) === folderNameKey(folder.name),
+  ) || vaultState.notes.some(
+    (note) => note.folderId === parentId && folderConflictsWithNote(folder.name, note),
+  );
+  if (duplicate) {
+    notify("A file or folder with that name already exists there", "warning");
+    return false;
+  }
+
+  folder.parentId = parentId;
+  for (const note of vaultState.notes) {
+    if (note.folderId && affectedFolders.has(note.folderId)) note.relativePath = "";
+  }
+  notify(`Moved ${folder.name} to ${parent?.name ?? "Vault root"}`, "success");
+  return true;
 }
 
 export function deleteFolder(id: string): void {
@@ -560,6 +662,24 @@ export function deleteFolder(id: string): void {
   if (!folder) return;
   const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
   const children = vaultState.folders.filter((candidate) => candidate.parentId === id);
+  const destinationFolders = vaultState.folders.filter(
+    (candidate) => candidate.id !== id && candidate.parentId === folder.parentId,
+  );
+  const destinationNotes = vaultState.notes.filter((note) => note.folderId === folder.parentId);
+  const folderCollision = children.some((child) => (
+    destinationFolders.some((candidate) => folderNameKey(candidate.name) === folderNameKey(child.name))
+    || destinationNotes.some((note) => folderConflictsWithNote(child.name, note))
+  ));
+  const noteCollision = vaultState.notes
+    .filter((note) => note.folderId === id)
+    .some((note) => (
+      destinationNotes.some((candidate) => noteStemKey(candidate) === noteStemKey(note))
+      || destinationFolders.some((candidate) => folderConflictsWithNote(candidate.name, note))
+    ));
+  if (folderCollision || noteCollision) {
+    notify("Move or rename conflicting items before removing this folder", "warning");
+    return;
+  }
   for (const child of children) child.parentId = folder.parentId;
   for (const note of vaultState.notes) {
     if (!note.folderId || !affectedFolders.has(note.folderId)) continue;
@@ -568,7 +688,7 @@ export function deleteFolder(id: string): void {
   }
   vaultState.folders.splice(vaultState.folders.indexOf(folder), 1);
   if (vaultState.selectedFolderId === id) vaultState.selectedFolderId = "all";
-  notify("Folder removed; its notes are now unfiled", "neutral");
+  notify("Folder removed; its contents moved up one level", "neutral");
 }
 
 export function createFromTemplate(templateId: string, requestedTitle?: string): Note | undefined {
@@ -779,10 +899,52 @@ export async function clearVault(): Promise<boolean> {
 }
 
 function currentFolderId(): string | null {
-  const selected = vaultState.selectedFolderId;
-  return typeof selected === "string" && !["all", "favorites", "unfiled"].includes(selected)
-    ? selected
-    : activeNote.value?.folderId ?? null;
+  return activeNote.value?.folderId ?? null;
+}
+
+function isSmartFolderSelection(selection: unknown): selection is SmartFolderSelection {
+  return selection === "all" || selection === "favorites";
+}
+
+function folderNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function noteStemKey(note: Note): string {
+  return safeNoteStem(note.title).toLowerCase();
+}
+
+function noteFileNameKeys(note: Note): Set<string> {
+  const stem = noteStemKey(note);
+  return new Set([`${stem}.md`, `${stem}.markdown`]);
+}
+
+function folderConflictsWithNote(folderName: string, note: Note): boolean {
+  return noteFileNameKeys(note).has(folderNameKey(folderName));
+}
+
+function safeNoteStem(title: string): string {
+  const encoder = new TextEncoder();
+  let result = "";
+  let byteLength = 0;
+  let previousWasReplacement = false;
+  for (const character of title.trim()) {
+    const forbidden = /[\u0000-\u001f\u007f-\u009f/\\:*?"<>|]/u.test(character);
+    const addition = forbidden ? (previousWasReplacement ? "" : "-") : character;
+    if (addition) {
+      result += addition;
+      byteLength += encoder.encode(addition).length;
+    }
+    previousWasReplacement = forbidden;
+    if (byteLength >= 120) break;
+  }
+
+  result = result.replace(/^[ .]+|[ .]+$/g, "") || "Untitled note";
+  const windowsBase = result.split(".")[0]?.toUpperCase();
+  if (["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"].includes(windowsBase)) {
+    return `_${result}`;
+  }
+  return result;
 }
 
 function uniqueNoteTitle(base: string): string {
@@ -843,6 +1005,7 @@ function createId(prefix: string): string {
 interface StoredVault {
   raw: string;
   vault: VaultData;
+  needsRewrite: boolean;
 }
 
 function readStoredVault(): StoredVault | null {
@@ -851,7 +1014,12 @@ function readStoredVault(): StoredVault | null {
   try {
     const parsed = JSON.parse(raw) as Partial<VaultData>;
     if (!Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) return null;
-    return { raw, vault: normalizeVault(parsed) };
+    const vault = normalizeVault(parsed);
+    return {
+      raw,
+      vault,
+      needsRewrite: parsed.selectedFolderId !== vault.selectedFolderId,
+    };
   } catch {
     return null;
   }
@@ -897,9 +1065,10 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     && notes.some((note) => note.id === input.activeNoteId)
     ? input.activeNoteId
     : notes[0]?.id ?? null;
-  const selectedFolderId = input.selectedFolderId ?? "all";
-  const selectionIsValid = ["all", "favorites", "unfiled"].includes(selectedFolderId)
-    || folders.some((folder) => folder.id === selectedFolderId);
+  const selectedFolderId = input.selectedFolderId === "favorites"
+    && notes.some((note) => note.pinned)
+    ? "favorites"
+    : "all";
 
   return {
     name: typeof input.name === "string" && input.name.trim() ? input.name : fallback.name,
@@ -910,7 +1079,7 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
       : fallback.templates,
     snippets,
     activeNoteId,
-    selectedFolderId: selectionIsValid ? selectedFolderId : "all",
+    selectedFolderId,
     editorMode: ["source", "split", "reading"].includes(input.editorMode ?? "")
       ? input.editorMode as EditorMode
       : "source",

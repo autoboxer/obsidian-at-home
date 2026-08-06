@@ -101,7 +101,7 @@ function escapeHtml(value: string): string {
 
       <div class="command-body">
         <div class="command-section-label">
-          <span>{{ query ? `${results.length} best matches` : "Recent & pinned" }}</span>
+          <span>{{ query ? `${results.length} best matches` : "Recent & favorites" }}</span>
           <span v-if="query">Searching titles, content, folders, and tags</span>
         </div>
         <div class="command-results">

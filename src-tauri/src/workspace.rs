@@ -575,14 +575,11 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
     });
 
     let note_ids: HashSet<&str> = notes.iter().map(|note| note.id.as_str()).collect();
-    let folder_ids_in_use: HashSet<&str> = folders.iter().map(|folder| folder.id.as_str()).collect();
     let active_note_id = state
         .active_note_id
         .filter(|id| note_ids.contains(id.as_str()))
         .or_else(|| notes.first().map(|note| note.id.clone()));
-    let selected_folder_id = if is_virtual_folder_selection(&state.selected_folder_id)
-        || folder_ids_in_use.contains(state.selected_folder_id.as_str())
-    {
+    let selected_folder_id = if is_virtual_folder_selection(&state.selected_folder_id) {
         state.selected_folder_id.clone()
     } else {
         "all".to_owned()
@@ -3297,7 +3294,7 @@ fn normalize_editor_mode(mode: &str) -> String {
 }
 
 fn is_virtual_folder_selection(value: &str) -> bool {
-    matches!(value, "all" | "favorites" | "unfiled")
+    matches!(value, "all" | "favorites")
 }
 
 fn trim_line_ending(line: &str) -> &str {

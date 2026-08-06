@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import appIcon from "../assets/app-icon.png";
 import { uiState } from "../stores/vault";
 import type { ToolView } from "../types";
@@ -12,20 +11,9 @@ const primaryTools: Array<{ id: ToolView; label: string; icon: string; shortcut?
   { id: "snippets", label: "CSS snippets", icon: "snippets" },
 ];
 
-const vaultPanelVisible = computed(() => uiState.tool === "notes" && uiState.explorerOpen);
-
 function selectTool(tool: ToolView): void {
   uiState.tool = tool;
   if (tool === "search") uiState.commandOpen = true;
-}
-
-function toggleVaultPanel(): void {
-  if (uiState.tool !== "notes") {
-    uiState.tool = "notes";
-    uiState.explorerOpen = true;
-    return;
-  }
-  uiState.explorerOpen = !uiState.explorerOpen;
 }
 </script>
 
@@ -50,21 +38,6 @@ function toggleVaultPanel(): void {
         <span class="rail-tooltip">{{ tool.label }}<kbd v-if="tool.shortcut">{{ tool.shortcut }}</kbd></span>
       </button>
     </nav>
-
-    <button
-      type="button"
-      class="rail-button rail-panel-toggle"
-      :class="{ active: vaultPanelVisible }"
-      :aria-label="vaultPanelVisible ? 'Hide vault panel' : 'Show vault panel'"
-      :aria-pressed="vaultPanelVisible"
-      :title="vaultPanelVisible ? 'Hide vault panel' : 'Show vault panel'"
-      @click="toggleVaultPanel"
-    >
-      <AppIcon name="sidebar" :size="18" />
-      <span class="rail-tooltip">
-        {{ vaultPanelVisible ? "Hide vault" : "Show vault" }} <kbd>⌘\</kbd>
-      </span>
-    </button>
 
     <div class="rail-spacer" />
     <button

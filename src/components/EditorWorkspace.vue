@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import {
   activeNote,
+  createFolder,
   createLinkedNote,
+  createNote,
   deleteNote,
   folderPath,
   setEditorMode,
@@ -20,6 +22,10 @@ const tagInputOpen = ref(false);
 const tagInput = ref("");
 const tagField = ref<HTMLInputElement>();
 const noteMenuOpen = ref(false);
+const quickFolderOpen = ref(false);
+const quickFolderName = ref("");
+const quickFolderField = ref<HTMLInputElement>();
+const quickFolderButton = ref<HTMLButtonElement>();
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
 const sortedFolders = computed(() => [...vaultState.folders].sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
@@ -78,72 +84,164 @@ function requestDelete(): void {
     deleteNote(activeNote.value.id);
   }
 }
+
+function openQuickFolder(): void {
+  quickFolderOpen.value = true;
+  nextTick(() => quickFolderField.value?.focus());
+}
+
+function closeQuickFolder(restoreFocus = false): void {
+  quickFolderOpen.value = false;
+  quickFolderName.value = "";
+  if (restoreFocus) nextTick(() => quickFolderButton.value?.focus());
+}
+
+function submitQuickFolder(): void {
+  const name = quickFolderName.value.trim();
+  if (name) createFolder(name);
+  closeQuickFolder(true);
+}
+
+function handleQuickFolderFocusOut(event: FocusEvent): void {
+  const form = event.currentTarget as HTMLElement;
+  const next = event.relatedTarget;
+  if (!(next instanceof Node) || !form.contains(next)) closeQuickFolder();
+}
+
+watch(
+  () => uiState.explorerOpen,
+  (open) => {
+    if (open) closeQuickFolder();
+  },
+);
 </script>
 
 <template>
   <main class="editor-workspace">
-    <template v-if="activeNote">
-      <header class="editor-toolbar">
-        <div class="editor-crumbs">
-          <button
-            class="icon-button explorer-toggle"
-            type="button"
-            :title="uiState.explorerOpen ? 'Hide vault panel' : 'Show vault panel'"
-            :aria-label="uiState.explorerOpen ? 'Hide vault panel' : 'Show vault panel'"
-            :aria-pressed="uiState.explorerOpen"
-            @click="uiState.explorerOpen = !uiState.explorerOpen"
-          >
-            <AppIcon name="sidebar" :size="17" />
-          </button>
+    <header class="editor-toolbar">
+      <div class="editor-crumbs">
+        <button
+          class="icon-button explorer-toggle"
+          type="button"
+          :class="{ active: uiState.explorerOpen }"
+          :title="uiState.explorerOpen ? 'Hide vault panel' : 'Show vault panel'"
+          :aria-label="uiState.explorerOpen ? 'Hide vault panel' : 'Show vault panel'"
+          :aria-pressed="uiState.explorerOpen"
+          @click="uiState.explorerOpen = !uiState.explorerOpen"
+        >
+          <AppIcon name="sidebar" :size="17" />
+        </button>
+        <Transition name="chip-swap">
+          <div v-if="!uiState.explorerOpen" class="vault-hidden-actions">
+            <button
+              type="button"
+              class="icon-button subtle"
+              aria-label="Create note"
+              title="Create note · ⌘N"
+              @click="createNote()"
+            >
+              <AppIcon name="file-plus" :size="15" />
+            </button>
+            <div class="menu-anchor">
+              <button
+                ref="quickFolderButton"
+                type="button"
+                class="icon-button subtle"
+                aria-label="Create folder"
+                title="Create folder"
+                :aria-expanded="quickFolderOpen"
+                @mousedown.prevent
+                @click="quickFolderOpen ? closeQuickFolder(true) : openQuickFolder()"
+              >
+                <AppIcon name="folder-plus" :size="15" />
+              </button>
+              <Transition name="popover-fade">
+                <form
+                  v-if="quickFolderOpen"
+                  class="popover-menu quick-folder-popover"
+                  @submit.prevent="submitQuickFolder"
+                  @focusout="handleQuickFolderFocusOut"
+                  @keydown.esc.prevent="closeQuickFolder(true)"
+                >
+                  <strong>New folder</strong>
+                  <div class="quick-folder-entry">
+                    <input
+                      ref="quickFolderField"
+                      v-model="quickFolderName"
+                      type="text"
+                      maxlength="120"
+                      autocomplete="off"
+                      aria-label="Folder name"
+                      placeholder="Folder name"
+                    />
+                    <button type="submit" :disabled="!quickFolderName.trim()" aria-label="Create folder">
+                      <AppIcon name="arrow" :size="14" />
+                    </button>
+                  </div>
+                </form>
+              </Transition>
+            </div>
+          </div>
+        </Transition>
+        <template v-if="activeNote">
           <span class="crumb-vault">{{ vaultState.name }}</span>
           <AppIcon name="chevron" :size="12" />
           <span v-if="activeNote.folderId" class="crumb-folder">{{ folderPath(activeNote.folderId) }}</span>
           <AppIcon v-if="activeNote.folderId" name="chevron" :size="12" />
           <span class="crumb-note">{{ activeNote.title || "Untitled note" }}</span>
-        </div>
+        </template>
+      </div>
 
-        <div class="editor-toolbar-actions">
-          <div class="mode-switcher" aria-label="Editor view">
-            <button
-              v-for="mode in modes"
-              :key="mode.id"
-              type="button"
-              :class="{ active: vaultState.editorMode === mode.id }"
-              :title="mode.label"
-              @click="setEditorMode(mode.id)"
-            >
-              <AppIcon :name="mode.icon" :size="15" />
-              <span>{{ mode.label }}</span>
-            </button>
-          </div>
-          <button class="icon-button" type="button" :class="{ active: activeNote.pinned }" :title="activeNote.pinned ? 'Unpin note' : 'Pin note'" @click="togglePinned(activeNote.id)">
-            <AppIcon name="pin" :size="16" />
-          </button>
+      <div v-if="activeNote" class="editor-toolbar-actions">
+        <div class="mode-switcher" aria-label="Editor view">
           <button
-            class="icon-button context-toggle"
+            v-for="mode in modes"
+            :key="mode.id"
             type="button"
-            :class="{ active: uiState.contextOpen }"
-            :aria-label="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
-            :title="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
-            @click="uiState.contextOpen = !uiState.contextOpen"
+            :class="{ active: vaultState.editorMode === mode.id }"
+            :title="mode.label"
+            @click="setEditorMode(mode.id)"
           >
-            <AppIcon name="panel-right" :size="17" />
+            <AppIcon :name="mode.icon" :size="15" />
+            <span>{{ mode.label }}</span>
           </button>
-          <div class="menu-anchor">
-            <button class="icon-button" type="button" title="More actions" @click="noteMenuOpen = !noteMenuOpen">
-              <AppIcon name="more" :size="18" />
-            </button>
-            <Transition name="popover-fade">
-              <div v-if="noteMenuOpen" class="popover-menu compact-menu">
-                <button type="button" class="danger" @click="requestDelete">
-                  <AppIcon name="trash" :size="15" /> Delete note
-                </button>
-              </div>
-            </Transition>
-          </div>
         </div>
-      </header>
+        <button
+          class="icon-button"
+          type="button"
+          :class="{ active: activeNote.pinned }"
+          :aria-label="activeNote.pinned ? 'Remove from favorites' : 'Favorite'"
+          :title="activeNote.pinned ? 'Remove from favorites' : 'Favorite'"
+          @click="togglePinned(activeNote.id)"
+        >
+          <AppIcon name="star" :size="16" />
+        </button>
+        <button
+          class="icon-button context-toggle"
+          type="button"
+          :class="{ active: uiState.contextOpen }"
+          :aria-label="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
+          :title="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
+          @click="uiState.contextOpen = !uiState.contextOpen"
+        >
+          <AppIcon name="panel-right" :size="17" />
+        </button>
+        <div class="menu-anchor">
+          <button class="icon-button" type="button" title="More actions" @click="noteMenuOpen = !noteMenuOpen">
+            <AppIcon name="more" :size="18" />
+          </button>
+          <Transition name="popover-fade">
+            <div v-if="noteMenuOpen" class="popover-menu compact-menu">
+              <button type="button" class="danger" @click="requestDelete">
+                <AppIcon name="trash" :size="15" /> Delete note
+              </button>
+            </div>
+          </Transition>
+        </div>
+      </div>
+    </header>
 
+    <template v-if="activeNote">
       <section class="editor-document">
         <div class="document-heading">
           <input
@@ -157,7 +255,7 @@ function requestDelete(): void {
             <label class="property-control folder-property">
               <AppIcon name="folder" :size="14" />
               <select :value="activeNote.folderId ?? ''" aria-label="Move note to folder" @change="setFolder">
-                <option value="">Unfiled</option>
+                <option value="">Vault root</option>
                 <option v-for="folder in sortedFolders" :key="folder.id" :value="folder.id">
                   {{ folderPath(folder.id) }}
                 </option>

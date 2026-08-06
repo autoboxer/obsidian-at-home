@@ -28,6 +28,10 @@ Use the vault name at the top of the left panel to switch between recent vaults,
 - **Import from Obsidian** copies selected notes into the current vault; it does not change the source folder.
 - **Export portable vault** creates a separate copy that Obsidian can open.
 
+## Organize notes
+
+The Notes view always shows the tree from the root of the vault. Notes can live at the root or inside folders nested to any depth. Expand or collapse folders to show or hide their contents. Drag notes and folders onto a folder to move them there, or onto the root of the tree to move them back to the vault root.
+
 ## Write with Markdown
 
 Choose **Source** to edit Markdown, **Split** to edit beside a preview, or **Read** to see the formatted note. The app supports the Markdown features below; it is not a complete CommonMark implementation.
@@ -52,7 +56,7 @@ Type \`[[\` to search for another note and insert a wiki link. The right panel l
 | Feature | What it does |
 | --- | --- |
 | Vaults | Create, open, and switch between Markdown folders |
-| Folders and tags | Group and label notes |
+| Folders and tags | Nest folders, drag notes or folders between locations, and label notes |
 | Links and backlinks | Connect notes and show where links come from |
 | Search | Find text in titles, content, folders, and tags |
 | Templates | Create notes from reusable Markdown structures |

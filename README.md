@@ -25,7 +25,7 @@ The scope is intentionally limited: there is **no heavy runtime, cloud sync, gra
 
 - Directory-backed vaults with ordinary Markdown files, a recent-vault switcher, and support for creating or opening multiple vaults.
 - A source-first Markdown editor with line numbers, source/split/reading modes, formatting shortcuts, spellcheck, and `[[` link suggestions.
-- Nested folders, unfiled and favorites views, pinning, tags, note counts, and quick note creation.
+- A rooted file tree with root-level notes and folders nested to any depth. Drag notes and folders to move them between folders or back to the vault root.
 - Obsidian-style wiki links, clickable rendered links, unresolved-link note creation, outgoing links, and backlink excerpts.
 - Ranked search across titles, Markdown content, tags, and folder names, plus a keyboard-driven quick switcher with `⌘K` / `Ctrl+K`.
 - Reusable Markdown templates with `{{date}}`, `{{time}}`, and `{{title}}` tokens.
@@ -40,11 +40,13 @@ The scope is intentionally limited: there is **no heavy runtime, cloud sync, gra
 | Design system | Custom components + CSS | Interface styling and reusable components; no third-party UI component framework |
 | Frontend tooling | Vite | Browser development and optimized frontend builds |
 | Desktop shell | Tauri 2 | Uses the operating system WebView rather than bundled Chromium |
-| Native core | Rust | Directory-backed vault management, Markdown persistence, folder selection, and bounded Obsidian import/export |
+| Native core | Rust | Directory-backed vault management, Markdown persistence, folder operations, and bounded Obsidian import/export |
 
 ## Vaults and storage
 
 In the desktop app, each vault is a folder you choose. Notes are ordinary `.md` or `.markdown` files inside that folder, and those files are the source of truth. Nested note folders are real directories. You can create vaults, open existing Markdown folders, and switch between recent vaults from the app.
+
+The Notes view always shows the tree from the vault root. Notes can live at the root or inside folders nested to any depth. Expand or collapse folders to show or hide their contents. Drag notes and folders onto a folder to move them there, or onto the root of the tree to move them back to the vault root.
 
 Changes made by another editor reload automatically when there are no unsaved app edits. If both copies change, Obsidian At Home asks whether to reload the files on disk or keep the version open in the app.
 

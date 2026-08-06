@@ -72,7 +72,7 @@ function formatDate(timestamp: number): string {
       <section class="search-results-grid">
         <button v-for="result in results" :key="result.note.id" type="button" class="search-result-card" @click="openNote(result.note.id)">
           <span class="search-result-topline">
-            <span>{{ result.note.folderId ? folderPath(result.note.folderId) : "Unfiled" }}</span>
+            <span>{{ result.note.folderId ? folderPath(result.note.folderId) : "Vault root" }}</span>
             <span>{{ formatDate(result.note.updatedAt) }}</span>
           </span>
           <strong>{{ result.note.title || "Untitled note" }}</strong>

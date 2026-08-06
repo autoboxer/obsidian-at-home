@@ -6,7 +6,6 @@ import CommandPalette from "./components/CommandPalette.vue";
 import EditorWorkspace from "./components/EditorWorkspace.vue";
 import ExplorerSidebar from "./components/ExplorerSidebar.vue";
 import LinkInspector from "./components/LinkInspector.vue";
-import NoteList from "./components/NoteList.vue";
 import SearchWorkspace from "./components/SearchWorkspace.vue";
 import SettingsView from "./components/SettingsView.vue";
 import SnippetStudio from "./components/SnippetStudio.vue";
@@ -81,7 +80,7 @@ function handleKeyboard(event: KeyboardEvent): void {
 
   if (!isEditing && event.key === "/" && uiState.tool === "notes") {
     event.preventDefault();
-    document.querySelector<HTMLInputElement>(".list-filter input")?.focus();
+    document.querySelector<HTMLInputElement>(".vault-tree-filter input")?.focus();
   }
 }
 
@@ -109,7 +108,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
           <Transition name="panel-left">
             <ExplorerSidebar v-if="uiState.explorerOpen" />
           </Transition>
-          <NoteList />
           <EditorWorkspace />
           <Transition name="panel-right">
             <LinkInspector v-if="uiState.contextOpen" />

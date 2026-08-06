@@ -77,7 +77,7 @@ function formatDate(timestamp?: number): string {
               <span class="connection-node"><AppIcon :name="item.note ? 'file-text' : 'plus'" :size="14" /></span>
               <span>
                 <strong>{{ item.link.display || item.link.target }}</strong>
-                <small>{{ item.note ? (item.note.folderId ? folderPath(item.note.folderId) : 'Unfiled') : 'Create this note' }}</small>
+                <small>{{ item.note ? (item.note.folderId ? folderPath(item.note.folderId) : 'Vault root') : 'Create this note' }}</small>
               </span>
               <AppIcon name="chevron" :size="13" />
             </button>
@@ -97,7 +97,7 @@ function formatDate(timestamp?: number): string {
               <span class="backlink-source">
                 <span class="backlink-dot" />
                 <strong>{{ backlink.note.title }}</strong>
-                <small>{{ backlink.note.folderId ? folderPath(backlink.note.folderId) : 'Unfiled' }}</small>
+                <small>{{ backlink.note.folderId ? folderPath(backlink.note.folderId) : 'Vault root' }}</small>
               </span>
               <span class="backlink-excerpt">{{ backlink.excerpt }}</span>
             </button>
@@ -112,7 +112,7 @@ function formatDate(timestamp?: number): string {
         <section class="note-info-card">
           <div class="info-row"><span>Created</span><strong>{{ formatDate(activeNote.createdAt) }}</strong></div>
           <div class="info-row"><span>Updated</span><strong>{{ formatDate(activeNote.updatedAt) }}</strong></div>
-          <div class="info-row"><span>Folder</span><strong>{{ activeNote.folderId ? folderPath(activeNote.folderId) : 'Unfiled' }}</strong></div>
+          <div class="info-row"><span>Folder</span><strong>{{ activeNote.folderId ? folderPath(activeNote.folderId) : 'Vault root' }}</strong></div>
           <div class="info-row"><span>Words</span><strong>{{ wordCount.toLocaleString() }}</strong></div>
           <div class="info-row"><span>Characters</span><strong>{{ activeNote.content.length.toLocaleString() }}</strong></div>
         </section>
