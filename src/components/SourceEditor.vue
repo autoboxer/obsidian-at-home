@@ -164,21 +164,23 @@ function insertSuggestion(title: string): void {
       @keydown="onKeydown"
     />
 
-    <div v-if="suggestions.length" class="wiki-suggestions" role="listbox">
-      <div class="suggestion-kicker">Link a note</div>
-      <button
-        v-for="(title, index) in suggestions"
-        :key="title"
-        type="button"
-        class="wiki-suggestion"
-        :class="{ active: index === suggestionIndex }"
-        @mousedown.prevent="insertSuggestion(title)"
-      >
-        <span class="suggestion-icon"><AppIcon name="link" :size="14" /></span>
-        <span>{{ title }}</span>
-        <AppIcon v-if="index === suggestionIndex" name="enter" :size="13" />
-      </button>
-    </div>
+    <Transition name="popover-fade">
+      <div v-if="suggestions.length" class="wiki-suggestions" role="listbox">
+        <div class="suggestion-kicker">Link a note</div>
+        <button
+          v-for="(title, index) in suggestions"
+          :key="title"
+          type="button"
+          class="wiki-suggestion"
+          :class="{ active: index === suggestionIndex }"
+          @mousedown.prevent="insertSuggestion(title)"
+        >
+          <span class="suggestion-icon"><AppIcon name="link" :size="14" /></span>
+          <span>{{ title }}</span>
+          <AppIcon v-if="index === suggestionIndex" name="enter" :size="13" />
+        </button>
+      </div>
+    </Transition>
 
     <div class="editor-language-pill">MD</div>
   </div>

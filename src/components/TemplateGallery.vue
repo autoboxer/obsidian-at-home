@@ -110,20 +110,22 @@ function submitTemplate(): void {
       </section>
     </div>
 
-    <div v-if="modalOpen" class="modal-backdrop" @mousedown.self="modalOpen = false">
-      <form class="editor-modal template-editor-modal" @submit.prevent="submitTemplate">
-        <header>
-          <div><span class="utility-eyebrow">Template editor</span><h2>{{ editingId ? "Edit template" : "Create a template" }}</h2></div>
-          <button type="button" class="icon-button" @click="modalOpen = false"><AppIcon name="x" :size="16" /></button>
-        </header>
-        <div class="modal-fields two-column-fields">
-          <label><span>Name</span><input v-model="draft.name" required placeholder="Weekly review" /></label>
-          <label><span>Title pattern</span><input v-model="draft.titlePattern" placeholder="Weekly review — {{date}}" /></label>
-          <label class="full-field"><span>Description</span><input v-model="draft.description" placeholder="A short explanation of when to use this." /></label>
-          <label class="full-field"><span>Markdown source</span><textarea v-model="draft.content" required spellcheck="false" /></label>
-        </div>
-        <footer><button type="button" class="secondary-button" @click="modalOpen = false">Cancel</button><button type="submit" class="primary-action-button"><AppIcon name="check" :size="15" /> Save template</button></footer>
-      </form>
-    </div>
+    <Transition name="overlay-fade">
+      <div v-if="modalOpen" class="modal-backdrop" @mousedown.self="modalOpen = false">
+        <form class="editor-modal template-editor-modal" @submit.prevent="submitTemplate">
+          <header>
+            <div><span class="utility-eyebrow">Template editor</span><h2>{{ editingId ? "Edit template" : "Create a template" }}</h2></div>
+            <button type="button" class="icon-button" @click="modalOpen = false"><AppIcon name="x" :size="16" /></button>
+          </header>
+          <div class="modal-fields two-column-fields">
+            <label><span>Name</span><input v-model="draft.name" required placeholder="Weekly review" /></label>
+            <label><span>Title pattern</span><input v-model="draft.titlePattern" placeholder="Weekly review — {{date}}" /></label>
+            <label class="full-field"><span>Description</span><input v-model="draft.description" placeholder="A short explanation of when to use this." /></label>
+            <label class="full-field"><span>Markdown source</span><textarea v-model="draft.content" required spellcheck="false" /></label>
+          </div>
+          <footer><button type="button" class="secondary-button" @click="modalOpen = false">Cancel</button><button type="submit" class="primary-action-button"><AppIcon name="check" :size="15" /> Save template</button></footer>
+        </form>
+      </div>
+    </Transition>
   </main>
 </template>

@@ -73,26 +73,30 @@ function removeFolder(): void {
         <button type="button" class="folder-more" aria-label="Folder actions" @click.stop="menuOpen = !menuOpen">
           <AppIcon name="more" :size="14" />
         </button>
-        <div v-if="menuOpen" class="popover-menu folder-popover">
-          <button type="button" @click="menuOpen = false; editing = true; editValue = folder.name">
-            <AppIcon name="edit" :size="14" /> Rename
-          </button>
-          <button type="button" @click="addSubfolder">
-            <AppIcon name="folder" :size="14" /> New subfolder
-          </button>
-          <button type="button" class="danger" @click="removeFolder">
-            <AppIcon name="trash" :size="14" /> Remove
-          </button>
-        </div>
+        <Transition name="popover-fade">
+          <div v-if="menuOpen" class="popover-menu folder-popover">
+            <button type="button" @click="menuOpen = false; editing = true; editValue = folder.name">
+              <AppIcon name="edit" :size="14" /> Rename
+            </button>
+            <button type="button" @click="addSubfolder">
+              <AppIcon name="folder" :size="14" /> New subfolder
+            </button>
+            <button type="button" class="danger" @click="removeFolder">
+              <AppIcon name="trash" :size="14" /> Remove
+            </button>
+          </div>
+        </Transition>
       </div>
     </div>
-    <div v-if="expanded && hasChildren" class="folder-children">
-      <FolderTreeItem
-        v-for="child in children"
-        :key="child.id"
-        :folder="child"
-        :depth="depth + 1"
-      />
-    </div>
+    <Transition name="collapse-fade">
+      <div v-if="expanded && hasChildren" class="folder-children">
+        <FolderTreeItem
+          v-for="child in children"
+          :key="child.id"
+          :folder="child"
+          :depth="depth + 1"
+        />
+      </div>
+    </Transition>
   </div>
 </template>

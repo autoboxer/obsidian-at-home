@@ -52,7 +52,6 @@ function relativeTime(timestamp: number): string {
       <button v-if="uiState.noteFilter" type="button" aria-label="Clear filter" @click="uiState.noteFilter = ''">
         <AppIcon name="x" :size="12" />
       </button>
-      <kbd v-else>/</kbd>
     </label>
 
     <div class="note-list-scroll">

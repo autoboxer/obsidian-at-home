@@ -1,178 +1,101 @@
 import type { CssSnippet, Folder, Note, NoteTemplate, VaultData } from "../types";
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
+const DAY = 86_400_000;
 
 export function createSeedVault(now = Date.now()): VaultData {
-  const folders: Folder[] = [
-    { id: "folder-inbox", name: "Inbox", parentId: null, createdAt: now - 30 * DAY },
-    { id: "folder-projects", name: "Projects", parentId: null, createdAt: now - 28 * DAY },
-    { id: "folder-research", name: "Research", parentId: null, createdAt: now - 21 * DAY },
-    { id: "folder-journal", name: "Journal", parentId: null, createdAt: now - 14 * DAY },
-    { id: "folder-garden", name: "Garden Studio", parentId: "folder-projects", createdAt: now - 10 * DAY },
-  ];
+  const folders: Folder[] = [];
 
   const notes: Note[] = [
     {
-      id: "note-welcome",
-      title: "Welcome home",
-      folderId: "folder-inbox",
-      tags: ["welcome", "guide"],
-      pinned: true,
-      createdAt: now - 12 * DAY,
-      updatedAt: now - 8 * MINUTE,
-      content: `# Welcome to Obsidian At Home
+      id: "note-getting-started",
+      title: "Getting started",
+      folderId: null,
+      tags: ["getting-started"],
+      pinned: false,
+      createdAt: now - DAY,
+      updatedAt: now,
+      content: `# Getting started
 
-Keep local Markdown notes, organize them in folders, and connect them with links. Your notes remain on this device and export as plain Markdown.
+Obsidian At Home is a local-only app for writing, organizing, and linking Markdown notes. Changes save automatically. Use **Settings → Export portable vault** to create a backup or move notes to Obsidian.
 
-## Create and link notes
+## Write with Markdown
 
-Write in the source editor, then connect notes with double brackets. Try opening [[Slow technology]] or the [[Garden studio brief]].
+Choose **Source** to edit Markdown, **Split** to edit beside a preview, or **Read** to see the formatted note. The app supports the Markdown features below; it is not a complete CommonMark implementation.
 
-> Keep useful context close to the note that needs it.
+### 1. Headings and inline text
+
+Start headings with \`#\` through \`######\`. Use \`**bold**\`, \`*italic*\`, \`~~strikethrough~~\`, and inline code wrapped in backticks.
+
+### 2. Linked notes and web links
+
+Type \`[[\` to search for another note and insert a wiki link. The right panel lists outgoing links and backlinks. Standard links use \`[label](https://example.com)\`.
+
+### 3. Lists and tasks
+
+- Bulleted item
+1. Numbered item
+- [ ] Open task
+- [x] Completed task
+
+### 4. Tables and app features
+
+| Feature | What it does |
+| --- | --- |
+| Folders and tags | Group and label notes |
+| Links and backlinks | Connect notes and show where links come from |
+| Search | Find text in titles, content, folders, and tags |
+| Templates | Create notes from reusable Markdown structures |
+| CSS snippets | Customize the interface |
+| Obsidian transfer | Import or export Markdown vaults in the desktop app |
+
+### 5. Quotes and code blocks
+
+> Start a line with \`>\` to create a blockquote.
+
+\`\`\`text
+Fenced code blocks preserve spacing and line breaks.
+\`\`\`
+
+For a broader syntax reference, see the [CommonMark Markdown Reference](https://commonmark.org/help/). Raw HTML, images, footnotes, nested lists, and reference-style links are not supported.
 
 ## Useful shortcuts
 
-- Press **⌘ K** to search everything
-- Press **⌘ N** to create a note
-- Type \`[[Note title]]\` to make a link
-- Open **Templates** for common note structures
-- Open **CSS snippets** to customize the interface
+- **⌘/Ctrl K** — search notes
+- **⌘/Ctrl N** — create a note
+- **⌘/Ctrl Shift T** — open templates
+- **⌘/Ctrl + backslash** — toggle the vault panel
 
-The right panel shows outgoing links and backlinks, so you can review related notes without leaving the editor.`,
-    },
-    {
-      id: "note-slow-tech",
-      title: "Slow technology",
-      folderId: "folder-research",
-      tags: ["design", "attention"],
-      pinned: true,
-      createdAt: now - 9 * DAY,
-      updatedAt: now - 48 * MINUTE,
-      content: `# Slow technology
+## Customize with CSS snippets
 
-Software can be useful without asking for attention throughout the day.
+Open **CSS snippets**, create a snippet, then save and enable it. Disable a snippet to remove its styles. These app targets cover the most common changes:
 
-## Principles
-
-1. **Local storage.** Notes stay on the user's device.
-2. **Clear structure.** Folders organize notes; links connect notes across folders.
-3. **Quiet feedback.** Save indicators should be visible without becoming distracting.
-4. **Direct editing.** A source-first editor keeps Markdown visible and editable.
-
-These principles guide [[Welcome home]] and the interface notes in [[Writing environment]].
-
-### Question
-
-How can a tool become more useful without demanding more attention?`,
-    },
-    {
-      id: "note-writing-environment",
-      title: "Writing environment",
-      folderId: "folder-research",
-      tags: ["interface", "writing"],
-      pinned: false,
-      createdAt: now - 7 * DAY,
-      updatedAt: now - 3 * HOUR,
-      content: `# Writing environment
-
-The editor should keep controls accessible while leaving most of the screen for writing.
-
-| Layer | Purpose |
+| Target | Styles |
 | --- | --- |
-| Explorer | Browse folders and notes |
-| Note list | Review notes in the current group |
-| Editor | Write and edit the current note |
-| Context | Review links and backlinks |
+| \`:root\` | Theme variables used across the app |
+| \`.markdown-preview\` | The rendered note page |
+| \`.markdown-preview h1\` and \`h2\` | Preview headings |
+| \`.markdown-preview .wiki-link\` | Linked notes in the preview |
+| \`.source-textarea\` | The Markdown source editor |
+| \`.note-title-input\` | The note title |
+| \`.tag-chip\` | Tags below the title |
+| \`.editor-page\` and \`.preview-page\` | Source and preview panes |
 
-- [x] Source-first Markdown editing
-- [x] Linked-note context
-- [x] Fast full-text search
-- [ ] A distraction-free focus mode
+\`\`\`css
+.markdown-preview {
+  --page-width: 900px;
+  font-size: 17px;
+}
 
-Related: [[Slow technology]]`,
-    },
-    {
-      id: "note-garden-brief",
-      title: "Garden studio brief",
-      folderId: "folder-garden",
-      tags: ["project", "architecture"],
-      pinned: false,
-      createdAt: now - 6 * DAY,
-      updatedAt: now - 2 * HOUR,
-      content: `# Garden studio brief
+.markdown-preview .wiki-link {
+  color: #c9b4f3;
+}
 
-Create a small writing room with garden views and comfortable year-round use.
+.source-textarea {
+  line-height: 1.85;
+}
+\`\`\`
 
-## Constraints
-
-- 3 × 4 meter footprint
-- North light above the desk
-- Built-in shelving for field notes
-- A deep sill for coffee and seedlings
-
-## References
-
-Use [[Quiet materials]] for material choices and [[Writing environment]] as a reference for the desk layout.
-
-\`\`\`text
-north light / timber / shelves / garden view
-\`\`\``,
-    },
-    {
-      id: "note-quiet-materials",
-      title: "Quiet materials",
-      folderId: "folder-garden",
-      tags: ["materials", "research"],
-      pinned: false,
-      createdAt: now - 5 * DAY,
-      updatedAt: now - 8 * HOUR,
-      content: `# Quiet materials
-
-Choose durable materials that develop a visible patina and suit a small room.
-
-- Limewashed plywood
-- Cork pinboard
-- Brushed aluminum details
-- Wool felt acoustic panels
-
-These options are being considered for [[Garden studio brief]].`,
-    },
-    {
-      id: "note-today",
-      title: new Intl.DateTimeFormat("en", { month: "long", day: "numeric", year: "numeric" }).format(now),
-      folderId: "folder-journal",
-      tags: ["daily"],
-      pinned: false,
-      createdAt: now - 5 * HOUR,
-      updatedAt: now - 18 * MINUTE,
-      content: `# Today
-
-## Notes
-
-- Use the first hour for the hardest task.
-- Return to [[Garden studio brief]] after lunch.
-
-## Small win
-
-The new notebook layout is comfortable to use.`,
-    },
-    {
-      id: "note-reading-list",
-      title: "Reading list",
-      folderId: "folder-inbox",
-      tags: ["books"],
-      pinned: false,
-      createdAt: now - 4 * DAY,
-      updatedAt: now - DAY,
-      content: `# Reading list
-
-- [ ] *The Poetics of Space* — Gaston Bachelard
-- [ ] *How to Do Nothing* — Jenny Odell
-- [x] *The Nature of Order* — Christopher Alexander
-
-These books support the notes on [[Slow technology]] and [[Quiet materials]].`,
+For CSS properties and examples, see the [MDN CSS reference](https://developer.mozilla.org/en-US/docs/Web/CSS).`,
     },
   ];
 
@@ -240,8 +163,8 @@ These books support the notes on [[Slow technology]] and [[Quiet materials]].`,
     },
     {
       id: "snippet-wide-page",
-      name: "Wide writing page",
-      description: "Increase the page width for long-form notes.",
+      name: "Wide reading page",
+      description: "Increase the rendered note width for long-form notes.",
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
@@ -255,8 +178,19 @@ These books support the notes on [[Slow technology]] and [[Quiet materials]].`,
     folders,
     templates,
     snippets,
-    activeNoteId: "note-welcome",
+    activeNoteId: "note-getting-started",
     selectedFolderId: "all",
     editorMode: "source",
+  };
+}
+
+export function createEmptyVault(now = Date.now()): VaultData {
+  const starter = createSeedVault(now);
+  return {
+    ...starter,
+    notes: [],
+    folders: [],
+    activeNoteId: null,
+    selectedFolderId: "all",
   };
 }

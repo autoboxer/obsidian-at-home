@@ -85,7 +85,14 @@ function requestDelete(): void {
     <template v-if="activeNote">
       <header class="editor-toolbar">
         <div class="editor-crumbs">
-          <button class="icon-button mobile-explorer-toggle" type="button" title="Toggle explorer" @click="uiState.explorerOpen = !uiState.explorerOpen">
+          <button
+            class="icon-button explorer-toggle"
+            type="button"
+            :title="uiState.explorerOpen ? 'Hide vault panel' : 'Show vault panel'"
+            :aria-label="uiState.explorerOpen ? 'Hide vault panel' : 'Show vault panel'"
+            :aria-pressed="uiState.explorerOpen"
+            @click="uiState.explorerOpen = !uiState.explorerOpen"
+          >
             <AppIcon name="sidebar" :size="17" />
           </button>
           <span class="crumb-vault">{{ vaultState.name }}</span>
@@ -112,18 +119,27 @@ function requestDelete(): void {
           <button class="icon-button" type="button" :class="{ active: activeNote.pinned }" :title="activeNote.pinned ? 'Unpin note' : 'Pin note'" @click="togglePinned(activeNote.id)">
             <AppIcon name="pin" :size="16" />
           </button>
-          <button class="icon-button" type="button" :class="{ active: uiState.contextOpen }" title="Toggle context" @click="uiState.contextOpen = !uiState.contextOpen">
+          <button
+            class="icon-button context-toggle"
+            type="button"
+            :class="{ active: uiState.contextOpen }"
+            :aria-label="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
+            :title="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
+            @click="uiState.contextOpen = !uiState.contextOpen"
+          >
             <AppIcon name="panel-right" :size="17" />
           </button>
           <div class="menu-anchor">
             <button class="icon-button" type="button" title="More actions" @click="noteMenuOpen = !noteMenuOpen">
               <AppIcon name="more" :size="18" />
             </button>
-            <div v-if="noteMenuOpen" class="popover-menu compact-menu">
-              <button type="button" class="danger" @click="requestDelete">
-                <AppIcon name="trash" :size="15" /> Delete note
-              </button>
-            </div>
+            <Transition name="popover-fade">
+              <div v-if="noteMenuOpen" class="popover-menu compact-menu">
+                <button type="button" class="danger" @click="requestDelete">
+                  <AppIcon name="trash" :size="15" /> Delete note
+                </button>
+              </div>
+            </Transition>
           </div>
         </div>
       </header>
@@ -154,25 +170,35 @@ function requestDelete(): void {
                 <AppIcon name="x" :size="10" />
               </button>
             </span>
-            <form v-if="tagInputOpen" class="inline-tag-form" @submit.prevent="addTag">
-              <span>#</span>
-              <input ref="tagField" v-model="tagInput" placeholder="tag" @blur="addTag" @keydown.esc="tagInputOpen = false" />
-            </form>
-            <button v-else type="button" class="add-tag-button" @click="openTagInput">
-              <AppIcon name="plus" :size="12" /> Add tag
-            </button>
+            <Transition name="chip-swap" mode="out-in">
+              <form v-if="tagInputOpen" key="tag-input" class="inline-tag-form" @submit.prevent="addTag">
+                <span>#</span>
+                <input ref="tagField" v-model="tagInput" placeholder="tag" @blur="addTag" @keydown.esc="tagInputOpen = false" />
+              </form>
+              <button v-else key="tag-button" type="button" class="add-tag-button" @click="openTagInput">
+                <AppIcon name="plus" :size="12" /> Add tag
+              </button>
+            </Transition>
           </div>
         </div>
 
         <div class="editor-canvas" :class="`mode-${vaultState.editorMode}`">
-          <div v-if="vaultState.editorMode !== 'reading'" class="editor-pane editor-page">
+          <div
+            class="editor-pane editor-page"
+            :aria-hidden="vaultState.editorMode === 'reading'"
+            :inert="vaultState.editorMode === 'reading'"
+          >
             <SourceEditor
               :model-value="activeNote.content"
               :note-titles="noteTitles"
               @update:model-value="setContent"
             />
           </div>
-          <div v-if="vaultState.editorMode !== 'source'" class="preview-pane preview-page">
+          <div
+            class="preview-pane preview-page"
+            :aria-hidden="vaultState.editorMode === 'source'"
+            :inert="vaultState.editorMode === 'source'"
+          >
             <MarkdownPreview :content="activeNote.content" @open-wiki="createLinkedNote" />
           </div>
         </div>
@@ -183,7 +209,7 @@ function requestDelete(): void {
           <span class="status-dot" :class="uiState.saveStatus" />
           <span v-if="uiState.saveStatus === 'saving'">Saving…</span>
           <span v-else-if="uiState.saveStatus === 'error'">Couldn’t save</span>
-          <span v-else>Saved locally</span>
+          <span v-else>Saved</span>
         </div>
         <div class="status-stats">
           <span>Ln {{ activeNote.content.slice(0, activeNote.content.length).split('\n').length }}</span>

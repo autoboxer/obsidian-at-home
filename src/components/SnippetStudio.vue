@@ -32,7 +32,7 @@ function save(): void {
 function create(): void {
   const snippet = saveSnippet({
     name: "New snippet",
-    description: "A custom style for your notebook.",
+    description: "A custom style for your vault.",
     css: `.markdown-preview {\n  /* Add your styles here */\n}\n`,
     enabled: true,
   });
@@ -61,7 +61,7 @@ function remove(): void {
           <div><span class="utility-eyebrow">Appearance</span><h1>CSS snippets</h1></div>
           <button type="button" class="icon-button" title="New snippet" @click="create"><AppIcon name="plus" :size="16" /></button>
         </header>
-        <p class="snippet-intro">Create and enable custom CSS. Changes apply locally and instantly.</p>
+        <p class="snippet-intro">Create and enable custom CSS. Enabled snippets apply immediately; edits apply when saved.</p>
         <div class="snippet-list">
           <button v-for="snippet in vaultState.snippets" :key="snippet.id" type="button" class="snippet-list-item" :class="{ active: activeId === snippet.id }" @click="activeId = snippet.id">
             <span class="snippet-status" :class="{ enabled: snippet.enabled }"><span /></span>

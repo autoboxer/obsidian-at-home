@@ -3,8 +3,9 @@ import { computed, ref } from "vue";
 import type { ExportResult, ImportResult } from "../types";
 import {
   buildExportPayload,
+  clearVault,
+  deleteVault,
   mergeImportedVault,
-  resetDemoVault,
   vaultState,
 } from "../stores/vault";
 import {
@@ -32,7 +33,8 @@ const importSourcePath = ref("");
 const exportResult = ref<ExportResult | null>(null);
 const feedback = ref<Feedback | null>(null);
 const replaceConfirming = ref(false);
-const resetConfirming = ref(false);
+const clearConfirming = ref(false);
+const deleteConfirming = ref(false);
 
 const wordCount = computed(() =>
   vaultState.notes.reduce((total, note) => {
@@ -94,6 +96,8 @@ async function chooseVaultToImport(): Promise<void> {
   activeTask.value = "import";
   feedback.value = null;
   replaceConfirming.value = false;
+  clearConfirming.value = false;
+  deleteConfirming.value = false;
 
   try {
     const selectedPath = await pickFolder();
@@ -101,7 +105,7 @@ async function chooseVaultToImport(): Promise<void> {
       feedback.value = {
         tone: "info",
         title: "Import cancelled",
-        message: "Nothing changed in your notebook.",
+        message: "Nothing changed in your vault.",
       };
       return;
     }
@@ -133,24 +137,30 @@ function cancelImportReview(): void {
   feedback.value = {
     tone: "info",
     title: "Import review closed",
-    message: "Your current notebook was not changed.",
+    message: "Your current vault was not changed.",
   };
 }
 
 function applyImport(replace: boolean): void {
+  if (activeTask.value) return;
   const result = importReview.value;
   if (!result) return;
 
-  const noteCount = mergeImportedVault(result, replace);
+  const { noteCount, saved } = mergeImportedVault(result, replace);
   const warnings = [...result.warnings];
   importReview.value = null;
   importSourcePath.value = "";
   replaceConfirming.value = false;
-  resetConfirming.value = false;
+  clearConfirming.value = false;
+  deleteConfirming.value = false;
   feedback.value = {
-    tone: warnings.length ? "warning" : "success",
-    title: replace ? "Notebook replaced" : "Vault merged",
-    message: `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"} imported from ${result.vaultName || "the selected vault"}.`,
+    tone: !saved || warnings.length ? "warning" : "success",
+    title: saved
+      ? replace ? "Vault replaced" : "Vault merged"
+      : replace ? "Vault replaced, but not saved" : "Vault merged, but not saved",
+    message: saved
+      ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"} imported from ${result.vaultName || "the selected vault"}.`
+      : `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note is" : "notes are"} open, but the change could not be saved. Keep the app open and try again.`,
     warnings,
   };
 }
@@ -161,6 +171,8 @@ async function exportVault(): Promise<void> {
   activeTask.value = "export";
   feedback.value = null;
   exportResult.value = null;
+  clearConfirming.value = false;
+  deleteConfirming.value = false;
 
   try {
     const parentPath = await pickFolder();
@@ -188,7 +200,7 @@ async function exportVault(): Promise<void> {
   } catch (error) {
     feedback.value = {
       tone: "error",
-      title: "Could not export the notebook",
+      title: "Could not export the vault",
       message: errorMessage(error, "The destination folder could not be written."),
     };
   } finally {
@@ -196,17 +208,41 @@ async function exportVault(): Promise<void> {
   }
 }
 
-function restoreDemoVault(): void {
-  resetDemoVault();
+function resetTransferState(): void {
   importReview.value = null;
   importSourcePath.value = "";
   exportResult.value = null;
   replaceConfirming.value = false;
-  resetConfirming.value = false;
+}
+
+function clearCurrentVault(): void {
+  if (activeTask.value) return;
+  const saved = clearVault();
+  resetTransferState();
+  clearConfirming.value = false;
+  deleteConfirming.value = false;
   feedback.value = {
-    tone: "success",
-    title: "Demo notebook restored",
-    message: "The original Obsidian At Home example notes, folders, templates, and snippets are back.",
+    tone: saved ? "success" : "warning",
+    title: saved ? "Vault cleared" : "Vault cleared, but not saved",
+    message: saved
+      ? "All notes and folders were removed. Templates and CSS snippets were kept."
+      : "The current view is empty, but the change could not be saved. Keep the app open and try again.",
+  };
+}
+
+function deleteCurrentVault(): void {
+  if (activeTask.value) return;
+  const deletedName = vaultState.name;
+  const saved = deleteVault();
+  resetTransferState();
+  clearConfirming.value = false;
+  deleteConfirming.value = false;
+  feedback.value = {
+    tone: saved ? "success" : "warning",
+    title: saved ? "Vault deleted" : "Vault deleted, but not saved",
+    message: saved
+      ? `${deletedName} was erased. A new empty vault with the built-in templates and CSS snippets is ready.`
+      : "A new empty vault is open, but the change could not be saved. Keep the app open and try again.",
   };
 }
 </script>
@@ -218,24 +254,15 @@ function restoreDemoVault(): void {
         <span class="settings-eyebrow">Preferences &amp; portability</span>
         <h1 class="settings-hero__title">Settings</h1>
         <p class="settings-hero__description">
-          Review notebook details, import or export Markdown, and manage the local
-          data stored by Obsidian At Home.
+          Review vault details, import or export Markdown, and manage your data.
         </p>
-      </div>
-
-      <div
-        class="settings-runtime-badge"
-        :class="nativeAvailable ? 'settings-runtime-badge--native' : 'settings-runtime-badge--web'"
-      >
-        <span class="settings-runtime-badge__dot" aria-hidden="true" />
-        {{ nativeAvailable ? "Tauri desktop" : "Browser preview" }}
       </div>
     </header>
 
     <section class="settings-section settings-section--overview" aria-labelledby="settings-overview-title">
       <div class="settings-section__heading">
         <div>
-          <span class="settings-eyebrow">Current notebook</span>
+          <span class="settings-eyebrow">Current vault</span>
           <h2 id="settings-overview-title" class="settings-section__title">{{ vaultState.name }}</h2>
         </div>
         <span class="settings-section__meta">
@@ -254,84 +281,42 @@ function restoreDemoVault(): void {
       </div>
     </section>
 
-    <section class="settings-section settings-section--runtime" aria-labelledby="settings-runtime-title">
-      <div class="settings-runtime-intro">
-        <span class="settings-runtime-intro__icon">
-          <AppIcon name="sparkles" :size="20" />
-        </span>
-        <div>
-          <span class="settings-eyebrow">Desktop app</span>
-          <h2 id="settings-runtime-title" class="settings-section__title">A native shell, not Electron</h2>
-          <p class="settings-section__description">
-            Obsidian At Home uses Vue for its interface, Tauri and Rust for its desktop
-            shell, and your system WebView for rendering. It has no bundled Chromium
-            runtime, account, or sync service.
-          </p>
-        </div>
-      </div>
-
-      <dl class="settings-runtime-specs">
-        <div class="settings-runtime-spec">
-          <dt>Interface</dt>
-          <dd>Vue 3</dd>
-        </div>
-        <div class="settings-runtime-spec">
-          <dt>Desktop shell</dt>
-          <dd>Tauri 2</dd>
-        </div>
-        <div class="settings-runtime-spec">
-          <dt>Native core</dt>
-          <dd>Rust</dd>
-        </div>
-        <div class="settings-runtime-spec">
-          <dt>Storage</dt>
-          <dd>Local only</dd>
-        </div>
-      </dl>
-
-      <div v-if="!nativeAvailable" class="settings-native-notice" role="note">
-        <AppIcon name="info" :size="17" />
-        <p>
-          Folder import and export are available in the installed desktop app. This
-          browser preview still saves edits locally for interface development.
-        </p>
-      </div>
-    </section>
-
-    <div
-      v-if="feedback"
-      class="settings-feedback"
-      :class="`settings-feedback--${feedback.tone}`"
-      :role="feedback.tone === 'error' ? 'alert' : 'status'"
-      aria-live="polite"
-    >
-      <span class="settings-feedback__icon">
-        <AppIcon :name="feedbackIcon(feedback.tone)" :size="18" />
-      </span>
-      <div class="settings-feedback__body">
-        <strong class="settings-feedback__title">{{ feedback.title }}</strong>
-        <p class="settings-feedback__message">{{ feedback.message }}</p>
-        <details v-if="feedback.warnings?.length" class="settings-warning-details">
-          <summary>
-            {{ feedback.warnings.length }}
-            {{ feedback.warnings.length === 1 ? "warning" : "warnings" }}
-          </summary>
-          <ul class="settings-warning-list">
-            <li v-for="(warning, index) in feedback.warnings" :key="`${index}-${warning}`">
-              {{ warning }}
-            </li>
-          </ul>
-        </details>
-      </div>
-      <button
-        type="button"
-        class="settings-icon-button"
-        aria-label="Dismiss message"
-        @click="feedback = null"
+    <Transition name="collapse-fade">
+      <div
+        v-if="feedback"
+        class="settings-feedback"
+        :class="`settings-feedback--${feedback.tone}`"
+        :role="feedback.tone === 'error' ? 'alert' : 'status'"
+        aria-live="polite"
       >
-        <AppIcon name="x" :size="16" />
-      </button>
-    </div>
+        <span class="settings-feedback__icon">
+          <AppIcon :name="feedbackIcon(feedback.tone)" :size="18" />
+        </span>
+        <div class="settings-feedback__body">
+          <strong class="settings-feedback__title">{{ feedback.title }}</strong>
+          <p class="settings-feedback__message">{{ feedback.message }}</p>
+          <details v-if="feedback.warnings?.length" class="settings-warning-details">
+            <summary>
+              {{ feedback.warnings.length }}
+              {{ feedback.warnings.length === 1 ? "warning" : "warnings" }}
+            </summary>
+            <ul class="settings-warning-list">
+              <li v-for="(warning, index) in feedback.warnings" :key="`${index}-${warning}`">
+                {{ warning }}
+              </li>
+            </ul>
+          </details>
+        </div>
+        <button
+          type="button"
+          class="settings-icon-button"
+          aria-label="Dismiss message"
+          @click="feedback = null"
+        >
+          <AppIcon name="x" :size="16" />
+        </button>
+      </div>
+    </Transition>
 
     <section class="settings-section settings-section--transfer" aria-labelledby="settings-transfer-title">
       <div class="settings-section__heading">
@@ -343,6 +328,11 @@ function restoreDemoVault(): void {
             Wiki links and Markdown remain plain text.
           </p>
         </div>
+      </div>
+
+      <div v-if="!nativeAvailable" class="settings-desktop-notice" role="note">
+        <AppIcon name="info" :size="16" />
+        <p>Import and export are available in the desktop app.</p>
       </div>
 
       <div class="settings-transfer-grid">
@@ -406,27 +396,30 @@ function restoreDemoVault(): void {
             {{ activeTask === "export" ? "Creating vault…" : "Choose export destination" }}
           </button>
 
-          <div v-if="exportResult" class="settings-export-receipt">
-            <span class="settings-export-receipt__icon">
-              <AppIcon name="check" :size="16" />
-            </span>
-            <div>
-              <strong>Saved as a new folder</strong>
-              <code class="settings-export-receipt__path">{{ exportResult.path }}</code>
-              <span class="settings-export-receipt__counts">
-                {{ exportResult.noteCount }} notes · {{ exportResult.templateCount }} templates ·
-                {{ exportResult.snippetCount }} snippets
+          <Transition name="collapse-fade">
+            <div v-if="exportResult" class="settings-export-receipt">
+              <span class="settings-export-receipt__icon">
+                <AppIcon name="check" :size="16" />
               </span>
+              <div>
+                <strong>Saved as a new folder</strong>
+                <code class="settings-export-receipt__path">{{ exportResult.path }}</code>
+                <span class="settings-export-receipt__counts">
+                  {{ exportResult.noteCount }} notes · {{ exportResult.templateCount }} templates ·
+                  {{ exportResult.snippetCount }} snippets
+                </span>
+              </div>
             </div>
-          </div>
+          </Transition>
         </article>
       </div>
 
-      <article
-        v-if="importReview"
-        class="settings-import-review"
-        aria-labelledby="settings-import-review-title"
-      >
+      <Transition name="workspace-fade">
+        <article
+          v-if="importReview"
+          class="settings-import-review"
+          aria-labelledby="settings-import-review-title"
+        >
         <div class="settings-import-review__header">
           <div class="settings-import-review__identity">
             <span class="settings-import-review__icon">
@@ -466,7 +459,7 @@ function restoreDemoVault(): void {
         </div>
 
         <div v-if="importPreviewNotes.length" class="settings-import-preview">
-          <span class="settings-import-preview__label">Sample files</span>
+          <span class="settings-import-preview__label">Files found</span>
           <ul class="settings-import-preview__list">
             <li v-for="note in importPreviewNotes" :key="note.relativePath">
               <AppIcon name="file-text" :size="14" />
@@ -507,14 +500,16 @@ function restoreDemoVault(): void {
             <button
               type="button"
               class="settings-button settings-button--primary"
+              :disabled="activeTask !== null"
               @click="applyImport(false)"
             >
               <AppIcon name="plus" :size="16" />
-              Merge with notebook
+              Merge with vault
             </button>
             <button
               type="button"
               class="settings-button settings-button--danger-ghost"
+              :disabled="activeTask !== null"
               @click="replaceConfirming = true"
             >
               <AppIcon name="refresh" :size="16" />
@@ -523,86 +518,132 @@ function restoreDemoVault(): void {
           </div>
         </div>
 
-        <div v-if="replaceConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
+        <Transition name="collapse-fade">
+          <div v-if="replaceConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
+            <span class="settings-confirmation__icon">
+              <AppIcon name="info" :size="18" />
+            </span>
+            <div class="settings-confirmation__copy">
+              <strong>Replace the current note collection?</strong>
+              <p>This removes {{ formatCount(vaultState.notes.length) }} current notes before importing.</p>
+            </div>
+            <div class="settings-confirmation__actions">
+              <button
+                type="button"
+                class="settings-button settings-button--danger"
+                :disabled="activeTask !== null"
+                @click="applyImport(true)"
+              >
+                Yes, replace
+              </button>
+              <button
+                type="button"
+                class="settings-button settings-button--quiet"
+                @click="replaceConfirming = false"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </Transition>
+        </article>
+      </Transition>
+    </section>
+
+    <section class="settings-section settings-section--danger" aria-labelledby="settings-clear-title">
+      <div class="settings-danger-row">
+        <div class="settings-danger-row__icon">
+          <AppIcon name="archive" :size="19" />
+        </div>
+        <div class="settings-danger-row__copy">
+          <span class="settings-eyebrow">Vault content</span>
+          <h2 id="settings-clear-title" class="settings-section__title">Clear vault</h2>
+          <p class="settings-section__description">
+            Remove every note, folder, and tag. The vault name, templates, and CSS snippets stay.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="settings-button settings-button--danger-ghost"
+          :disabled="activeTask !== null"
+          @click="clearConfirming = true; deleteConfirming = false"
+        >
+          Clear vault
+        </button>
+      </div>
+
+      <Transition name="collapse-fade">
+        <div v-if="clearConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
           <span class="settings-confirmation__icon">
             <AppIcon name="info" :size="18" />
           </span>
           <div class="settings-confirmation__copy">
-            <strong>Replace the current note collection?</strong>
-            <p>This removes {{ formatCount(vaultState.notes.length) }} current notes before importing.</p>
+            <strong>Clear {{ formatCount(vaultState.notes.length) }} notes and {{ formatCount(vaultState.folders.length) }} folders?</strong>
+            <p>Templates and CSS snippets will stay. Export first if you need a backup.</p>
           </div>
           <div class="settings-confirmation__actions">
             <button
               type="button"
               class="settings-button settings-button--danger"
-              @click="applyImport(true)"
+              :disabled="activeTask !== null"
+              @click="clearCurrentVault"
             >
-              Yes, replace
+              Yes, clear vault
             </button>
-            <button
-              type="button"
-              class="settings-button settings-button--quiet"
-              @click="replaceConfirming = false"
-            >
+            <button type="button" class="settings-button settings-button--quiet" @click="clearConfirming = false">
               Cancel
             </button>
           </div>
         </div>
-      </article>
-    </section>
+      </Transition>
 
-    <section class="settings-section settings-section--danger" aria-labelledby="settings-data-title">
+      <div class="settings-danger-divider" />
+
       <div class="settings-danger-row">
         <div class="settings-danger-row__icon">
-          <AppIcon name="refresh" :size="19" />
+          <AppIcon name="trash" :size="19" />
         </div>
         <div class="settings-danger-row__copy">
-          <span class="settings-eyebrow">Local data</span>
-          <h2 id="settings-data-title" class="settings-section__title">Restore demo notebook</h2>
+          <span class="settings-eyebrow">Entire vault</span>
+          <h2 class="settings-section__title">Delete vault</h2>
           <p class="settings-section__description">
-            Replace this notebook with the original Obsidian At Home sample content. Export first
-            if there is anything you want to keep.
+            Erase this vault and its custom templates and snippets. A new empty vault will keep only the built-in examples.
           </p>
         </div>
         <button
-          v-if="!resetConfirming"
           type="button"
           class="settings-button settings-button--danger-ghost"
           :disabled="activeTask !== null"
-          @click="resetConfirming = true"
+          @click="deleteConfirming = true; clearConfirming = false"
         >
-          Restore demo
+          Delete vault
         </button>
       </div>
 
-      <div v-if="resetConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
-        <span class="settings-confirmation__icon">
-          <AppIcon name="info" :size="18" />
-        </span>
-        <div class="settings-confirmation__copy">
-          <strong>Replace all local notebook data?</strong>
-          <p>
-            This resets notes, folders, templates, and snippets. It cannot be undone unless
-            you have exported a copy.
-          </p>
+      <Transition name="collapse-fade">
+        <div v-if="deleteConfirming" class="settings-confirmation settings-confirmation--danger" role="alert">
+          <span class="settings-confirmation__icon">
+            <AppIcon name="info" :size="18" />
+          </span>
+          <div class="settings-confirmation__copy">
+            <strong>Delete “{{ vaultState.name }}”?</strong>
+            <p>Notes, folders, and custom templates and snippets will be erased. Imported source folders and exported folders are not affected.</p>
+          </div>
+          <div class="settings-confirmation__actions">
+            <button
+              type="button"
+              class="settings-button settings-button--danger"
+              :disabled="activeTask !== null"
+              @click="deleteCurrentVault"
+            >
+              Yes, delete vault
+            </button>
+            <button type="button" class="settings-button settings-button--quiet" @click="deleteConfirming = false">
+              Cancel
+            </button>
+          </div>
         </div>
-        <div class="settings-confirmation__actions">
-          <button
-            type="button"
-            class="settings-button settings-button--danger"
-            @click="restoreDemoVault"
-          >
-            Replace with demo
-          </button>
-          <button
-            type="button"
-            class="settings-button settings-button--quiet"
-            @click="resetConfirming = false"
-          >
-            Keep my notebook
-          </button>
-        </div>
-      </div>
+      </Transition>
     </section>
   </main>
 </template>

@@ -26,9 +26,9 @@ The scope is intentionally limited: there is **no heavy runtime, cloud sync, gra
 - A source-first Markdown editor with line numbers, source/split/reading modes, formatting shortcuts, spellcheck, and `[[` link suggestions.
 - Nested folders, unfiled and favorites views, pinning, tags, note counts, and quick note creation.
 - Obsidian-style wiki links, clickable rendered links, unresolved-link note creation, outgoing links, and backlink excerpts.
-- Ranked local search across titles, Markdown content, tags, and folder names, plus a keyboard-driven quick switcher with `⌘K` / `Ctrl+K`.
+- Ranked search across titles, Markdown content, tags, and folder names, plus a keyboard-driven quick switcher with `⌘K` / `Ctrl+K`.
 - Reusable Markdown templates with `{{date}}`, `{{time}}`, and `{{title}}` tokens.
-- A CSS snippet editor with local enable/disable controls and editable custom styles.
+- A CSS snippet editor with enable/disable controls and editable custom styles.
 - Obsidian import and export tools in the desktop app.
 
 ## Architecture
@@ -47,7 +47,7 @@ The app has no account or background sync service. Syncing, collaboration, graph
 
 ## Obsidian import and export
 
-Import and export require the Tauri desktop build. The browser preview keeps its own local notebook but cannot open arbitrary folders.
+Import and export require the Tauri desktop build. The browser preview keeps its own notebook but cannot open arbitrary folders.
 
 ### Import from Obsidian
 
@@ -135,6 +135,47 @@ Open the DMG, drag **Obsidian At Home** into **Applications**, and launch it fro
 
 This repository does not configure Apple Developer signing or notarization. If Gatekeeper blocks an unsigned local build, Control-click the app and choose **Open**, then confirm **Open**. Alternatively, use **System Settings → Privacy & Security → Open Anyway** after the first launch attempt. Only bypass the warning for a build you created or otherwise trust.
 
+## Build and install on Linux (RHEL/Fedora)
+
+Install the Linux system packages required by Tauri. On Fedora:
+
+```sh
+sudo dnf install webkit2gtk4.1-devel \
+  openssl-devel \
+  curl \
+  wget \
+  file \
+  libappindicator-gtk3-devel \
+  librsvg2-devel \
+  libxdo-devel
+sudo dnf group install "c-development"
+```
+
+On RHEL, use `sudo dnf group install "Development Tools"` for the compiler toolchain. Package availability can vary by RHEL release and enabled repositories; see the [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/) if one of the library packages is unavailable.
+
+Clone the repository, install the locked JavaScript dependencies, and build only the RPM bundle:
+
+```sh
+git clone <repository-url>
+cd obsidian-at-home
+npm ci
+npm run tauri -- build --bundles rpm
+```
+
+The RPM is written to:
+
+```text
+src-tauri/target/release/bundle/rpm/
+```
+
+Install it with DNF so system dependencies are resolved automatically:
+
+```sh
+sudo dnf install ./src-tauri/target/release/bundle/rpm/*.rpm
+```
+
+After installation, open **Obsidian At Home** from the desktop application menu. To install a newer build later, pull the changes, rerun `npm ci` and the RPM build command, then install the new RPM with the same DNF command.
+
 ## Project commands
 
 | Command | Purpose |
@@ -145,6 +186,7 @@ This repository does not configure Apple Developer signing or notarization. If G
 | `npm run desktop` | Start the Tauri desktop app in development mode |
 | `npm run desktop:build` | Create a release build with the platform's configured Tauri bundle targets |
 | `npm run desktop:mac` | Regenerate icons and build macOS `.app` and `.dmg` bundles |
+| `npm run tauri -- build --bundles rpm` | Build the Linux RPM package |
 | `npm run icons` | Regenerate Tauri platform icons from `src-tauri/icons/icon-source.png` |
 | `npm run check` | Run the production frontend build and `cargo check` |
 | `npm run tauri -- <args>` | Pass arguments directly to the Tauri CLI |

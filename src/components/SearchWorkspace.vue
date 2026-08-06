@@ -50,7 +50,7 @@ function formatDate(timestamp: number): string {
       <header class="utility-hero search-hero">
         <span class="utility-eyebrow">Search</span>
         <h1>Search all notes</h1>
-        <p>Search titles, content, folders, and tags. Nothing leaves this device.</p>
+        <p>Search titles, content, folders, and tags.</p>
       </header>
 
       <div class="search-box-large">

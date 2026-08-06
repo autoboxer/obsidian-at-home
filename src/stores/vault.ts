@@ -1,5 +1,5 @@
 import { computed, reactive, watch } from "vue";
-import { createSeedVault } from "../data/seed";
+import { createEmptyVault, createSeedVault } from "../data/seed";
 import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from "../lib";
 import type {
   CssSnippet,
@@ -47,15 +47,28 @@ function loadVault(): VaultData {
     const currentReadingSnippet = fallback.snippets.find(
       (snippet) => snippet.id === "snippet-editor-serif",
     );
+    const currentWideSnippet = fallback.snippets.find(
+      (snippet) => snippet.id === "snippet-wide-page",
+    );
     const snippets = (Array.isArray(parsed.snippets) ? parsed.snippets : fallback.snippets)
-      .map((snippet) => snippet.id === "snippet-editor-serif" && snippet.builtIn && currentReadingSnippet
-        ? {
+      .map((snippet) => {
+        if (snippet.id === "snippet-editor-serif" && snippet.builtIn && currentReadingSnippet) {
+          return {
             ...snippet,
             name: currentReadingSnippet.name,
             description: currentReadingSnippet.description,
             css: currentReadingSnippet.css,
-          }
-        : snippet);
+          };
+        }
+        if (snippet.id === "snippet-wide-page" && snippet.builtIn && currentWideSnippet) {
+          return {
+            ...snippet,
+            name: currentWideSnippet.name,
+            description: currentWideSnippet.description,
+          };
+        }
+        return snippet;
+      });
 
     return {
       name: typeof parsed.name === "string" ? parsed.name : fallback.name,
@@ -335,7 +348,11 @@ export function deleteSnippet(id: string): void {
   if (index >= 0) vaultState.snippets.splice(index, 1);
 }
 
-export function mergeImportedVault(result: ImportResult, replace = false): number {
+export function mergeImportedVault(
+  result: ImportResult,
+  replace = false,
+): { noteCount: number; saved: boolean } {
+  clearTimeout(persistTimer);
   if (replace) {
     vaultState.notes.splice(0);
     vaultState.folders.splice(0);
@@ -374,10 +391,18 @@ export function mergeImportedVault(result: ImportResult, replace = false): numbe
 
   vaultState.activeNoteId = result.notes.length
     ? vaultState.notes[vaultState.notes.length - result.notes.length]?.id ?? vaultState.notes[0]?.id ?? null
-    : vaultState.activeNoteId;
+    : replace
+      ? null
+      : vaultState.activeNoteId;
   vaultState.selectedFolderId = "all";
-  notify(`Imported ${result.notes.length} Markdown ${result.notes.length === 1 ? "note" : "notes"}`, "success");
-  return result.notes.length;
+  const saved = persistVault();
+  notify(
+    saved
+      ? `Imported ${result.notes.length} Markdown ${result.notes.length === 1 ? "note" : "notes"}`
+      : "Import applied, but not saved",
+    saved ? "success" : "warning",
+  );
+  return { noteCount: result.notes.length, saved };
 }
 
 export function buildExportPayload(): {
@@ -436,9 +461,31 @@ export function notify(message: string, tone: ToastTone = "neutral"): void {
   }, 3200);
 }
 
-export function resetDemoVault(): void {
-  Object.assign(vaultState, createSeedVault());
-  notify("Demo notebook restored", "success");
+export function clearVault(): boolean {
+  clearTimeout(persistTimer);
+  vaultState.notes.splice(0);
+  vaultState.folders.splice(0);
+  vaultState.activeNoteId = null;
+  vaultState.selectedFolderId = "all";
+  uiState.noteFilter = "";
+  uiState.commandOpen = false;
+  uiState.contextOpen = false;
+  uiState.explorerOpen = true;
+  const saved = persistVault();
+  notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
+  return saved;
+}
+
+export function deleteVault(): boolean {
+  clearTimeout(persistTimer);
+  Object.assign(vaultState, createEmptyVault());
+  uiState.noteFilter = "";
+  uiState.commandOpen = false;
+  uiState.contextOpen = false;
+  uiState.explorerOpen = true;
+  const saved = persistVault();
+  notify(saved ? "Vault deleted" : "Vault deleted, but not saved", saved ? "success" : "warning");
+  return saved;
 }
 
 function currentFolderId(): string | null {
@@ -503,14 +550,16 @@ function createId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
-function persistVault(): void {
-  if (typeof localStorage === "undefined") return;
+function persistVault(): boolean {
+  if (typeof localStorage === "undefined") return false;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(vaultState));
     uiState.saveStatus = "saved";
     uiState.lastSavedAt = Date.now();
+    return true;
   } catch {
     uiState.saveStatus = "error";
+    return false;
   }
 }
 

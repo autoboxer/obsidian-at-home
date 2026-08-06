@@ -44,7 +44,7 @@ function formatDate(timestamp?: number): string {
         <span class="eyebrow">Note context</span>
         <h2>{{ uiState.inspectorTab === 'links' ? 'Connections' : 'Details' }}</h2>
       </div>
-      <button type="button" class="icon-button subtle" title="Close context" @click="uiState.contextOpen = false">
+      <button type="button" class="icon-button subtle" title="Hide note context" @click="uiState.contextOpen = false">
         <AppIcon name="x" :size="15" />
       </button>
     </header>

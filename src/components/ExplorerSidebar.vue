@@ -48,10 +48,9 @@ function searchTag(tag: string): void {
         <div class="vault-monogram">OH</div>
         <div>
           <strong>{{ vaultState.name }}</strong>
-          <span>On this device</span>
         </div>
       </div>
-      <button type="button" class="icon-button subtle" title="Hide explorer" @click="uiState.explorerOpen = false">
+      <button type="button" class="icon-button subtle" title="Hide vault panel" @click="uiState.explorerOpen = false">
         <AppIcon name="sidebar" :size="16" />
       </button>
     </header>
@@ -88,27 +87,30 @@ function searchTag(tag: string): void {
             <AppIcon name="plus" :size="13" />
           </button>
         </div>
-        <form v-if="folderInputOpen" class="new-folder-form" @submit.prevent="submitFolder">
-          <AppIcon name="folder" :size="14" />
-          <input ref="folderField" v-model="folderName" placeholder="Folder name" @blur="submitFolder" @keydown.esc="folderInputOpen = false" />
-        </form>
+        <Transition name="collapse-fade">
+          <form v-if="folderInputOpen" class="new-folder-form" @submit.prevent="submitFolder">
+            <AppIcon name="folder" :size="14" />
+            <input ref="folderField" v-model="folderName" placeholder="Folder name" @blur="submitFolder" @keydown.esc="folderInputOpen = false" />
+          </form>
+        </Transition>
         <div class="folder-tree">
           <FolderTreeItem v-for="folder in folderChildren(null)" :key="folder.id" :folder="folder" />
         </div>
       </section>
 
-      <section v-if="topTags.length" class="explorer-section tags-section">
-        <div class="section-label"><span>Tags</span></div>
-        <div class="tag-list">
-          <button v-for="([tag, count]) in topTags" :key="tag" type="button" @click="searchTag(tag)">
-            <span><em>#</em>{{ tag }}</span><small>{{ count }}</small>
-          </button>
-        </div>
-      </section>
+      <Transition name="collapse-fade">
+        <section v-if="topTags.length" class="explorer-section tags-section">
+          <div class="section-label"><span>Tags</span></div>
+          <div class="tag-list">
+            <button v-for="([tag, count]) in topTags" :key="tag" type="button" @click="searchTag(tag)">
+              <span><em>#</em>{{ tag }}</span><small>{{ count }}</small>
+            </button>
+          </div>
+        </section>
+      </Transition>
     </div>
 
     <footer class="explorer-footer">
-      <span class="local-lock"><span /> Local only</span>
       <span>{{ vaultState.notes.length }} notes</span>
     </footer>
   </aside>

@@ -48,7 +48,12 @@ function handleKeyboard(event: KeyboardEvent): void {
   }
   if (modifier && key === "\\") {
     event.preventDefault();
-    uiState.explorerOpen = !uiState.explorerOpen;
+    if (uiState.tool !== "notes") {
+      uiState.tool = "notes";
+      uiState.explorerOpen = true;
+    } else {
+      uiState.explorerOpen = !uiState.explorerOpen;
+    }
     return;
   }
   if (event.key === "Escape" && uiState.commandOpen) {
@@ -77,27 +82,33 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
         <i />
         <small>{{ titlebarContext }}</small>
       </div>
-      <div class="titlebar-local" data-tauri-drag-region>
-        <span /> Local
-      </div>
+      <div data-tauri-drag-region />
     </header>
 
-    <div class="app-content" :class="{ 'notes-layout': uiState.tool === 'notes' }">
+    <div class="app-content">
       <ActivityRail />
 
-      <template v-if="uiState.tool === 'notes'">
-        <ExplorerSidebar v-if="uiState.explorerOpen" />
-        <NoteList />
-        <EditorWorkspace />
-        <LinkInspector v-if="uiState.contextOpen" />
-      </template>
-      <SearchWorkspace v-else-if="uiState.tool === 'search'" />
-      <TemplateGallery v-else-if="uiState.tool === 'templates'" />
-      <SnippetStudio v-else-if="uiState.tool === 'snippets'" />
-      <SettingsView v-else />
+      <Transition name="workspace-switch" mode="out-in">
+        <div v-if="uiState.tool === 'notes'" key="notes" class="notes-workspace">
+          <Transition name="panel-left">
+            <ExplorerSidebar v-if="uiState.explorerOpen" />
+          </Transition>
+          <NoteList />
+          <EditorWorkspace />
+          <Transition name="panel-right">
+            <LinkInspector v-if="uiState.contextOpen" />
+          </Transition>
+        </div>
+        <SearchWorkspace v-else-if="uiState.tool === 'search'" key="search" />
+        <TemplateGallery v-else-if="uiState.tool === 'templates'" key="templates" />
+        <SnippetStudio v-else-if="uiState.tool === 'snippets'" key="snippets" />
+        <SettingsView v-else-if="uiState.tool === 'settings'" key="settings" />
+      </Transition>
     </div>
 
-    <CommandPalette v-if="uiState.commandOpen" />
+    <Transition name="overlay-fade">
+      <CommandPalette v-if="uiState.commandOpen" />
+    </Transition>
 
     <Transition name="toast">
       <div v-if="uiState.toast" :key="uiState.toast.id" class="app-toast" :class="`tone-${uiState.toast.tone}`" role="status">
