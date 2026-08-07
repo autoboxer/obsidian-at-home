@@ -1,6 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import type { ExportResult, ImportResult } from "../types";
+import {
+  appearanceState,
+  fontOptions,
+  installedFontOptions,
+  installedFontsLoading,
+  installedFontsUnavailable,
+  loadInstalledFonts,
+  MAX_NOTE_FONT_SIZE,
+  MIN_NOTE_FONT_SIZE,
+  resetAppearancePreferences,
+  selectedFontOption,
+  setAppearanceFont,
+  setAppearanceFontSize,
+  setAppearanceTheme,
+  themes,
+} from "../stores/appearance";
 import {
   buildExportPayload,
   clearVault,
@@ -80,6 +96,27 @@ const exportPayload = computed(() => ({
   templates: vaultState.templates.length,
   snippets: vaultState.snippets.length,
 }));
+
+const themeGroups = computed(() => [
+  { id: "dark", label: "Dark", themes: themes.filter((theme) => theme.mode === "dark") },
+  { id: "light", label: "Light", themes: themes.filter((theme) => theme.mode === "light") },
+]);
+const selectedInstalledFontIsMissing = computed(
+  () => appearanceState.fontId.startsWith("system:")
+    && !installedFontOptions.value.some((font) => font.id === appearanceState.fontId),
+);
+
+onMounted(() => void loadInstalledFonts());
+
+function updateAppearanceFont(event: Event): void {
+  const select = event.currentTarget as HTMLSelectElement;
+  setAppearanceFont(select.value);
+}
+
+function updateNoteFontSize(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement;
+  setAppearanceFontSize(input.valueAsNumber);
+}
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat().format(value);
@@ -344,10 +381,185 @@ async function forgetVault(): Promise<void> {
         <span class="settings-eyebrow">Preferences &amp; portability</span>
         <h1 class="settings-hero__title">Settings</h1>
         <p class="settings-hero__description">
-          Review the current vault, open or create vaults, and manage Markdown files.
+          Personalize the app, review the current vault, and manage your Markdown files.
         </p>
       </div>
     </header>
+
+    <section
+      class="settings-section settings-section--appearance"
+      data-ui-region="appearance-settings"
+      aria-labelledby="settings-appearance-title"
+    >
+      <div class="settings-section__heading appearance-section-heading">
+        <div>
+          <span class="settings-eyebrow">Look and feel</span>
+          <h2 id="settings-appearance-title" class="settings-section__title">Appearance</h2>
+          <p class="settings-section__description">
+            Choose a color theme and comfortable defaults for reading and writing.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="settings-button settings-button--quiet appearance-reset"
+          @click="resetAppearancePreferences"
+        >
+          <AppIcon name="refresh" :size="15" />
+          Reset appearance
+        </button>
+      </div>
+
+      <div class="appearance-theme-groups" aria-labelledby="appearance-themes-title">
+        <div class="appearance-subsection-heading">
+          <h3 id="appearance-themes-title">Color theme</h3>
+          <p>Selections apply immediately and stay with the app across vaults.</p>
+        </div>
+
+        <section
+          v-for="group in themeGroups"
+          :key="group.id"
+          class="appearance-theme-group"
+          :aria-labelledby="`appearance-${group.id}-themes-title`"
+        >
+          <h4 :id="`appearance-${group.id}-themes-title`">{{ group.label }}</h4>
+          <div
+            class="appearance-theme-grid"
+            role="group"
+            :aria-labelledby="`appearance-${group.id}-themes-title`"
+          >
+            <button
+              v-for="theme in group.themes"
+              :key="theme.id"
+              type="button"
+              class="appearance-theme-card"
+              :class="{ selected: appearanceState.themeId === theme.id }"
+              :aria-pressed="appearanceState.themeId === theme.id"
+              :aria-label="`${theme.label}. ${group.label} theme. ${theme.description}`"
+              @click="setAppearanceTheme(theme.id)"
+            >
+              <span
+                class="appearance-theme-preview"
+                :style="{ backgroundColor: theme.preview.background, color: theme.preview.text }"
+                aria-hidden="true"
+              >
+                <span
+                  class="appearance-theme-preview__rail"
+                  :style="{ backgroundColor: theme.preview.surface }"
+                >
+                  <i :style="{ backgroundColor: theme.preview.accent }" />
+                  <i :style="{ backgroundColor: theme.preview.text }" />
+                  <i :style="{ backgroundColor: theme.preview.text }" />
+                </span>
+                <span class="appearance-theme-preview__canvas">
+                  <i
+                    class="appearance-theme-preview__title"
+                    :style="{ backgroundColor: theme.preview.text }"
+                  />
+                  <i
+                    class="appearance-theme-preview__line appearance-theme-preview__line--long"
+                    :style="{ backgroundColor: theme.preview.text }"
+                  />
+                  <i
+                    class="appearance-theme-preview__line"
+                    :style="{ backgroundColor: theme.preview.text }"
+                  />
+                  <i
+                    class="appearance-theme-preview__accent"
+                    :style="{ backgroundColor: theme.preview.accent }"
+                  />
+                </span>
+              </span>
+              <span class="appearance-theme-card__copy">
+                <strong>{{ theme.label }}</strong>
+                <small>{{ theme.description }}</small>
+              </span>
+              <span
+                v-if="appearanceState.themeId === theme.id"
+                class="appearance-theme-card__check visible"
+                aria-hidden="true"
+              >
+                <AppIcon name="check" :size="13" />
+              </span>
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div class="appearance-typography" aria-labelledby="appearance-typography-title">
+        <div class="appearance-subsection-heading">
+          <h3 id="appearance-typography-title">Note typography</h3>
+          <p>Choose the default typeface and text size for note content.</p>
+        </div>
+
+        <div class="appearance-font-family">
+          <div class="appearance-font-family__copy">
+            <label for="appearance-note-font-family">Font family</label>
+            <p id="appearance-note-font-family-help">
+              Bundled choices work everywhere. Desktop builds can also use fonts installed on this device.
+            </p>
+          </div>
+          <div class="appearance-font-family__control">
+            <select
+              id="appearance-note-font-family"
+              :value="appearanceState.fontId"
+              aria-describedby="appearance-note-font-family-help"
+              @change="updateAppearanceFont"
+            >
+              <option
+                v-if="selectedInstalledFontIsMissing"
+                :value="appearanceState.fontId"
+              >
+                {{ selectedFontOption.label }} — Selected installed font
+              </option>
+              <optgroup label="Bundled fonts">
+                <option v-for="font in fontOptions" :key="font.id" :value="font.id">
+                  {{ font.label }} — {{ font.description }}
+                </option>
+              </optgroup>
+              <optgroup label="Installed fonts">
+                <option v-for="font in installedFontOptions" :key="font.id" :value="font.id">
+                  {{ font.label }}
+                </option>
+              </optgroup>
+            </select>
+            <p v-if="installedFontsLoading" class="appearance-font-family__hint" role="status">
+              Looking for installed fonts…
+            </p>
+            <p v-else-if="installedFontsUnavailable" class="appearance-font-family__hint">
+              Installed font discovery is unavailable here. Bundled fonts remain available.
+            </p>
+          </div>
+        </div>
+
+        <div class="appearance-font-size">
+          <div class="appearance-font-size__copy">
+            <label for="appearance-note-font-size">Note text size</label>
+            <p id="appearance-note-font-size-help">
+              App zoom continues to control the size of menus and other interface elements.
+            </p>
+          </div>
+          <div class="appearance-font-size__control">
+            <input
+              id="appearance-note-font-size"
+              type="range"
+              :min="MIN_NOTE_FONT_SIZE"
+              :max="MAX_NOTE_FONT_SIZE"
+              step="1"
+              :value="appearanceState.noteFontSize"
+              aria-describedby="appearance-note-font-size-help appearance-note-font-size-value"
+              @input="updateNoteFontSize"
+            />
+            <output
+              id="appearance-note-font-size-value"
+              for="appearance-note-font-size"
+              aria-live="polite"
+            >
+              {{ appearanceState.noteFontSize }} px
+            </output>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <section class="settings-section settings-section--overview" aria-labelledby="settings-overview-title">
       <div class="settings-section__heading">

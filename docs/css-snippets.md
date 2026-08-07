@@ -135,6 +135,8 @@ Override variables on `:root` to change the whole app, or on a region to limit t
 | `--border`, `--border-strong` | Borders |
 | `--violet`, `--violet-bright` | Accent colors |
 | `--font-sans`, `--mono` | Interface and code fonts |
+| `--note-font-family`, `--note-font-size` | Source and rendered note typography |
+| `--note-font` | Rendered note font override |
 | `--explorer-width`, `--inspector-width` | Side panel widths |
 
 ```css

@@ -26,6 +26,11 @@ export async function applyAppZoom(scaleFactor: number): Promise<void> {
   document.documentElement.style.zoom = String(scaleFactor);
 }
 
+export interface SystemFont {
+  family: string;
+  monospaced: boolean;
+}
+
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const tauriInvoke = window.__TAURI__?.core?.invoke;
   if (!tauriInvoke) {
@@ -33,6 +38,10 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
   }
 
   return tauriInvoke<T>(command, args);
+}
+
+export async function listSystemFonts(): Promise<SystemFont[]> {
+  return invoke<SystemFont[]>("list_system_fonts");
 }
 
 export async function pickFolder(): Promise<string | null> {

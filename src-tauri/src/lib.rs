@@ -1,3 +1,4 @@
+mod appearance;
 mod vault;
 mod workspace;
 
@@ -7,6 +8,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            appearance::list_system_fonts,
             vault::pick_folder,
             vault::import_obsidian_vault,
             vault::export_obsidian_vault,
