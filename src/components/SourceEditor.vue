@@ -9,6 +9,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:modelValue": [value: string];
+  scroll: [element: HTMLTextAreaElement];
 }>();
 
 const textarea = ref<HTMLTextAreaElement>();
@@ -73,7 +74,14 @@ function onScroll(): void {
     return;
   }
   gutter.value.scrollTop = textarea.value.scrollTop;
+  emit("scroll", textarea.value);
 }
+
+function getScrollElement(): HTMLTextAreaElement | undefined {
+  return textarea.value;
+}
+
+defineExpose({ getScrollElement });
 
 function onKeydown(event: KeyboardEvent): void {
   const element = textarea.value;

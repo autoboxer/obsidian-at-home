@@ -13,6 +13,7 @@ import {
   updateNote,
   vaultState,
 } from "../stores/vault";
+import { useSplitScrollSync } from "../composables/useSplitScrollSync";
 import type { EditorMode } from "../types";
 import AppIcon from "./AppIcon.vue";
 import MarkdownPreview from "./MarkdownPreview.vue";
@@ -27,6 +28,18 @@ const quickFolderOpen = ref(false);
 const quickFolderName = ref("");
 const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
+const {
+  editorCanvas,
+  sourceEditor,
+  previewPane,
+  handleSourceScroll,
+  handlePreviewScroll,
+  claimScrollPane,
+} = useSplitScrollSync({
+  mode: () => vaultState.editorMode,
+  noteId: () => activeNote.value?.id,
+  content: () => activeNote.value?.content,
+});
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
 const sortedFolders = computed(() => [...vaultState.folders].sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
@@ -78,6 +91,16 @@ function setContent(content: string): void {
   if (activeNote.value) {
     updateNote(activeNote.value.id, { content });
   }
+}
+
+function setSourceContent(content: string): void {
+  claimScrollPane("source");
+  setContent(content);
+}
+
+function setPreviewContent(content: string): void {
+  claimScrollPane("preview");
+  setContent(content);
 }
 
 function setFolder(event: Event): void {
@@ -400,7 +423,7 @@ watch(tagInput, () => {
           </div>
         </div>
 
-        <div class="editor-canvas" :class="`mode-${vaultState.editorMode}`">
+        <div ref="editorCanvas" class="editor-canvas" :class="`mode-${vaultState.editorMode}`">
           <div
             class="editor-pane editor-page"
             data-editor-pane="source"
@@ -408,23 +431,33 @@ watch(tagInput, () => {
             :inert="vaultState.editorMode === 'reading'"
           >
             <SourceEditor
+              ref="sourceEditor"
               :model-value="activeNote.content"
               :note-titles="noteTitles"
-              @update:model-value="setContent"
+              @keydown="claimScrollPane('source')"
+              @pointerdown="claimScrollPane('source')"
+              @scroll="handleSourceScroll"
+              @update:model-value="setSourceContent"
+              @wheel.passive="claimScrollPane('source')"
             />
           </div>
           <div
+            ref="previewPane"
             class="preview-pane preview-page"
             data-editor-pane="preview"
             :aria-hidden="vaultState.editorMode === 'source'"
             :inert="vaultState.editorMode === 'source'"
+            @keydown="claimScrollPane('preview')"
+            @pointerdown="claimScrollPane('preview')"
+            @scroll.passive="handlePreviewScroll"
+            @wheel.passive="claimScrollPane('preview')"
           >
             <MarkdownPreview
               :content="activeNote.content"
               :note-id="activeNote.id"
               :collapsible-headings="vaultState.editorMode === 'reading'"
               @open-wiki="createLinkedNote"
-              @update:content="setContent"
+              @update:content="setPreviewContent"
             />
           </div>
         </div>
