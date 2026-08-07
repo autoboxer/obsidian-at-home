@@ -78,24 +78,19 @@ Artifacts are written to `src-tauri/target/release/bundle/`. Open the DMG, then 
 
 The app is unsigned and not notarized. If Gatekeeper blocks your build, Control-click it, choose **Open**, and confirm.
 
-### Linux (RHEL/Fedora)
+### Linux
 
-On Fedora, install the Tauri dependencies and compiler tools:
+Install the system libraries and build tools listed in the [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux). Package names and installation commands vary by distribution.
 
-```sh
-sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel
-sudo dnf group install "c-development"
-```
-
-On RHEL, replace the compiler group command with `sudo dnf group install "Development Tools"`. If a package is unavailable, see the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
-
-Build the RPM:
+Build the Linux bundles:
 
 ```sh
-npm run tauri -- build --bundles rpm
+npm run desktop:build
 ```
 
-Install the package:
+Artifacts are written to `src-tauri/target/release/bundle/`. Use the AppImage or install the `.deb` or `.rpm` produced for your distribution.
+
+For example, on Fedora:
 
 ```sh
 sudo dnf install ./src-tauri/target/release/bundle/rpm/*.rpm
