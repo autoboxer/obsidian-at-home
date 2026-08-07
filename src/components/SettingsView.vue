@@ -308,7 +308,7 @@ async function forgetVault(): Promise<void> {
 </script>
 
 <template>
-  <main class="settings-view">
+  <main class="settings-view" data-ui-region="settings">
     <header class="settings-hero">
       <div class="settings-hero__copy">
         <span class="settings-eyebrow">Preferences &amp; portability</span>

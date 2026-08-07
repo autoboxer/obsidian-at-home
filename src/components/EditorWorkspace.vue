@@ -117,7 +117,7 @@ watch(
 </script>
 
 <template>
-  <main class="editor-workspace">
+  <main class="editor-workspace" data-ui-region="editor" :data-editor-view="vaultState.editorMode">
     <header class="editor-toolbar">
       <div class="editor-crumbs">
         <button
@@ -283,6 +283,7 @@ watch(
         <div class="editor-canvas" :class="`mode-${vaultState.editorMode}`">
           <div
             class="editor-pane editor-page"
+            data-editor-pane="source"
             :aria-hidden="vaultState.editorMode === 'reading'"
             :inert="vaultState.editorMode === 'reading'"
           >
@@ -294,6 +295,7 @@ watch(
           </div>
           <div
             class="preview-pane preview-page"
+            data-editor-pane="preview"
             :aria-hidden="vaultState.editorMode === 'source'"
             :inert="vaultState.editorMode === 'source'"
           >

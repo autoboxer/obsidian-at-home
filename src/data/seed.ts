@@ -47,9 +47,15 @@ Type \`[[\` to search for another note and insert a wiki link. The right panel l
 ### 3. Lists and tasks
 
 - Bulleted item
+  - Nested bullets change shape at each level
+    - Keep pressing Tab to nest further
 1. Numbered item
+  1. Nested ordered items use letters
+    1. The next level uses lowercase Roman numerals
 - [ ] Open task
 - [x] Completed task
+
+Press Enter at the end of a list item to continue the list. Press Tab or Shift+Tab to move the current item in or out one level.
 
 ### 4. Tables and app features
 
@@ -67,11 +73,18 @@ Type \`[[\` to search for another note and insert a wiki link. The right panel l
 
 > Start a line with \`>\` to create a blockquote.
 
-\`\`\`text
-Fenced code blocks preserve spacing and line breaks.
+\`\`\`javascript
+const message = "Fenced code blocks preserve spacing and line breaks.";
+console.log(message);
 \`\`\`
 
-For a broader syntax reference, see the [CommonMark Markdown Reference](https://commonmark.org/help/). Raw HTML, images, footnotes, nested lists, and reference-style links are not supported.
+Type three backticks and press Enter to insert a complete fenced block. Add a supported language after the opening backticks for syntax highlighting:
+
+- Programming: \`bash\`, \`javascript\` or \`js\`, \`typescript\` or \`ts\`, \`python\`, \`rust\`, \`go\`, \`sql\`, and \`wasm\` or \`wat\`
+- Web and data: \`vue\`, \`html\`, \`xml\`, \`svg\`, \`xhtml\`, \`plist\`, \`css\`, \`json\`, \`yaml\`, \`toml\`, \`graphql\`, \`http\`, and \`markdown\`
+- Tooling: \`dockerfile\`, \`diff\`, \`makefile\`, \`nginx\`, and \`protobuf\`
+
+For a broader syntax reference, see the [CommonMark Markdown Reference](https://commonmark.org/help/). Raw HTML, images, footnotes, and reference-style links are not supported.
 
 ## Useful shortcuts
 
@@ -82,18 +95,7 @@ For a broader syntax reference, see the [CommonMark Markdown Reference](https://
 
 ## Customize with CSS snippets
 
-Open **CSS snippets**, create a snippet, then save and enable it. Disable a snippet to remove its styles. These app targets cover the most common changes:
-
-| Target | Styles |
-| --- | --- |
-| \`:root\` | Theme variables used across the app |
-| \`.markdown-preview\` | The rendered note page |
-| \`.markdown-preview h1\` and \`h2\` | Preview headings |
-| \`.markdown-preview .wiki-link\` | Linked notes in the preview |
-| \`.source-textarea\` | The Markdown source editor |
-| \`.note-title-input\` | The note title |
-| \`.tag-chip\` | Tags below the title |
-| \`.editor-page\` and \`.preview-page\` | Source and preview panes |
+Open **CSS snippets**, create a snippet, then save and enable it. Use **Selector reference** in that panel to find stable targets for app views, panels, controls, editor modes, and rendered Markdown.
 
 \`\`\`css
 .markdown-preview {
@@ -183,7 +185,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.editor-page,\n.preview-page {\n  --page-width: 980px;\n}`,
+      css: `.markdown-preview {\n  --page-width: 980px;\n}`,
     },
   ];
 

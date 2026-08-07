@@ -16,6 +16,23 @@ const gutter = ref<HTMLElement>();
 const cursor = ref(0);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
+const INDENT = "  ";
+
+interface ListLine {
+  indent: string;
+  ordered: boolean;
+  number: number;
+  delimiter: "." | ")";
+  bullet: "-" | "+" | "*";
+  spacing: string;
+  prefixLength: number;
+}
+
+interface TextEdit {
+  start: number;
+  removed: number;
+  added: number;
+}
 
 const lineCount = computed(() => Math.max(1, props.modelValue.split("\n").length));
 const lineNumbers = computed(() => Array.from({ length: lineCount.value }, (_, index) => index + 1).join("\n"));
@@ -52,7 +69,7 @@ function onScroll(): void {
 
 function onKeydown(event: KeyboardEvent): void {
   const element = textarea.value;
-  if (!element) return;
+  if (!element || event.isComposing) return;
 
   if (suggestions.value.length) {
     if (event.key === "ArrowDown") {
@@ -77,9 +94,16 @@ function onKeydown(event: KeyboardEvent): void {
     }
   }
 
-  if (event.key === "Tab") {
+  const commandModifier = event.metaKey || event.ctrlKey || event.altKey;
+
+  if (event.key === "Enter" && !commandModifier && !event.shiftKey && handleSmartEnter(element)) {
     event.preventDefault();
-    replaceSelection("  ");
+    return;
+  }
+
+  if (event.key === "Tab" && !commandModifier) {
+    event.preventDefault();
+    if (!adjustSelectedLines(element, event.shiftKey) && !event.shiftKey) replaceSelection(INDENT);
     return;
   }
 
@@ -98,13 +122,8 @@ function replaceSelection(value: string): void {
   if (!element) return;
   const start = element.selectionStart;
   const end = element.selectionEnd;
-  const next = `${props.modelValue.slice(0, start)}${value}${props.modelValue.slice(end)}`;
-  emit("update:modelValue", next);
-  nextTick(() => {
-    element.focus();
-    element.setSelectionRange(start + value.length, start + value.length);
-    onSelection();
-  });
+  const next = `${element.value.slice(0, start)}${value}${element.value.slice(end)}`;
+  applyEdit(next, start + value.length);
 }
 
 function wrapSelection(before: string, after: string): void {
@@ -112,14 +131,10 @@ function wrapSelection(before: string, after: string): void {
   if (!element) return;
   const start = element.selectionStart;
   const end = element.selectionEnd;
-  const selected = props.modelValue.slice(start, end);
-  const next = `${props.modelValue.slice(0, start)}${before}${selected}${after}${props.modelValue.slice(end)}`;
-  emit("update:modelValue", next);
-  nextTick(() => {
-    element.focus();
-    const selectionStart = start + before.length;
-    element.setSelectionRange(selectionStart, selectionStart + selected.length);
-  });
+  const selected = element.value.slice(start, end);
+  const next = `${element.value.slice(0, start)}${before}${selected}${after}${element.value.slice(end)}`;
+  const selectionStart = start + before.length;
+  applyEdit(next, selectionStart, selectionStart + selected.length, element.selectionDirection);
 }
 
 function updateSuggestions(element: HTMLTextAreaElement): void {
@@ -135,14 +150,197 @@ function insertSuggestion(title: string): void {
   const queryLength = suggestionQuery.value.length;
   const start = element.selectionStart - queryLength;
   const replacement = `${title}]]`;
-  const next = `${props.modelValue.slice(0, start)}${replacement}${props.modelValue.slice(element.selectionStart)}`;
-  emit("update:modelValue", next);
+  const next = `${element.value.slice(0, start)}${replacement}${element.value.slice(element.selectionStart)}`;
   suggestionQuery.value = null;
+  applyEdit(next, start + replacement.length);
+}
+
+function applyEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd = selectionStart,
+  direction: "forward" | "backward" | "none" | null = "none",
+): void {
+  emit("update:modelValue", value);
   nextTick(() => {
+    const element = textarea.value;
+    if (!element) return;
     element.focus();
-    const position = start + replacement.length;
-    element.setSelectionRange(position, position);
+    element.setSelectionRange(selectionStart, selectionEnd, direction ?? "none");
+    onSelection();
   });
+}
+
+function handleSmartEnter(element: HTMLTextAreaElement): boolean {
+  if (element.selectionStart !== element.selectionEnd) return false;
+
+  const value = element.value;
+  const position = element.selectionStart;
+  const lineStart = value.lastIndexOf("\n", position - 1) + 1;
+  const nextNewline = value.indexOf("\n", position);
+  const lineEnd = nextNewline < 0 ? value.length : nextNewline;
+  const line = value.slice(lineStart, lineEnd);
+
+  const openingFence = line.match(/^([ \t]*)(`{3,}|~{3,})([^\n]*)$/);
+  if (
+    openingFence &&
+    position === lineEnd &&
+    !activeFenceBefore(value, lineStart)
+  ) {
+    const indent = openingFence[1]!;
+    const marker = openingFence[2]!;
+    const followingLineStart = lineEnd < value.length ? lineEnd + 1 : value.length;
+    const followingLineEndIndex = value.indexOf("\n", followingLineStart);
+    const followingLineEnd = followingLineEndIndex < 0 ? value.length : followingLineEndIndex;
+    const followingLine = value.slice(followingLineStart, followingLineEnd);
+    const existingClosing = followingLine.match(/^([ \t]*)(`+|~+)\s*$/);
+    const closesFence = Boolean(existingClosing
+      && existingClosing[2]![0] === marker[0]
+      && existingClosing[2]!.length >= marker.length);
+    const insertion = closesFence
+      ? `\n${indent}`
+      : `\n${indent}\n${indent}${marker}`;
+    const next = `${value.slice(0, position)}${insertion}${value.slice(position)}`;
+    applyEdit(next, position + 1 + indent.length);
+    return true;
+  }
+
+  if (activeFenceBefore(value, lineStart)) return false;
+
+  const item = matchEditableListLine(line);
+  if (!item || position < lineStart + item.prefixLength) return false;
+
+  const bodyStart = lineStart + item.prefixLength;
+  const bodyBefore = value.slice(bodyStart, position);
+  const bodyAfter = value.slice(position, lineEnd);
+  const fullBody = `${bodyBefore}${bodyAfter}`;
+  const contentWithoutTask = fullBody.replace(/^\[[ xX]\][ \t]*/, "");
+
+  if (!contentWithoutTask.trim() && position === lineEnd) {
+    const next = `${value.slice(0, lineStart)}${item.indent}${value.slice(lineEnd)}`;
+    applyEdit(next, lineStart + item.indent.length);
+    return true;
+  }
+
+  const marker = item.ordered
+    ? `${item.number >= 999_999_999 ? 1 : item.number + 1}${item.delimiter}`
+    : item.bullet;
+  const taskPrefix = /^\[[ xX]\][ \t]+/.test(bodyBefore) ? "[ ] " : "";
+  const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
+  const next = `${value.slice(0, position)}\n${continuation}${value.slice(position)}`;
+  applyEdit(next, position + 1 + continuation.length);
+  return true;
+}
+
+function matchEditableListLine(line: string): ListLine | undefined {
+  const match = line.match(/^([ \t]*)(?:(\d{1,9})([.)])|([-+*]))([ \t]+)(.*)$/);
+  if (!match) return undefined;
+  const ordered = Boolean(match[2]);
+  const indent = match[1]!;
+  const markerLength = ordered ? match[2]!.length + 1 : 1;
+  const spacing = match[5]!;
+  return {
+    indent,
+    ordered,
+    number: ordered ? Number.parseInt(match[2]!, 10) : 1,
+    delimiter: ordered ? match[3]! as "." | ")" : ".",
+    bullet: ordered ? "-" : match[4]! as "-" | "+" | "*",
+    spacing,
+    prefixLength: indent.length + markerLength + spacing.length,
+  };
+}
+
+function activeFenceBefore(value: string, position: number): { marker: string; length: number } | undefined {
+  const before = value.slice(0, position);
+  const lines = before.split("\n");
+  lines.pop();
+  let active: { marker: string; length: number } | undefined;
+
+  for (const line of lines) {
+    if (!active) {
+      const opening = line.match(/^[ \t]*(`{3,}|~{3,})[^\n]*$/);
+      if (opening) active = { marker: opening[1]![0]!, length: opening[1]!.length };
+      continue;
+    }
+
+    const closing = line.match(/^[ \t]*(`+|~+)\s*$/);
+    if (
+      closing &&
+      closing[1]![0] === active.marker &&
+      closing[1]!.length >= active.length
+    ) active = undefined;
+  }
+
+  return active;
+}
+
+function adjustSelectedLines(element: HTMLTextAreaElement, outdent: boolean): boolean {
+  const value = element.value;
+  const selectionStart = element.selectionStart;
+  const selectionEnd = element.selectionEnd;
+  const hasSelection = selectionStart !== selectionEnd;
+  const firstLineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+  const firstLineEndIndex = value.indexOf("\n", selectionStart);
+  const firstLineEnd = firstLineEndIndex < 0 ? value.length : firstLineEndIndex;
+  const firstLine = value.slice(firstLineStart, firstLineEnd);
+
+  if (!hasSelection && !matchEditableListLine(firstLine)) {
+    if (!outdent || !/^[ \t]/.test(firstLine)) return false;
+  }
+
+  const selectionEndsAtLineStart = hasSelection && selectionEnd > 0 && value[selectionEnd - 1] === "\n";
+  const effectiveEnd = selectionEndsAtLineStart ? selectionEnd - 1 : selectionEnd;
+  const lastLineEndIndex = value.indexOf("\n", effectiveEnd);
+  const blockEnd = lastLineEndIndex < 0 ? value.length : lastLineEndIndex;
+  const block = value.slice(firstLineStart, blockEnd);
+  const lines = block.split("\n");
+  const edits: TextEdit[] = [];
+  let sourceOffset = firstLineStart;
+
+  const transformed = lines.map((line) => {
+    if (!outdent) {
+      edits.push({ start: sourceOffset, removed: 0, added: INDENT.length });
+      const orderedMarker = line.match(/^([ \t]*)(\d{1,9})([.)])/);
+      if (orderedMarker && orderedMarker[2]!.length !== 1) {
+        edits.push({
+          start: sourceOffset + orderedMarker[1]!.length,
+          removed: orderedMarker[2]!.length,
+          added: 1,
+        });
+      }
+      sourceOffset += line.length + 1;
+      const indentedLine = orderedMarker
+        ? `${orderedMarker[1]}1${orderedMarker[3]}${line.slice(orderedMarker[0].length)}`
+        : line;
+      return `${INDENT}${indentedLine}`;
+    }
+
+    const removable = line.startsWith("\t") ? 1 : line.match(/^ {1,2}/)?.[0].length ?? 0;
+    if (removable) edits.push({ start: sourceOffset, removed: removable, added: 0 });
+    sourceOffset += line.length + 1;
+    return line.slice(removable);
+  }).join("\n");
+
+  if (!edits.length) return true;
+
+  const next = `${value.slice(0, firstLineStart)}${transformed}${value.slice(blockEnd)}`;
+  applyEdit(
+    next,
+    mapPositionThroughEdits(selectionStart, edits),
+    mapPositionThroughEdits(selectionEnd, edits),
+    element.selectionDirection,
+  );
+  return true;
+}
+
+function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
+  let delta = 0;
+  for (const edit of edits) {
+    if (position < edit.start) break;
+    if (position <= edit.start + edit.removed) return edit.start + delta + edit.added;
+    delta += edit.added - edit.removed;
+  }
+  return position + delta;
 }
 </script>
 

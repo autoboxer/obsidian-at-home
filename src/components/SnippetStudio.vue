@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { deleteSnippet, notify, saveSnippet, vaultState } from "../stores/vault";
 import type { CssSnippet } from "../types";
 import AppIcon from "./AppIcon.vue";
@@ -7,6 +7,9 @@ import AppIcon from "./AppIcon.vue";
 const activeId = ref(vaultState.snippets[0]?.id ?? null);
 const draft = reactive({ name: "", description: "", css: "" });
 const dirty = ref(false);
+const referenceOpen = ref(false);
+const referenceButton = ref<HTMLButtonElement>();
+const referenceDialog = ref<HTMLElement>();
 
 const activeSnippet = computed(() => vaultState.snippets.find((snippet) => snippet.id === activeId.value));
 
@@ -51,12 +54,24 @@ function remove(): void {
     activeId.value = vaultState.snippets[0]?.id ?? null;
   }
 }
+
+async function openReference(): Promise<void> {
+  referenceOpen.value = true;
+  await nextTick();
+  referenceDialog.value?.focus();
+}
+
+async function closeReference(): Promise<void> {
+  referenceOpen.value = false;
+  await nextTick();
+  referenceButton.value?.focus();
+}
 </script>
 
 <template>
-  <main class="snippets-workspace utility-workspace">
+  <main class="snippets-workspace utility-workspace" data-ui-region="snippets">
     <div class="snippet-shell">
-      <aside class="snippet-library">
+      <aside class="snippet-library" data-ui-region="snippet-library">
         <header>
           <div><span class="utility-eyebrow">Appearance</span><h1>CSS snippets</h1></div>
           <button type="button" class="icon-button" title="New snippet" @click="create"><AppIcon name="plus" :size="16" /></button>
@@ -71,7 +86,7 @@ function remove(): void {
         </div>
       </aside>
 
-      <section v-if="activeSnippet" class="snippet-editor-area">
+      <section v-if="activeSnippet" class="snippet-editor-area" data-ui-region="snippet-editor">
         <header class="snippet-editor-header">
           <div>
             <span class="utility-eyebrow">CSS source</span>
@@ -102,10 +117,146 @@ function remove(): void {
         </div>
 
         <footer class="snippet-help">
-          <AppIcon name="info" :size="15" />
-          <span>Try selectors like <code>.markdown-preview</code>, <code>.source-editor</code>, or CSS variables on <code>:root</code>.</span>
+          <span><AppIcon name="info" :size="15" /> Target the rendered note with <code>.markdown-preview</code> or the source with <code>.source-textarea</code>.</span>
+          <button ref="referenceButton" type="button" class="snippet-reference-button" @click="openReference">
+            Selector reference
+          </button>
         </footer>
       </section>
     </div>
+
+    <Transition name="overlay-fade">
+      <div
+        v-if="referenceOpen"
+        class="modal-backdrop snippet-reference-backdrop"
+        data-ui-region="selector-reference"
+        @keydown.esc.stop="closeReference"
+        @mousedown.self="closeReference"
+      >
+        <section
+          ref="referenceDialog"
+          class="editor-modal snippet-reference-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="snippet-reference-title"
+          tabindex="-1"
+        >
+          <header>
+            <div>
+              <span class="utility-eyebrow">CSS snippets</span>
+              <h2 id="snippet-reference-title">Selector reference</h2>
+            </div>
+            <button type="button" class="icon-button" aria-label="Close selector reference" @click="closeReference">
+              <AppIcon name="x" :size="16" />
+            </button>
+          </header>
+
+          <div class="snippet-reference-content">
+          <p>These selectors are stable. Other interface classes may change.</p>
+
+          <details open>
+            <summary>App views</summary>
+            <div class="snippet-reference-grid">
+              <code>[data-app-view="notes"]</code><span>Notes</span>
+              <code>[data-app-view="search"]</code><span>Search</span>
+              <code>[data-app-view="templates"]</code><span>Templates</span>
+              <code>[data-app-view="snippets"]</code><span>CSS snippets</span>
+              <code>[data-app-view="settings"]</code><span>Settings</span>
+            </div>
+          </details>
+
+          <details>
+            <summary>Interface regions</summary>
+            <div class="snippet-reference-grid">
+              <code>[data-ui-region="titlebar"]</code><span>Desktop titlebar</span>
+              <code>[data-ui-region="activity-rail"]</code><span>Left navigation</span>
+              <code>[data-ui-region="vault-panel"]</code><span>Vault and files panel</span>
+              <code>[data-ui-region="editor"]</code><span>Note editor</span>
+              <code>[data-ui-region="context-panel"]</code><span>Links and note details</span>
+              <code>[data-ui-region="search"]</code><span>Search page</span>
+              <code>[data-ui-region="templates"]</code><span>Templates page</span>
+              <code>[data-ui-region="snippets"]</code><span>CSS snippets page</span>
+              <code>[data-ui-region="snippet-library"]</code><span>Snippet list</span>
+              <code>[data-ui-region="snippet-editor"]</code><span>Snippet editor</span>
+              <code>[data-ui-region="settings"]</code><span>Settings page</span>
+              <code>[data-ui-region="quick-switcher"]</code><span>Quick switcher</span>
+              <code>[data-ui-region="vault-chooser"]</code><span>Vault chooser</span>
+              <code>[data-ui-region="template-dialog"]</code><span>Template editor</span>
+              <code>[data-ui-region="selector-reference"]</code><span>This selector guide</span>
+              <code>[data-ui-region="notification"]</code><span>Notifications</span>
+            </div>
+          </details>
+
+          <details>
+            <summary>Editor views and panes</summary>
+            <div class="snippet-reference-grid">
+              <code>[data-editor-view="source"]</code><span>Source view</span>
+              <code>[data-editor-view="split"]</code><span>Split view</span>
+              <code>[data-editor-view="reading"]</code><span>Reading view</span>
+              <code>[data-editor-pane="source"]</code><span>Source pane</span>
+              <code>[data-editor-pane="preview"]</code><span>Rendered pane</span>
+              <code>[data-context-view="links"]</code><span>Links context tab</span>
+              <code>[data-context-view="info"]</code><span>Info context tab</span>
+              <code>.source-textarea</code><span>Markdown source</span>
+              <code>.markdown-preview</code><span>Rendered note</span>
+              <code>.note-title-input</code><span>Note title</span>
+              <code>.tag-chip</code><span>Note tags</span>
+            </div>
+          </details>
+
+          <details>
+            <summary>Common interface elements</summary>
+            <div class="snippet-reference-grid">
+              <code>.rail-button</code><span>Navigation buttons</span>
+              <code>.vault-tree-folder-row</code><span>Folder rows</span>
+              <code>.vault-tree-note</code><span>Note rows</span>
+              <code>.connection-card</code><span>Outgoing-link cards</span>
+              <code>.backlink-card</code><span>Backlink cards</span>
+              <code>.search-result-card</code><span>Search results</span>
+              <code>.template-card</code><span>Template cards</span>
+              <code>.snippet-list-item</code><span>CSS snippet rows</span>
+              <code>.settings-section</code><span>Settings sections</span>
+              <code>.popover-menu</code><span>Context menus</span>
+              <code>.command-palette</code><span>Quick switcher dialog</span>
+              <code>.vault-chooser-dialog</code><span>Vault chooser dialog</span>
+              <code>.editor-modal</code><span>Editor dialogs</span>
+              <code>.primary-action-button</code><span>Primary buttons</span>
+              <code>.app-toast</code><span>Notifications</span>
+            </div>
+          </details>
+
+          <details>
+            <summary>Rendered Markdown</summary>
+            <div class="snippet-reference-grid">
+              <code>.markdown-preview h1</code><span>Level-one headings</span>
+              <code>.markdown-preview .wiki-link</code><span>Wiki links</span>
+              <code>.wiki-link.is-unresolved</code><span>Unresolved wiki links</span>
+              <code>.markdown-preview blockquote</code><span>Blockquotes</span>
+              <code>.markdown-preview pre code</code><span>Code blocks</span>
+              <code>.markdown-preview table</code><span>Tables</span>
+              <code>.markdown-preview .task-list-item</code><span>Tasks</span>
+              <code>.markdown-preview .language-js</code><span>Language-specific code</span>
+            </div>
+          </details>
+
+          <div class="snippet-reference-example">
+            <span>Example</span>
+            <pre><code>[data-editor-view="reading"] .markdown-preview {
+  --page-width: 900px;
+  font-size: 18px;
+}
+
+[data-app-view="settings"] [data-ui-region="titlebar"] {
+  background: #111;
+}</code></pre>
+          </div>
+          </div>
+
+          <footer>
+            <button type="button" class="primary-action-button small" @click="closeReference">Done</button>
+          </footer>
+        </section>
+      </div>
+    </Transition>
   </main>
 </template>

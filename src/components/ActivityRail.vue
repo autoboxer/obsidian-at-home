@@ -18,7 +18,7 @@ function selectTool(tool: ToolView): void {
 </script>
 
 <template>
-  <aside class="activity-rail">
+  <aside class="activity-rail" data-ui-region="activity-rail">
     <button class="rail-brand" type="button" title="Obsidian At Home" @click="selectTool('notes')">
       <img :src="appIcon" alt="" />
     </button>

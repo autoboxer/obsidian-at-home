@@ -1,4 +1,5 @@
 import type { Note } from "../types";
+import { highlightCode } from "./highlight";
 import { parseWikiLinkAt } from "./wikiLinks";
 
 export interface MarkdownRenderOptions {
@@ -14,11 +15,34 @@ export interface MarkdownRenderOptions {
 interface RenderContext {
   options: MarkdownRenderOptions;
   depth: number;
+  listDepth: number;
+}
+
+interface ListTextPart {
+  type: "text";
+  value: string;
+}
+
+interface ListHtmlPart {
+  type: "html";
+  value: string;
 }
 
 interface ListItem {
-  text: string;
   checked?: boolean;
+  parts: Array<ListTextPart | ListHtmlPart>;
+}
+
+interface MatchedListItem {
+  ordered: boolean;
+  start: number;
+  text: string;
+  indent: number;
+}
+
+interface RenderedList {
+  html: string;
+  nextIndex: number;
 }
 
 interface ParsedMarkdownLink {
@@ -36,7 +60,11 @@ export function renderMarkdown(
   options: MarkdownRenderOptions = {},
 ): string {
   const safeMarkdown = markdown.replace(/\0/g, "");
-  return renderBlocks(stripLeadingFrontmatterForPreview(safeMarkdown), { options, depth: 0 });
+  return renderBlocks(stripLeadingFrontmatterForPreview(safeMarkdown), {
+    options,
+    depth: 0,
+    listDepth: 0,
+  });
 }
 
 function stripLeadingFrontmatterForPreview(markdown: string): string {
@@ -131,8 +159,14 @@ function renderBlocks(markdown: string, context: RenderContext): string {
         index += 1;
       }
 
-      const className = language ? ` class="language-${escapeHtml(language)}"` : "";
-      blocks.push(`<pre><code${className}>${escapeHtml(code.join("\n"))}</code></pre>`);
+      const rawCode = code.join("\n");
+      const highlighted = language ? highlightCode(rawCode, language) : undefined;
+      const classes = [language ? `language-${escapeHtml(language)}` : "", highlighted ? "hljs" : ""]
+        .filter(Boolean)
+        .join(" ");
+      const className = classes ? ` class="${classes}"` : "";
+      const languageLabel = language ? ` data-language="${escapeHtml(language)}"` : "";
+      blocks.push(`<pre${languageLabel}><code${className}>${highlighted ?? escapeHtml(rawCode)}</code></pre>`);
       continue;
     }
 
@@ -183,47 +217,9 @@ function renderBlocks(markdown: string, context: RenderContext): string {
 
     const listMatch = matchListItem(line);
     if (listMatch) {
-      const ordered = listMatch.ordered;
-      const start = listMatch.start;
-      const items: ListItem[] = [];
-
-      while (index < lines.length) {
-        const item = matchListItem(lines[index]!);
-        if (!item || item.ordered !== ordered) break;
-        index += 1;
-
-        const task = item.text.match(/^\[([ xX])\][\t ]+(.*)$/);
-        let text = task ? task[2]! : item.text;
-        const continuations: string[] = [];
-        while (
-          index < lines.length &&
-          /^ {2,}\S/.test(lines[index]!) &&
-          !matchListItem(lines[index]!)
-        ) {
-          continuations.push(lines[index]!.trim());
-          index += 1;
-        }
-        if (continuations.length) text += `\n${continuations.join("\n")}`;
-        items.push({
-          text,
-          ...(task ? { checked: task[1]!.toLocaleLowerCase() === "x" } : {}),
-        });
-      }
-
-      const hasTasks = items.some((item) => item.checked !== undefined);
-      const tag = ordered ? "ol" : "ul";
-      const startAttribute = ordered && start !== 1 ? ` start="${start}"` : "";
-      const className = hasTasks ? ' class="task-list"' : "";
-      const itemHtml = items.map((item) => {
-        const taskClass = item.checked === undefined ? "" : ' class="task-list-item"';
-        const checkbox = item.checked === undefined
-          ? ""
-          : `<input type="checkbox" disabled${item.checked ? " checked" : ""} aria-label="${
-            item.checked ? "Completed task" : "Incomplete task"
-          }"> `;
-        return `<li${taskClass}>${checkbox}${renderInline(item.text, context)}</li>`;
-      }).join("");
-      blocks.push(`<${tag}${className}${startAttribute}>${itemHtml}</${tag}>`);
+      const rendered = renderList(lines, index, context, listMatch.indent);
+      blocks.push(rendered.html);
+      index = rendered.nextIndex;
       continue;
     }
 
@@ -460,25 +456,132 @@ function findUnescaped(source: string, needle: string, start: number): number {
   return -1;
 }
 
-function matchListItem(line: string): {
-  ordered: boolean;
-  start: number;
-  text: string;
-} | undefined {
-  const unordered = line.match(/^ {0,3}[-+*][\t ]+(.+)$/);
-  if (unordered) return { ordered: false, start: 1, text: unordered[1]! };
-  const ordered = line.match(/^ {0,3}(\d{1,9})[.)][\t ]+(.+)$/);
-  if (!ordered) return undefined;
+function matchListItem(line: string): MatchedListItem | undefined {
+  const match = line.match(/^([ \t]*)(?:(\d{1,9})[.)]|([-+*]))[\t ]+(.*)$/);
+  if (!match) return undefined;
+  const ordered = Boolean(match[2]);
   return {
-    ordered: true,
-    start: Math.max(1, Number.parseInt(ordered[1]!, 10)),
-    text: ordered[2]!,
+    ordered,
+    start: ordered ? Math.max(1, Number.parseInt(match[2]!, 10)) : 1,
+    text: match[4]!,
+    indent: indentationWidth(match[1]!),
   };
+}
+
+function renderList(
+  lines: readonly string[],
+  startIndex: number,
+  context: RenderContext,
+  baseIndent: number,
+): RenderedList {
+  const first = matchListItem(lines[startIndex] ?? "");
+  if (!first) return { html: "", nextIndex: startIndex + 1 };
+
+  const ordered = first.ordered;
+  const start = first.start;
+  const items: ListItem[] = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const item = matchListItem(lines[index]!);
+    if (!item || item.indent !== baseIndent || item.ordered !== ordered) break;
+    index += 1;
+
+    const task = item.text.match(/^\[([ xX])\][\t ]+(.*)$/);
+    const parts: Array<ListTextPart | ListHtmlPart> = [{
+      type: "text",
+      value: task ? task[2]! : item.text,
+    }];
+
+    while (index < lines.length) {
+      const nextLine = lines[index]!;
+      if (!nextLine.trim()) {
+        let lookahead = index + 1;
+        while (lookahead < lines.length && !lines[lookahead]!.trim()) lookahead += 1;
+        if (lookahead >= lines.length) break;
+
+        const following = lines[lookahead]!;
+        const followingItem = matchListItem(following);
+        const followingIndent = indentationWidth(following.match(/^[ \t]*/)?.[0] ?? "");
+        if (!followingItem && followingIndent <= baseIndent) break;
+
+        index = lookahead;
+        if (followingItem?.indent === baseIndent) break;
+        continue;
+      }
+
+      const nested = matchListItem(nextLine);
+      if (nested) {
+        if (nested.indent <= baseIndent) break;
+        if (context.listDepth >= 16) {
+          parts.push({ type: "text", value: nested.text });
+          index += 1;
+          continue;
+        }
+        const rendered = renderList(
+          lines,
+          index,
+          { ...context, listDepth: context.listDepth + 1 },
+          nested.indent,
+        );
+        parts.push({ type: "html", value: rendered.html });
+        index = rendered.nextIndex;
+        continue;
+      }
+
+      if (indentationWidth(nextLine.match(/^[ \t]*/)?.[0] ?? "") <= baseIndent) break;
+      const previous = parts.at(-1);
+      if (previous?.type === "text") previous.value += `\n${nextLine.trim()}`;
+      else parts.push({ type: "text", value: nextLine.trim() });
+      index += 1;
+    }
+
+    items.push({
+      parts,
+      ...(task ? { checked: task[1]!.toLocaleLowerCase() === "x" } : {}),
+    });
+  }
+
+  const hasTasks = items.some((item) => item.checked !== undefined);
+  const tag = ordered ? "ol" : "ul";
+  const startAttribute = ordered && start !== 1 ? ` start="${start}"` : "";
+  const classes = [`list-depth-${context.listDepth % 3}`, hasTasks ? "task-list" : ""]
+    .filter(Boolean)
+    .join(" ");
+  const itemHtml = items.map((item) => {
+    const renderParts = (parts: Array<ListTextPart | ListHtmlPart>) => parts
+      .map((part) => part.type === "html" ? part.value : renderInline(part.value, context))
+      .join("");
+
+    if (item.checked === undefined) {
+      return `<li>${renderParts(item.parts)}</li>`;
+    }
+
+    const checkbox = `<input type="checkbox" disabled${item.checked ? " checked" : ""} aria-label="${
+      item.checked ? "Completed task" : "Incomplete task"
+    }">`;
+    const [firstPart, ...remainingParts] = item.parts;
+    const firstHtml = firstPart?.type === "text" ? renderInline(firstPart.value, context) : "";
+    return `<li class="task-list-item"><span class="task-list-row">${checkbox}<span>${
+      firstHtml
+    }</span></span>${renderParts(firstPart?.type === "html" ? item.parts : remainingParts)}</li>`;
+  }).join("");
+  return {
+    html: `<${tag} class="${classes}"${startAttribute}>${itemHtml}</${tag}>`,
+    nextIndex: index,
+  };
+}
+
+function indentationWidth(value: string): number {
+  let width = 0;
+  for (const character of value) width += character === "\t" ? 4 : 1;
+  return width;
 }
 
 function isBlockStart(lines: readonly string[], index: number): boolean {
   const line = lines[index] ?? "";
-  return /^ {0,3}(?:`{3,}|~{3,}|#{1,6}[\t ]|>|(?:[-+*]|\d+[.)])[\t ])/.test(line) ||
+  return /^ {0,3}(?:`{3,}|~{3,}|#{1,6}[\t ]|>)/.test(line) ||
+    /^[ \t]*(?:[-+*]|\d{1,9}[.)])[\t ]/.test(line) ||
     /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
     isTable(lines, index);
 }

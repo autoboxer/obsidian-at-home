@@ -45,7 +45,7 @@ function formatDate(timestamp: number): string {
 </script>
 
 <template>
-  <main class="search-workspace utility-workspace">
+  <main class="search-workspace utility-workspace" data-ui-region="search">
     <div class="utility-page search-page">
       <header class="utility-hero search-hero">
         <span class="utility-eyebrow">Search</span>

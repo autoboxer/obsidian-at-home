@@ -109,6 +109,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
 <template>
   <div
     class="modal-backdrop vault-chooser-backdrop"
+    data-ui-region="vault-chooser"
     @keydown.esc="closeChooser"
     @mousedown.self="closeChooser"
   >

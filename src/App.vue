@@ -20,6 +20,10 @@ if (requestedView && ["notes", "search", "templates", "snippets", "settings"].in
 }
 
 const vaultChooserVisible = computed(
+  () => vaultSession.phase !== "loading"
+    && (vaultSession.phase !== "ready" || uiState.vaultChooserOpen),
+);
+const appInteractionBlocked = computed(
   () => vaultSession.phase !== "ready" || uiState.vaultChooserOpen,
 );
 
@@ -89,8 +93,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
 </script>
 
 <template>
-  <div class="app-frame" :class="`tool-${uiState.tool}`">
-    <header class="desktop-titlebar" data-tauri-drag-region :inert="vaultChooserVisible">
+  <div class="app-frame" :class="`tool-${uiState.tool}`" :data-app-view="uiState.tool" data-ui-region="app">
+    <header class="desktop-titlebar" data-ui-region="titlebar" data-tauri-drag-region :inert="appInteractionBlocked">
       <div class="traffic-light-space" data-tauri-drag-region />
       <div class="titlebar-title" data-tauri-drag-region>
         <span>Obsidian At Home</span>
@@ -100,7 +104,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
       <div data-tauri-drag-region />
     </header>
 
-    <div class="app-content" :inert="vaultChooserVisible">
+    <div class="app-content" :inert="appInteractionBlocked">
       <ActivityRail />
 
       <Transition name="workspace-switch" mode="out-in">
@@ -129,7 +133,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
     </Transition>
 
     <Transition name="toast">
-      <div v-if="uiState.toast" :key="uiState.toast.id" class="app-toast" :class="`tone-${uiState.toast.tone}`" role="status">
+      <div v-if="uiState.toast" :key="uiState.toast.id" class="app-toast" :class="`tone-${uiState.toast.tone}`" data-ui-region="notification" role="status">
         <span class="toast-icon">
           <AppIcon :name="uiState.toast.tone === 'success' ? 'check' : uiState.toast.tone === 'warning' ? 'info' : 'sparkles'" :size="15" />
         </span>

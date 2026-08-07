@@ -38,7 +38,7 @@ function formatDate(timestamp?: number): string {
 </script>
 
 <template>
-  <aside class="link-inspector">
+  <aside class="link-inspector" data-ui-region="context-panel" :data-context-view="uiState.inspectorTab">
     <header class="inspector-header">
       <div>
         <span class="eyebrow">Note context</span>

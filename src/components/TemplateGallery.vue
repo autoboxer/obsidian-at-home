@@ -65,7 +65,7 @@ function submitTemplate(): void {
 </script>
 
 <template>
-  <main class="templates-workspace utility-workspace">
+  <main class="templates-workspace utility-workspace" data-ui-region="templates">
     <div class="utility-page templates-page">
       <header class="utility-header-row">
         <div class="utility-hero compact">
@@ -111,7 +111,7 @@ function submitTemplate(): void {
     </div>
 
     <Transition name="overlay-fade">
-      <div v-if="modalOpen" class="modal-backdrop" @mousedown.self="modalOpen = false">
+      <div v-if="modalOpen" class="modal-backdrop" data-ui-region="template-dialog" @mousedown.self="modalOpen = false">
         <form class="editor-modal template-editor-modal" @submit.prevent="submitTemplate">
           <header>
             <div><span class="utility-eyebrow">Template editor</span><h2>{{ editingId ? "Edit template" : "Create a template" }}</h2></div>

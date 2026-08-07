@@ -162,7 +162,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
 </script>
 
 <template>
-  <aside class="explorer-sidebar">
+  <aside class="explorer-sidebar" data-ui-region="vault-panel">
     <header class="vault-header">
       <button
         type="button"

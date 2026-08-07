@@ -85,7 +85,7 @@ function escapeHtml(value: string): string {
 </script>
 
 <template>
-  <div class="modal-backdrop command-backdrop" @mousedown.self="close">
+  <div class="modal-backdrop command-backdrop" data-ui-region="quick-switcher" @mousedown.self="close">
     <section class="command-palette" role="dialog" aria-modal="true" aria-label="Quick search">
       <div class="command-input-wrap">
         <AppIcon name="search" :size="20" />
