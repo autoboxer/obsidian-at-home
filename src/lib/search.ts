@@ -1,4 +1,4 @@
-import type { Note, SearchResult } from "../types";
+import type { Note, SearchResult, SearchScope } from "../types";
 
 export type FolderNameLookup =
   | ReadonlyMap<string, string>
@@ -9,6 +9,8 @@ export interface SearchOptions {
   folderNames?: FolderNameLookup;
   limit?: number;
   snippetLength?: number;
+  scope?: SearchScope;
+  exactTag?: string;
 }
 
 interface ScoredField {
@@ -29,9 +31,12 @@ export function searchNotes(
   const options = toOptions(optionsOrFolders, explicitLimit);
   const terms = parseSearchTerms(query);
   const phrase = terms.join(" ");
-  if (!phrase || terms.length === 0) return [];
+  if (!phrase || terms.length === 0) {
+    return [];
+  }
 
   const results: Array<SearchResult & { updatedAt: number }> = [];
+  const exactTag = normalizeSearchText(options.exactTag ?? "");
 
   for (const note of notes) {
     const title = normalizeSearchText(note.title);
@@ -40,34 +45,44 @@ export function searchNotes(
     const folderLabel = normalizeSearchText(
       folderName(note.folderId, options.folderNames) ?? "",
     );
+    if (exactTag && !tags.includes(exactTag)) {
+      continue;
+    }
 
     const titleScore = scoreTitle(title, phrase, terms);
     const contentScore = scoreContent(content, phrase, terms);
     const tagScore = scoreTags(tags, phrase, terms);
     const folderScore = scoreFolder(folderLabel, phrase, terms);
-    const matched = new Set([
-      ...titleScore.matchedTerms,
-      ...contentScore.matchedTerms,
-      ...tagScore.matchedTerms,
-      ...folderScore.matchedTerms,
-    ]);
+    const allFields: Array<[SearchResult["reason"], ScoredField]> = [
+      ["title", titleScore],
+      ["tag", tagScore],
+      ["folder", folderScore],
+      ["content", contentScore],
+    ];
+    const scopedReason = options.scope === "titles"
+      ? "title"
+      : options.scope === "tags"
+        ? "tag"
+        : options.scope;
+    const fields = options.scope === "all"
+      ? allFields
+      : allFields.filter(([reason]) => reason === scopedReason);
+    const matched = new Set(fields.flatMap(([, field]) => [...field.matchedTerms]));
 
-    // Multi-word searches are intentionally conjunctive across all fields. This
-    // keeps "meeting api" useful without requiring a heavyweight search index.
-    if (terms.some((term) => !matched.has(term))) continue;
+    // Multi-word searches are intentionally conjunctive across the selected
+    // fields. This keeps "meeting api" useful without a heavyweight index.
+    if (terms.some((term) => !matched.has(term))) {
+      continue;
+    }
 
-    const fields = [
-      ["title", titleScore.score],
-      ["tag", tagScore.score],
-      ["folder", folderScore.score],
-      ["content", contentScore.score],
-    ] as const;
     const [reason] = fields.reduce((best, current) =>
-      current[1] > best[1] ? current : best,
+      current[1].score > best[1].score ? current : best,
     );
-    const score = fields.reduce((total, field) => total + field[1], 0);
+    const score = fields.reduce((total, [, field]) => total + field.score, 0);
 
-    if (score <= 0) continue;
+    if (score <= 0) {
+      continue;
+    }
 
     results.push({
       note,
@@ -101,7 +116,9 @@ export function createSearchSnippet(
 ): string {
   const safeMaxLength = Math.max(40, maxLength);
   const text = markdownToSearchText(markdown);
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
 
   const terms = (typeof queryOrTerms === "string"
     ? parseSearchTerms(queryOrTerms)
@@ -122,18 +139,26 @@ export function createSearchSnippet(
     }
   }
 
-  if (text.length <= safeMaxLength) return text;
-  if (hitIndex < 0) return `${trimAtWord(text, safeMaxLength)}…`;
+  if (text.length <= safeMaxLength) {
+    return text;
+  }
+  if (hitIndex < 0) {
+    return `${trimAtWord(text, safeMaxLength)}…`;
+  }
 
   const desiredStart = Math.max(0, hitIndex - Math.floor((safeMaxLength - hitLength) / 2));
   let start = desiredStart;
   if (start > 0) {
     const nextSpace = text.indexOf(" ", start);
-    if (nextSpace >= 0 && nextSpace - start < 24) start = nextSpace + 1;
+    if (nextSpace >= 0 && nextSpace - start < 24) {
+      start = nextSpace + 1;
+    }
   }
 
   let excerpt = text.slice(start, start + safeMaxLength);
-  if (start + safeMaxLength < text.length) excerpt = trimAtWord(excerpt, excerpt.length);
+  if (start + safeMaxLength < text.length) {
+    excerpt = trimAtWord(excerpt, excerpt.length);
+  }
 
   return `${start > 0 ? "…" : ""}${excerpt.trim()}${
     start + excerpt.length < text.length ? "…" : ""
@@ -148,7 +173,9 @@ export function parseSearchTerms(query: string): string[] {
 
   while ((match = tokenPattern.exec(query)) !== null) {
     const term = normalizeSearchText(match[1] ?? match[2] ?? match[3] ?? "");
-    if (!term || seen.has(term)) continue;
+    if (!term || seen.has(term)) {
+      continue;
+    }
     seen.add(term);
     terms.push(term);
   }
@@ -158,21 +185,29 @@ export function parseSearchTerms(query: string): string[] {
 
 function scoreTitle(title: string, phrase: string, terms: readonly string[]): ScoredField {
   const result = scoreFieldMatches(title, terms, 34, 22);
-  if (title === phrase) result.score += 180;
-  else if (title.startsWith(phrase)) result.score += 95;
-  else if (title.includes(phrase)) result.score += 58;
+  if (title === phrase) {
+    result.score += 180;
+  } else if (title.startsWith(phrase)) {
+    result.score += 95;
+  } else if (title.includes(phrase)) {
+    result.score += 58;
+  }
+
   return result;
 }
 
 function scoreContent(content: string, phrase: string, terms: readonly string[]): ScoredField {
   const result = scoreFieldMatches(content, terms, 5, 3);
   const phraseIndex = content.indexOf(phrase);
-  if (phraseIndex >= 0) result.score += 18;
+  if (phraseIndex >= 0) {
+    result.score += 18;
+  }
 
   for (const term of terms) {
     const occurrences = countOccurrences(content, term, 8);
     result.score += Math.min(occurrences, 8) * 1.25;
   }
+
   return result;
 }
 
@@ -181,8 +216,11 @@ function scoreTags(tags: readonly string[], phrase: string, terms: readonly stri
   let score = 0;
 
   for (const tag of tags) {
-    if (tag === phrase) score += 55;
-    else if (tag.includes(phrase)) score += 24;
+    if (tag === phrase) {
+      score += 55;
+    } else if (tag.includes(phrase)) {
+      score += 24;
+    }
 
     for (const term of terms) {
       if (tag === term) {
@@ -200,8 +238,12 @@ function scoreTags(tags: readonly string[], phrase: string, terms: readonly stri
 
 function scoreFolder(folder: string, phrase: string, terms: readonly string[]): ScoredField {
   const result = scoreFieldMatches(folder, terms, 14, 8);
-  if (folder === phrase) result.score += 30;
-  else if (folder.includes(phrase)) result.score += 15;
+  if (folder === phrase) {
+    result.score += 30;
+  } else if (folder.includes(phrase)) {
+    result.score += 15;
+  }
+
   return result;
 }
 
@@ -216,10 +258,14 @@ function scoreFieldMatches(
 
   for (const term of terms) {
     const index = field.indexOf(term);
-    if (index < 0) continue;
+    if (index < 0) {
+      continue;
+    }
     matchedTerms.add(term);
     score += hasWordAt(field, term, index) ? wholeWordWeight : partialWeight;
-    if (index === 0) score += wholeWordWeight * 0.25;
+    if (index === 0) {
+      score += wholeWordWeight * 0.25;
+    }
   }
 
   return { score, matchedTerms };
@@ -228,6 +274,7 @@ function scoreFieldMatches(
 function hasWordAt(field: string, term: string, index: number): boolean {
   const before = index === 0 ? "" : field[index - 1]!;
   const after = field[index + term.length] ?? "";
+
   return (!before || /[^\p{L}\p{N}_]/u.test(before)) &&
     (!after || /[^\p{L}\p{N}_]/u.test(after));
 }
@@ -237,10 +284,13 @@ function countOccurrences(value: string, needle: string, limit: number): number 
   let cursor = 0;
   while (count < limit) {
     const index = value.indexOf(needle, cursor);
-    if (index < 0) break;
+    if (index < 0) {
+      break;
+    }
     count += 1;
     cursor = index + Math.max(1, needle.length);
   }
+
   return count;
 }
 
@@ -248,11 +298,16 @@ function folderName(
   folderId: string | null,
   lookup?: FolderNameLookup,
 ): string | undefined {
-  if (!folderId || !lookup) return undefined;
-  if (typeof lookup === "function") return lookup(folderId);
+  if (!folderId || !lookup) {
+    return undefined;
+  }
+  if (typeof lookup === "function") {
+    return lookup(folderId);
+  }
   if ("get" in lookup && typeof lookup.get === "function") {
     return lookup.get(folderId);
   }
+
   return (lookup as Readonly<Record<string, string>>)[folderId];
 }
 
@@ -260,12 +315,15 @@ function toOptions(
   value: SearchOptions | FolderNameLookup | number,
   explicitLimit?: number,
 ): Required<Pick<SearchOptions, "limit" | "snippetLength">> &
-  Pick<SearchOptions, "folderNames"> {
+  Required<Pick<SearchOptions, "scope">> &
+  Pick<SearchOptions, "folderNames" | "exactTag"> {
   if (typeof value === "number") {
     return {
       folderNames: undefined,
       limit: Math.max(1, value),
       snippetLength: 170,
+      scope: "all",
+      exactTag: undefined,
     };
   }
 
@@ -273,13 +331,21 @@ function toOptions(
     typeof value === "object" &&
     value !== null &&
     !(value instanceof Map) &&
-    ("folderNames" in value || "limit" in value || "snippetLength" in value);
+    (
+      "folderNames" in value
+      || "limit" in value
+      || "snippetLength" in value
+      || "scope" in value
+      || "exactTag" in value
+    );
   const options = looksLikeOptions ? value as SearchOptions : { folderNames: value as FolderNameLookup };
 
   return {
     folderNames: options.folderNames,
     limit: Math.max(1, explicitLimit ?? options.limit ?? 50),
     snippetLength: Math.max(40, options.snippetLength ?? 170),
+    scope: options.scope ?? "all",
+    exactTag: options.exactTag,
   };
 }
 
@@ -299,6 +365,7 @@ function markdownToSearchText(markdown: string): string {
 function trimAtWord(value: string, maxLength: number): string {
   const sliced = value.slice(0, maxLength);
   const lastSpace = sliced.lastIndexOf(" ");
+
   return lastSpace > maxLength * 0.65 ? sliced.slice(0, lastSpace) : sliced;
 }
 

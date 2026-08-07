@@ -24,11 +24,11 @@ This is not a complete Obsidian replacement: cloud sync, attachments, graph view
 ## Features
 
 - Create, open, and switch between vaults of ordinary `.md` and `.markdown` files.
-- Organize notes in nested folders, with drag-and-drop.
-- Use source, split, or reading view, with shortcuts, spellcheck, and syntax-highlighted code blocks.
+- Organize notes in nested folders with drag-and-drop and right-click file actions.
+- Use source, split, or reading view with interactive task checkboxes, spellcheck, syntax-highlighted code blocks, and app zoom (`Ctrl/Cmd` + `+`, `-`, or `0`).
 - Link notes with `[[wiki links]]` and browse outgoing links and backlinks.
 - Search titles, content, folders, and tags, or jump to a note with the quick switcher.
-- Use tags, favorites, and templates.
+- Use freeform tags with suggestions from existing tags, plus favorites and templates.
 - Modify the UI with [CSS snippets](docs/css-snippets.md).
 - Import from Obsidian or export a portable vault.
 

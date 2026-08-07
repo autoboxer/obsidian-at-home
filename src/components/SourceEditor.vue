@@ -37,13 +37,17 @@ interface TextEdit {
 const lineCount = computed(() => Math.max(1, props.modelValue.split("\n").length));
 const lineNumbers = computed(() => Array.from({ length: lineCount.value }, (_, index) => index + 1).join("\n"));
 const suggestions = computed(() => {
-  if (suggestionQuery.value === null) return [];
+  if (suggestionQuery.value === null) {
+    return [];
+  }
   const query = suggestionQuery.value.toLocaleLowerCase();
+
   return props.noteTitles
     .filter((title) => !query || title.toLocaleLowerCase().includes(query))
     .sort((a, b) => {
       const aStarts = a.toLocaleLowerCase().startsWith(query);
       const bStarts = b.toLocaleLowerCase().startsWith(query);
+
       return Number(bStarts) - Number(aStarts) || a.localeCompare(b);
     })
     .slice(0, 6);
@@ -57,39 +61,49 @@ function onInput(event: Event): void {
 }
 
 function onSelection(): void {
-  if (!textarea.value) return;
+  if (!textarea.value) {
+    return;
+  }
   cursor.value = textarea.value.selectionStart;
   updateSuggestions(textarea.value);
 }
 
 function onScroll(): void {
-  if (!textarea.value || !gutter.value) return;
+  if (!textarea.value || !gutter.value) {
+    return;
+  }
   gutter.value.scrollTop = textarea.value.scrollTop;
 }
 
 function onKeydown(event: KeyboardEvent): void {
   const element = textarea.value;
-  if (!element || event.isComposing) return;
+  if (!element || event.isComposing) {
+    return;
+  }
 
   if (suggestions.value.length) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       suggestionIndex.value = (suggestionIndex.value + 1) % suggestions.value.length;
+
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
       suggestionIndex.value = (suggestionIndex.value - 1 + suggestions.value.length) % suggestions.value.length;
+
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
       insertSuggestion(suggestions.value[suggestionIndex.value]!);
+
       return;
     }
     if (event.key === "Escape") {
       event.preventDefault();
       suggestionQuery.value = null;
+
       return;
     }
   }
@@ -98,12 +112,16 @@ function onKeydown(event: KeyboardEvent): void {
 
   if (event.key === "Enter" && !commandModifier && !event.shiftKey && handleSmartEnter(element)) {
     event.preventDefault();
+
     return;
   }
 
   if (event.key === "Tab" && !commandModifier) {
     event.preventDefault();
-    if (!adjustSelectedLines(element, event.shiftKey) && !event.shiftKey) replaceSelection(INDENT);
+    if (!adjustSelectedLines(element, event.shiftKey) && !event.shiftKey) {
+      replaceSelection(INDENT);
+    }
+
     return;
   }
 
@@ -119,7 +137,9 @@ function onKeydown(event: KeyboardEvent): void {
 
 function replaceSelection(value: string): void {
   const element = textarea.value;
-  if (!element) return;
+  if (!element) {
+    return;
+  }
   const start = element.selectionStart;
   const end = element.selectionEnd;
   const next = `${element.value.slice(0, start)}${value}${element.value.slice(end)}`;
@@ -128,7 +148,9 @@ function replaceSelection(value: string): void {
 
 function wrapSelection(before: string, after: string): void {
   const element = textarea.value;
-  if (!element) return;
+  if (!element) {
+    return;
+  }
   const start = element.selectionStart;
   const end = element.selectionEnd;
   const selected = element.value.slice(start, end);
@@ -146,7 +168,9 @@ function updateSuggestions(element: HTMLTextAreaElement): void {
 
 function insertSuggestion(title: string): void {
   const element = textarea.value;
-  if (!element || suggestionQuery.value === null) return;
+  if (!element || suggestionQuery.value === null) {
+    return;
+  }
   const queryLength = suggestionQuery.value.length;
   const start = element.selectionStart - queryLength;
   const replacement = `${title}]]`;
@@ -164,7 +188,9 @@ function applyEdit(
   emit("update:modelValue", value);
   nextTick(() => {
     const element = textarea.value;
-    if (!element) return;
+    if (!element) {
+      return;
+    }
     element.focus();
     element.setSelectionRange(selectionStart, selectionEnd, direction ?? "none");
     onSelection();
@@ -172,7 +198,9 @@ function applyEdit(
 }
 
 function handleSmartEnter(element: HTMLTextAreaElement): boolean {
-  if (element.selectionStart !== element.selectionEnd) return false;
+  if (element.selectionStart !== element.selectionEnd) {
+    return false;
+  }
 
   const value = element.value;
   const position = element.selectionStart;
@@ -202,13 +230,18 @@ function handleSmartEnter(element: HTMLTextAreaElement): boolean {
       : `\n${indent}\n${indent}${marker}`;
     const next = `${value.slice(0, position)}${insertion}${value.slice(position)}`;
     applyEdit(next, position + 1 + indent.length);
+
     return true;
   }
 
-  if (activeFenceBefore(value, lineStart)) return false;
+  if (activeFenceBefore(value, lineStart)) {
+    return false;
+  }
 
   const item = matchEditableListLine(line);
-  if (!item || position < lineStart + item.prefixLength) return false;
+  if (!item || position < lineStart + item.prefixLength) {
+    return false;
+  }
 
   const bodyStart = lineStart + item.prefixLength;
   const bodyBefore = value.slice(bodyStart, position);
@@ -219,6 +252,7 @@ function handleSmartEnter(element: HTMLTextAreaElement): boolean {
   if (!contentWithoutTask.trim() && position === lineEnd) {
     const next = `${value.slice(0, lineStart)}${item.indent}${value.slice(lineEnd)}`;
     applyEdit(next, lineStart + item.indent.length);
+
     return true;
   }
 
@@ -229,16 +263,20 @@ function handleSmartEnter(element: HTMLTextAreaElement): boolean {
   const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
   const next = `${value.slice(0, position)}\n${continuation}${value.slice(position)}`;
   applyEdit(next, position + 1 + continuation.length);
+
   return true;
 }
 
 function matchEditableListLine(line: string): ListLine | undefined {
   const match = line.match(/^([ \t]*)(?:(\d{1,9})([.)])|([-+*]))([ \t]+)(.*)$/);
-  if (!match) return undefined;
+  if (!match) {
+    return undefined;
+  }
   const ordered = Boolean(match[2]);
   const indent = match[1]!;
   const markerLength = ordered ? match[2]!.length + 1 : 1;
   const spacing = match[5]!;
+
   return {
     indent,
     ordered,
@@ -259,7 +297,9 @@ function activeFenceBefore(value: string, position: number): { marker: string; l
   for (const line of lines) {
     if (!active) {
       const opening = line.match(/^[ \t]*(`{3,}|~{3,})[^\n]*$/);
-      if (opening) active = { marker: opening[1]![0]!, length: opening[1]!.length };
+      if (opening) {
+        active = { marker: opening[1]![0]!, length: opening[1]!.length };
+      }
       continue;
     }
 
@@ -285,7 +325,9 @@ function adjustSelectedLines(element: HTMLTextAreaElement, outdent: boolean): bo
   const firstLine = value.slice(firstLineStart, firstLineEnd);
 
   if (!hasSelection && !matchEditableListLine(firstLine)) {
-    if (!outdent || !/^[ \t]/.test(firstLine)) return false;
+    if (!outdent || !/^[ \t]/.test(firstLine)) {
+      return false;
+    }
   }
 
   const selectionEndsAtLineStart = hasSelection && selectionEnd > 0 && value[selectionEnd - 1] === "\n";
@@ -312,16 +354,22 @@ function adjustSelectedLines(element: HTMLTextAreaElement, outdent: boolean): bo
       const indentedLine = orderedMarker
         ? `${orderedMarker[1]}1${orderedMarker[3]}${line.slice(orderedMarker[0].length)}`
         : line;
+
       return `${INDENT}${indentedLine}`;
     }
 
     const removable = line.startsWith("\t") ? 1 : line.match(/^ {1,2}/)?.[0].length ?? 0;
-    if (removable) edits.push({ start: sourceOffset, removed: removable, added: 0 });
+    if (removable) {
+      edits.push({ start: sourceOffset, removed: removable, added: 0 });
+    }
     sourceOffset += line.length + 1;
+
     return line.slice(removable);
   }).join("\n");
 
-  if (!edits.length) return true;
+  if (!edits.length) {
+    return true;
+  }
 
   const next = `${value.slice(0, firstLineStart)}${transformed}${value.slice(blockEnd)}`;
   applyEdit(
@@ -330,16 +378,22 @@ function adjustSelectedLines(element: HTMLTextAreaElement, outdent: boolean): bo
     mapPositionThroughEdits(selectionEnd, edits),
     element.selectionDirection,
   );
+
   return true;
 }
 
 function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
   let delta = 0;
   for (const edit of edits) {
-    if (position < edit.start) break;
-    if (position <= edit.start + edit.removed) return edit.start + delta + edit.added;
+    if (position < edit.start) {
+      break;
+    }
+    if (position <= edit.start + edit.removed) {
+      return edit.start + delta + edit.added;
+    }
     delta += edit.added - edit.removed;
   }
+
   return position + delta;
 }
 </script>

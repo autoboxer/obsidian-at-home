@@ -21,6 +21,7 @@
         "minHeight": 640,
         "center": true,
         "resizable": true,
+        "dragDropEnabled": false,
         "fullscreen": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true

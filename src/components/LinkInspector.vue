@@ -13,26 +13,37 @@ import AppIcon from "./AppIcon.vue";
 
 const uniqueOutgoing = computed(() => {
   const seen = new Set<string>();
+
   return outgoingLinks.value.filter(({ link }) => {
     const key = link.target.toLocaleLowerCase();
-    if (seen.has(key)) return false;
+    if (seen.has(key)) {
+      return false;
+    }
     seen.add(key);
+
     return true;
   });
 });
 
 const wordCount = computed(() => {
   const content = activeNote.value?.content.trim() ?? "";
+
   return content ? content.split(/\s+/).length : 0;
 });
 
 function openOutgoing(target: string, noteId?: string): void {
-  if (noteId) selectNote(noteId);
-  else createLinkedNote(target);
+  if (noteId) {
+    selectNote(noteId);
+  } else {
+    createLinkedNote(target);
+  }
 }
 
 function formatDate(timestamp?: number): string {
-  if (!timestamp) return "—";
+  if (!timestamp) {
+    return "—";
+  }
+
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(timestamp);
 }
 </script>

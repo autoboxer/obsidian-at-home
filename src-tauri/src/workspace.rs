@@ -779,6 +779,7 @@ fn save_workspace_files(
         )?;
         if revision_for_root(&root)? != expected_revision {
             discard_private_transaction(&root, &transaction_root, &mut warnings);
+
             return Err(
                 "The vault changed while the save transaction was being prepared. Reload it before trying again."
                     .to_owned(),
@@ -792,6 +793,7 @@ fn save_workspace_files(
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
+
             return Err(error);
         }
         if let Err(error) = verify_save_consistency(&root, &consistency) {
@@ -799,6 +801,7 @@ fn save_workspace_files(
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
+
             return Err(error);
         }
         if fingerprint_regular_file(&state_path)? != expected_state_fingerprint {
@@ -806,6 +809,7 @@ fn save_workspace_files(
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
+
             return Err(
                 "Workspace metadata changed outside Obsidian At Home while saving. Reload before editing again."
                     .to_owned(),
@@ -818,6 +822,7 @@ fn save_workspace_files(
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
+
             return Err(format!("Could not save workspace metadata: {error}"));
         }
         // The state file is the commit boundary. Persist the same fact in the
@@ -1138,15 +1143,18 @@ fn read_workspace_state(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return (None, false),
         Err(error) => {
             warnings.push(format!("Could not inspect workspace metadata: {error}"));
+
             return (None, false);
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         warnings.push("Ignored workspace metadata because it is not a regular file.".to_owned());
+
         return (None, true);
     }
     if metadata.len() > 64 * 1024 * 1024 {
         warnings.push("Ignored workspace metadata because it is unexpectedly large.".to_owned());
+
         return (None, true);
     }
     match fs::read(&path)
@@ -1382,6 +1390,7 @@ fn update_frontmatter_tags_conservatively(
         output.push_str(line_ending);
         output.push_str(line_ending);
         output.push_str(body);
+
         return Ok(output);
     };
 
@@ -1624,6 +1633,7 @@ fn parse_yaml_scalar(value: &str) -> String {
                 output.push(character);
             }
         }
+
         return output;
     }
     value
@@ -2180,6 +2190,7 @@ fn rollback_folder_case_rename(
             "Could not find {} while recovering a folder rename.",
             operation.to_relative_path
         ));
+
         return false;
     }
     if from_exists {
@@ -2193,6 +2204,7 @@ fn rollback_folder_case_rename(
                 "Did not restore {} because both folder names now exist.",
                 operation.from_relative_path
             ));
+
             return false;
         }
     }
@@ -2201,6 +2213,7 @@ fn rollback_folder_case_rename(
             "Could not restore folder {}: {error}",
             operation.from_relative_path
         ));
+
         return false;
     }
     true
@@ -2370,6 +2383,7 @@ fn discard_private_transaction(
     let expected_parent = root.join(STATE_DIRECTORY).join(TRANSACTIONS_DIRECTORY);
     if transaction_root.parent() != Some(expected_parent.as_path()) {
         warnings.push("Refused to clean a transaction outside the private save folder.".to_owned());
+
         return;
     }
     let mut entries = Vec::new();
@@ -2963,6 +2977,7 @@ fn should_visit_revision_entry(entry: &DirEntry) -> bool {
         if entry.depth() == 1 && name.eq_ignore_ascii_case(STATE_DIRECTORY) {
             return true;
         }
+
         return entry.depth() == 2
             && !entry.file_type().is_dir()
             && name.eq_ignore_ascii_case(STATE_FILE);
@@ -3176,10 +3191,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
                 fs::rename(path, &backup)?;
                 if let Err(error) = fs::rename(&temporary, path) {
                     let _ = fs::rename(&backup, path);
+
                     return Err(error);
                 }
                 let _ = fs::remove_file(backup);
                 sync_directory(parent)?;
+
                 return Ok(());
             }
         }

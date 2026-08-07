@@ -23,6 +23,7 @@ import type {
   ImportResult,
   Note,
   NoteTemplate,
+  SearchScope,
   ToolView,
   VaultData,
   VaultDescriptor,
@@ -32,8 +33,13 @@ import type {
 
 const STORAGE_KEY = "obsidian-at-home.vault.v1";
 const LEGACY_MIGRATED_KEY = "obsidian-at-home.vault.filesystem-migrated.v1";
+const APP_ZOOM_KEY = "obsidian-at-home.zoom.v1";
 const PERSIST_DELAY = 220;
 const EXTERNAL_CHECK_DELAY = 3_000;
+
+export const MIN_ZOOM = 0.7;
+export const MAX_ZOOM = 1.5;
+const ZOOM_STEP = 0.1;
 
 type FolderSelection = VaultData["selectedFolderId"];
 type SmartFolderSelection = "all" | "favorites";
@@ -42,7 +48,10 @@ type ToastTone = "neutral" | "success" | "warning";
 
 export const NOTE_DRAG_MIME = "application/x-obsidian-at-home-note-id";
 export const FOLDER_DRAG_MIME = "application/x-obsidian-at-home-folder-id";
-export const treeDragState = reactive<{ folderId: string | null }>({ folderId: null });
+export const treeDragState = reactive<{ noteId: string | null; folderId: string | null }>({
+  noteId: null,
+  folderId: null,
+});
 
 interface UiState {
   tool: ToolView;
@@ -54,7 +63,16 @@ interface UiState {
   inspectorTab: "links" | "info";
   saveStatus: SaveStatus;
   lastSavedAt: number;
+  zoom: number;
   toast: { id: number; message: string; tone: ToastTone } | null;
+}
+
+interface SearchState {
+  query: string;
+  scope: SearchScope;
+  exactTag: string | null;
+  quickQuery: string;
+  focusRequest: number;
 }
 
 export const vaultState = reactive<VaultData>(createEmptyVault());
@@ -82,7 +100,16 @@ export const uiState = reactive<UiState>({
   inspectorTab: "links",
   saveStatus: "saved",
   lastSavedAt: Date.now(),
+  zoom: readStoredZoom(),
   toast: null,
+});
+
+export const searchState = reactive<SearchState>({
+  query: "",
+  scope: "all",
+  exactTag: null,
+  quickQuery: "",
+  focusRequest: 0,
 });
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
@@ -102,7 +129,9 @@ let closingAfterSave = false;
 watch(
   vaultState,
   () => {
-    if (!initialized || suppressPersistence) return;
+    if (!initialized || suppressPersistence) {
+      return;
+    }
     dirtyVersion += 1;
     uiState.saveStatus = "saving";
     clearTimeout(persistTimer);
@@ -117,9 +146,18 @@ watch(
   { deep: true, immediate: true },
 );
 
+watch(
+  () => uiState.zoom,
+  (zoom) => safeStorageSet(APP_ZOOM_KEY, String(zoom)),
+  { flush: "sync" },
+);
+
 export function initializeVault(): Promise<void> {
-  if (initializePromise) return initializePromise;
+  if (initializePromise) {
+    return initializePromise;
+  }
   initializePromise = initializeVaultStorage();
+
   return initializePromise;
 }
 
@@ -145,6 +183,7 @@ async function initializeVaultStorage(): Promise<void> {
     initialized = true;
     savedVersion = dirtyVersion;
     installVaultLifecycleHandlers();
+
     return;
   }
 
@@ -181,16 +220,24 @@ async function initializeVaultStorage(): Promise<void> {
 }
 
 export async function createFilesystemVault(name: string, useLegacy = false): Promise<boolean> {
-  if (vaultSession.backend !== "native" || vaultSession.busy) return false;
+  if (vaultSession.backend !== "native" || vaultSession.busy) {
+    return false;
+  }
   const cleanName = name.trim();
-  if (!cleanName) return false;
-  if (!(await flushBeforeVaultChange())) return false;
+  if (!cleanName) {
+    return false;
+  }
+  if (!(await flushBeforeVaultChange())) {
+    return false;
+  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
   try {
     const parentPath = await pickFolder();
-    if (!parentPath) return false;
+    if (!parentPath) {
+      return false;
+    }
     const legacy = useLegacy ? readStoredVault() : null;
     if (useLegacy && !legacy) {
       throw new Error("The previous notes could not be read from app storage.");
@@ -206,9 +253,11 @@ export async function createFilesystemVault(name: string, useLegacy = false): Pr
     } else {
       notify(`Created ${workspace.descriptor.name}`, "success");
     }
+
     return true;
   } catch (error) {
     setVaultError(error, "The vault could not be created.");
+
     return false;
   } finally {
     vaultSession.busy = false;
@@ -216,20 +265,28 @@ export async function createFilesystemVault(name: string, useLegacy = false): Pr
 }
 
 export async function openFilesystemVault(): Promise<boolean> {
-  if (vaultSession.backend !== "native" || vaultSession.busy) return false;
-  if (!(await flushBeforeVaultChange())) return false;
+  if (vaultSession.backend !== "native" || vaultSession.busy) {
+    return false;
+  }
+  if (!(await flushBeforeVaultChange())) {
+    return false;
+  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
   try {
     const path = await pickFolder();
-    if (!path) return false;
+    if (!path) {
+      return false;
+    }
     const workspace = await openWorkspace(path, createEmptyVault());
     applyWorkspace(workspace);
     notify(`Opened ${workspace.descriptor.name}`, "success");
+
     return true;
   } catch (error) {
     setVaultError(error, "That folder could not be opened as a vault.");
+
     return false;
   } finally {
     vaultSession.busy = false;
@@ -240,7 +297,9 @@ export async function switchFilesystemVault(path: string): Promise<boolean> {
   if (vaultSession.backend !== "native" || vaultSession.busy || path === vaultSession.path) {
     return path === vaultSession.path;
   }
-  if (!(await flushBeforeVaultChange())) return false;
+  if (!(await flushBeforeVaultChange())) {
+    return false;
+  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
@@ -248,9 +307,11 @@ export async function switchFilesystemVault(path: string): Promise<boolean> {
     const workspace = await openWorkspace(path, createEmptyVault());
     applyWorkspace(workspace);
     notify(`Switched to ${workspace.descriptor.name}`, "success");
+
     return true;
   } catch (error) {
     setVaultError(error, "That recent vault is no longer available.");
+
     return false;
   } finally {
     vaultSession.busy = false;
@@ -259,8 +320,12 @@ export async function switchFilesystemVault(path: string): Promise<boolean> {
 
 export async function forgetCurrentVault(): Promise<boolean> {
   const path = vaultSession.path;
-  if (vaultSession.backend !== "native" || !path || vaultSession.busy) return false;
-  if (!(await flushBeforeVaultChange())) return false;
+  if (vaultSession.backend !== "native" || !path || vaultSession.busy) {
+    return false;
+  }
+  if (!(await flushBeforeVaultChange())) {
+    return false;
+  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
@@ -278,9 +343,11 @@ export async function forgetCurrentVault(): Promise<boolean> {
     savedVersion = 0;
     uiState.vaultChooserOpen = true;
     notify("Vault forgotten; its files are still on disk", "neutral");
+
     return true;
   } catch (error) {
     setVaultError(error, "The vault could not be removed from the recent list.");
+
     return false;
   } finally {
     vaultSession.busy = false;
@@ -288,7 +355,9 @@ export async function forgetCurrentVault(): Promise<boolean> {
 }
 
 export async function showCurrentVaultInFolder(): Promise<void> {
-  if (!vaultSession.path || vaultSession.backend !== "native") return;
+  if (!vaultSession.path || vaultSession.backend !== "native") {
+    return;
+  }
   try {
     await revealItemInDir(vaultSession.path);
   } catch (error) {
@@ -299,15 +368,19 @@ export async function showCurrentVaultInFolder(): Promise<void> {
 
 export async function reloadFilesystemVault(): Promise<boolean> {
   const path = vaultSession.path;
-  if (vaultSession.backend !== "native" || !path || vaultSession.busy) return false;
+  if (vaultSession.backend !== "native" || !path || vaultSession.busy) {
+    return false;
+  }
   vaultSession.busy = true;
   try {
     const workspace = await openWorkspace(path, createEmptyVault());
     applyWorkspace(workspace);
     notify("Reloaded the vault from disk", "success");
+
     return true;
   } catch (error) {
     setVaultError(error, "The vault could not be reloaded from disk.");
+
     return false;
   } finally {
     vaultSession.busy = false;
@@ -316,7 +389,9 @@ export async function reloadFilesystemVault(): Promise<boolean> {
 
 export async function overwriteFilesystemVault(): Promise<boolean> {
   const path = vaultSession.path;
-  if (vaultSession.backend !== "native" || !path || vaultSession.busy) return false;
+  if (vaultSession.backend !== "native" || !path || vaultSession.busy) {
+    return false;
+  }
   vaultSession.busy = true;
   clearTimeout(persistTimer);
   try {
@@ -331,12 +406,14 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
     uiState.saveStatus = "saved";
     uiState.lastSavedAt = result.savedAt || Date.now();
     notify("Saved the app version over the changed files", "success");
+
     return true;
   } catch (error) {
     const message = errorMessage(error, "The app version could not be saved.");
     vaultSession.error = message;
     vaultSession.conflict = isRevisionConflict(message);
     uiState.saveStatus = "error";
+
     return false;
   } finally {
     vaultSession.busy = false;
@@ -345,11 +422,16 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
 
 export async function flushVault(): Promise<boolean> {
   clearTimeout(persistTimer);
-  if (!initialized || savedVersion >= dirtyVersion) return true;
+  if (!initialized || savedVersion >= dirtyVersion) {
+    return true;
+  }
 
   if (saveInFlight) {
     const saved = await saveInFlight;
-    if (!saved) return false;
+    if (!saved) {
+      return false;
+    }
+
     return savedVersion < dirtyVersion ? flushVault() : true;
   }
 
@@ -362,18 +444,24 @@ export async function flushVault(): Promise<boolean> {
   const operation = (async (): Promise<boolean> => {
     if (vaultSession.backend === "browser") {
       const saved = persistBrowserVault(snapshot);
-      if (saved && generation === sessionGeneration) savedVersion = targetVersion;
+      if (saved && generation === sessionGeneration) {
+        savedVersion = targetVersion;
+      }
+
       return saved;
     }
 
     if (vaultSession.phase !== "ready" || !path) {
       uiState.saveStatus = "error";
+
       return false;
     }
 
     try {
       const result = await saveWorkspace(path, snapshot, vaultSession.revision);
-      if (generation !== sessionGeneration || path !== vaultSession.path) return true;
+      if (generation !== sessionGeneration || path !== vaultSession.path) {
+        return true;
+      }
       vaultSession.revision = result.revision;
       vaultSession.error = null;
       vaultSession.conflict = false;
@@ -381,10 +469,15 @@ export async function flushVault(): Promise<boolean> {
       savedVersion = targetVersion;
       uiState.saveStatus = "saved";
       uiState.lastSavedAt = result.savedAt || Date.now();
-      if (result.warnings.length) notify(result.warnings[0], "warning");
+      if (result.warnings.length) {
+        notify(result.warnings[0], "warning");
+      }
+
       return true;
     } catch (error) {
-      if (generation !== sessionGeneration) return false;
+      if (generation !== sessionGeneration) {
+        return false;
+      }
       uiState.saveStatus = "error";
       const message = errorMessage(error, "Changes could not be written to the vault folder.");
       vaultSession.error = message;
@@ -392,16 +485,20 @@ export async function flushVault(): Promise<boolean> {
       uiState.commandOpen = false;
       uiState.vaultChooserOpen = true;
       notify(message, "warning");
+
       return false;
     }
   })();
 
   saveInFlight = operation;
   const saved = await operation;
-  if (saveInFlight === operation) saveInFlight = null;
+  if (saveInFlight === operation) {
+    saveInFlight = null;
+  }
   if (saved && generation === sessionGeneration && savedVersion < dirtyVersion) {
     return flushVault();
   }
+
   return saved;
 }
 
@@ -415,14 +512,19 @@ export const folderById = computed(() =>
 
 export const folderNameMap = computed(() => {
   const names: Record<string, string> = {};
-  for (const folder of vaultState.folders) names[folder.id] = folderPath(folder.id);
+  for (const folder of vaultState.folders) {
+    names[folder.id] = folderPath(folder.id);
+  }
+
   return names;
 });
 
 export const visibleNotes = computed(() => {
   let notes = [...vaultState.notes];
 
-  if (vaultState.selectedFolderId === "favorites") notes = notes.filter((note) => note.pinned);
+  if (vaultState.selectedFolderId === "favorites") {
+    notes = notes.filter((note) => note.pinned);
+  }
 
   const filter = uiState.noteFilter.trim();
   if (filter) {
@@ -437,7 +539,10 @@ export const visibleNotes = computed(() => {
 });
 
 export const outgoingLinks = computed(() => {
-  if (!activeNote.value) return [];
+  if (!activeNote.value) {
+    return [];
+  }
+
   return parseWikiLinks(activeNote.value.content).map((link) => ({
     link,
     note: resolveWikiLink(link, vaultState.notes, activeNote.value),
@@ -449,7 +554,9 @@ export const backlinks = computed(() =>
 );
 
 export function selectNote(id: string): void {
-  if (!vaultState.notes.some((note) => note.id === id)) return;
+  if (!vaultState.notes.some((note) => note.id === id)) {
+    return;
+  }
   const wasVisible = visibleNotes.value.some((note) => note.id === id);
   vaultState.activeNoteId = id;
   if (!wasVisible) {
@@ -464,8 +571,49 @@ export function selectFolder(selection: FolderSelection): void {
   uiState.noteFilter = "";
 }
 
+export function openSearchWorkspace(
+  options: { query?: string; scope?: SearchScope; exactTag?: string | null } = {},
+): void {
+  const replacesSearch = options.query !== undefined
+    || options.scope !== undefined
+    || options.exactTag !== undefined;
+  if (options.query !== undefined) {
+    searchState.query = options.query;
+  }
+  if (options.scope !== undefined) {
+    searchState.scope = options.scope;
+  }
+  if (replacesSearch) {
+    searchState.exactTag = options.exactTag ?? null;
+  }
+  uiState.commandOpen = false;
+  uiState.tool = "search";
+  searchState.focusRequest += 1;
+}
+
+export function openQuickSearch(query = ""): void {
+  searchState.quickQuery = query;
+  uiState.commandOpen = true;
+}
+
 export function setEditorMode(mode: EditorMode): void {
   vaultState.editorMode = mode;
+}
+
+export function setZoom(zoom: number): void {
+  uiState.zoom = clampZoom(zoom);
+}
+
+export function zoomIn(): void {
+  setZoom(uiState.zoom + ZOOM_STEP);
+}
+
+export function zoomOut(): void {
+  setZoom(uiState.zoom - ZOOM_STEP);
+}
+
+export function resetZoom(): void {
+  setZoom(1);
 }
 
 export function createNote(folderId?: string | null, title = "Untitled note", content?: string): Note {
@@ -481,13 +629,16 @@ export function createNote(folderId?: string | null, title = "Untitled note", co
     createdAt: now,
     updatedAt: now,
   };
-  if (content === undefined) note.content = `# ${note.title}\n\n`;
+  if (content === undefined) {
+    note.content = `# ${note.title}\n\n`;
+  }
   vaultState.notes.unshift(note);
   vaultState.activeNoteId = note.id;
   vaultState.selectedFolderId = "all";
   uiState.tool = "notes";
   uiState.noteFilter = "";
   notify("New note created", "success");
+
   return note;
 }
 
@@ -496,22 +647,38 @@ export function createLinkedNote(target: string): Note {
   const existing = resolveWikiLink(cleanTarget, vaultState.notes, activeNote.value);
   if (existing) {
     selectNote(existing.id);
+
     return existing;
   }
+
   return createNote(activeNote.value?.folderId ?? currentFolderId(), cleanTarget);
 }
 
 export function updateNote(id: string, patch: Partial<Pick<Note, "title" | "content" | "folderId" | "tags" | "pinned">>): void {
   const note = vaultState.notes.find((candidate) => candidate.id === id);
-  if (!note) return;
+  if (!note) {
+    return;
+  }
   const locationChanged = (patch.title !== undefined && patch.title !== note.title)
     || (patch.folderId !== undefined && patch.folderId !== note.folderId);
-  if (patch.title !== undefined) note.title = patch.title;
-  if (patch.content !== undefined) note.content = patch.content;
-  if (patch.folderId !== undefined) note.folderId = patch.folderId;
-  if (patch.tags !== undefined) note.tags = patch.tags;
-  if (patch.pinned !== undefined) note.pinned = patch.pinned;
-  if (locationChanged) note.relativePath = "";
+  if (patch.title !== undefined) {
+    note.title = patch.title;
+  }
+  if (patch.content !== undefined) {
+    note.content = patch.content;
+  }
+  if (patch.folderId !== undefined) {
+    note.folderId = patch.folderId;
+  }
+  if (patch.tags !== undefined) {
+    note.tags = patch.tags;
+  }
+  if (patch.pinned !== undefined) {
+    note.pinned = patch.pinned;
+  }
+  if (locationChanged) {
+    note.relativePath = "";
+  }
   note.updatedAt = Date.now();
 }
 
@@ -519,6 +686,7 @@ export function moveNoteToFolder(noteId: string, folderId: string | null): boole
   const note = vaultState.notes.find((candidate) => candidate.id === noteId);
   if (!note) {
     notify("Could not move that note", "warning");
+
     return false;
   }
 
@@ -527,9 +695,12 @@ export function moveNoteToFolder(noteId: string, folderId: string | null): boole
     : vaultState.folders.find((candidate) => candidate.id === folderId);
   if (folderId !== null && !folder) {
     notify("That folder is no longer available", "warning");
+
     return false;
   }
-  if (note.folderId === folderId) return false;
+  if (note.folderId === folderId) {
+    return false;
+  }
   const duplicateNote = vaultState.notes.some(
     (candidate) => candidate.id !== noteId
       && candidate.folderId === folderId
@@ -542,17 +713,21 @@ export function moveNoteToFolder(noteId: string, folderId: string | null): boole
   );
   if (duplicateNote || duplicateFolder) {
     notify("A file with that name already exists there", "warning");
+
     return false;
   }
 
   updateNote(noteId, { folderId });
   notify(`Moved to ${folder?.name ?? "Vault root"}`, "success");
+
   return true;
 }
 
 export function deleteNote(id: string): void {
   const index = vaultState.notes.findIndex((note) => note.id === id);
-  if (index < 0) return;
+  if (index < 0) {
+    return;
+  }
   vaultState.notes.splice(index, 1);
   if (vaultState.activeNoteId === id) {
     vaultState.activeNoteId = vaultState.notes[Math.min(index, vaultState.notes.length - 1)]?.id ?? null;
@@ -562,12 +737,16 @@ export function deleteNote(id: string): void {
 
 export function togglePinned(id: string): void {
   const note = vaultState.notes.find((candidate) => candidate.id === id);
-  if (note) updateNote(id, { pinned: !note.pinned });
+  if (note) {
+    updateNote(id, { pinned: !note.pinned });
+  }
 }
 
 export function createFolder(name: string, parentId: string | null = null): Folder | undefined {
   const cleanName = name.trim().replace(/[\\/]/g, " ");
-  if (!cleanName) return undefined;
+  if (!cleanName) {
+    return undefined;
+  }
   const duplicate = vaultState.folders.some(
     (folder) => folder.parentId === parentId && folderNameKey(folder.name) === folderNameKey(cleanName),
   ) || vaultState.notes.some(
@@ -575,6 +754,7 @@ export function createFolder(name: string, parentId: string | null = null): Fold
   );
   if (duplicate) {
     notify("A file or folder with that name already exists here", "warning");
+
     return undefined;
   }
   const folder: Folder = {
@@ -588,13 +768,16 @@ export function createFolder(name: string, parentId: string | null = null): Fold
     vaultState.selectedFolderId = "all";
   }
   notify(`Created ${cleanName}`, "success");
+
   return folder;
 }
 
 export function renameFolder(id: string, name: string): void {
   const folder = vaultState.folders.find((candidate) => candidate.id === id);
   const cleanName = name.trim().replace(/[\\/]/g, " ");
-  if (!folder || !cleanName || folder.name === cleanName) return;
+  if (!folder || !cleanName || folder.name === cleanName) {
+    return;
+  }
 
   const duplicate = vaultState.folders.some(
     (candidate) => candidate.id !== id
@@ -605,13 +788,16 @@ export function renameFolder(id: string, name: string): void {
   );
   if (duplicate) {
     notify("A file or folder with that name already exists here", "warning");
+
     return;
   }
 
   const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
   folder.name = cleanName;
   for (const note of vaultState.notes) {
-    if (note.folderId && affectedFolders.has(note.folderId)) note.relativePath = "";
+    if (note.folderId && affectedFolders.has(note.folderId)) {
+      note.relativePath = "";
+    }
   }
 }
 
@@ -619,6 +805,7 @@ export function moveFolder(folderId: string, parentId: string | null): boolean {
   const folder = vaultState.folders.find((candidate) => candidate.id === folderId);
   if (!folder) {
     notify("Could not move that folder", "warning");
+
     return false;
   }
 
@@ -627,13 +814,17 @@ export function moveFolder(folderId: string, parentId: string | null): boolean {
     : vaultState.folders.find((candidate) => candidate.id === parentId);
   if (parentId !== null && !parent) {
     notify("That folder is no longer available", "warning");
+
     return false;
   }
-  if (folder.parentId === parentId) return false;
+  if (folder.parentId === parentId) {
+    return false;
+  }
 
   const affectedFolders = new Set([folderId, ...descendantFolderIds(folderId)]);
   if (parentId !== null && affectedFolders.has(parentId)) {
     notify("A folder cannot be moved inside itself", "warning");
+
     return false;
   }
 
@@ -646,20 +837,26 @@ export function moveFolder(folderId: string, parentId: string | null): boolean {
   );
   if (duplicate) {
     notify("A file or folder with that name already exists there", "warning");
+
     return false;
   }
 
   folder.parentId = parentId;
   for (const note of vaultState.notes) {
-    if (note.folderId && affectedFolders.has(note.folderId)) note.relativePath = "";
+    if (note.folderId && affectedFolders.has(note.folderId)) {
+      note.relativePath = "";
+    }
   }
   notify(`Moved ${folder.name} to ${parent?.name ?? "Vault root"}`, "success");
+
   return true;
 }
 
 export function deleteFolder(id: string): void {
   const folder = vaultState.folders.find((candidate) => candidate.id === id);
-  if (!folder) return;
+  if (!folder) {
+    return;
+  }
   const affectedFolders = new Set([id, ...descendantFolderIds(id)]);
   const children = vaultState.folders.filter((candidate) => candidate.parentId === id);
   const destinationFolders = vaultState.folders.filter(
@@ -678,22 +875,33 @@ export function deleteFolder(id: string): void {
     ));
   if (folderCollision || noteCollision) {
     notify("Move or rename conflicting items before removing this folder", "warning");
+
     return;
   }
-  for (const child of children) child.parentId = folder.parentId;
+  for (const child of children) {
+    child.parentId = folder.parentId;
+  }
   for (const note of vaultState.notes) {
-    if (!note.folderId || !affectedFolders.has(note.folderId)) continue;
+    if (!note.folderId || !affectedFolders.has(note.folderId)) {
+      continue;
+    }
     note.relativePath = "";
-    if (note.folderId === id) note.folderId = folder.parentId;
+    if (note.folderId === id) {
+      note.folderId = folder.parentId;
+    }
   }
   vaultState.folders.splice(vaultState.folders.indexOf(folder), 1);
-  if (vaultState.selectedFolderId === id) vaultState.selectedFolderId = "all";
+  if (vaultState.selectedFolderId === id) {
+    vaultState.selectedFolderId = "all";
+  }
   notify("Folder removed; its contents moved up one level", "neutral");
 }
 
 export function createFromTemplate(templateId: string, requestedTitle?: string): Note | undefined {
   const template = vaultState.templates.find((candidate) => candidate.id === templateId);
-  if (!template) return undefined;
+  if (!template) {
+    return undefined;
+  }
   const now = new Date();
   const date = new Intl.DateTimeFormat("en", {
     month: "long",
@@ -704,6 +912,7 @@ export function createFromTemplate(templateId: string, requestedTitle?: string):
   const title = requestedTitle?.trim() || replaceTemplateTokens(template.titlePattern, { date, time, title: template.name });
   const uniqueTitle = uniqueNoteTitle(title || template.name);
   const content = replaceTemplateTokens(template.content, { date, time, title: uniqueTitle });
+
   return createNote(currentFolderId(), uniqueTitle, content);
 }
 
@@ -713,6 +922,7 @@ export function saveTemplate(template: Partial<NoteTemplate> & Pick<NoteTemplate
     : undefined;
   if (existing) {
     Object.assign(existing, template);
+
     return existing;
   }
   const created: NoteTemplate = {
@@ -725,6 +935,7 @@ export function saveTemplate(template: Partial<NoteTemplate> & Pick<NoteTemplate
     createdAt: Date.now(),
   };
   vaultState.templates.push(created);
+
   return created;
 }
 
@@ -734,6 +945,7 @@ export function saveSnippet(snippet: Partial<CssSnippet> & Pick<CssSnippet, "nam
     : undefined;
   if (existing) {
     Object.assign(existing, snippet);
+
     return existing;
   }
   const created: CssSnippet = {
@@ -745,19 +957,24 @@ export function saveSnippet(snippet: Partial<CssSnippet> & Pick<CssSnippet, "nam
     createdAt: Date.now(),
   };
   vaultState.snippets.push(created);
+
   return created;
 }
 
 export function deleteSnippet(id: string): void {
   const index = vaultState.snippets.findIndex((snippet) => snippet.id === id);
-  if (index >= 0) vaultState.snippets.splice(index, 1);
+  if (index >= 0) {
+    vaultState.snippets.splice(index, 1);
+  }
 }
 
 export async function mergeImportedVault(
   result: ImportResult,
   replace = false,
 ): Promise<{ noteCount: number; saved: boolean }> {
-  if (!(await flushVault())) return { noteCount: result.notes.length, saved: false };
+  if (!(await flushVault())) {
+    return { noteCount: result.notes.length, saved: false };
+  }
   clearTimeout(persistTimer);
   const previousVault = snapshotVault();
   const previousSavedVersion = savedVersion;
@@ -787,7 +1004,9 @@ export async function mergeImportedVault(
     const existing = vaultState.snippets.find(
       (snippet) => snippet.name.toLocaleLowerCase() === imported.name.toLocaleLowerCase(),
     );
-    if (existing) continue;
+    if (existing) {
+      continue;
+    }
     vaultState.snippets.push({
       id: createId("snippet"),
       name: imported.name,
@@ -816,6 +1035,7 @@ export async function mergeImportedVault(
       : "Import applied, but not saved",
     saved ? "success" : "warning",
   );
+
   return { noteCount: result.notes.length, saved };
 }
 
@@ -844,7 +1064,9 @@ export function buildExportPayload(): {
 }
 
 export function folderPath(id: string | null): string {
-  if (!id) return "";
+  if (!id) {
+    return "";
+  }
   const parts: string[] = [];
   const seen = new Set<string>();
   let cursor = folderById.value.get(id);
@@ -853,11 +1075,13 @@ export function folderPath(id: string | null): string {
     seen.add(cursor.id);
     cursor = cursor.parentId ? folderById.value.get(cursor.parentId) : undefined;
   }
+
   return parts.join("/");
 }
 
 export function noteCountForFolder(id: string): number {
   const ids = new Set([id, ...descendantFolderIds(id)]);
+
   return vaultState.notes.filter((note) => note.folderId && ids.has(note.folderId)).length;
 }
 
@@ -876,7 +1100,9 @@ export function notify(message: string, tone: ToastTone = "neutral"): void {
 }
 
 export async function clearVault(): Promise<boolean> {
-  if (!(await flushVault())) return false;
+  if (!(await flushVault())) {
+    return false;
+  }
   clearTimeout(persistTimer);
   const previousVault = snapshotVault();
   const previousSavedVersion = savedVersion;
@@ -886,6 +1112,7 @@ export async function clearVault(): Promise<boolean> {
   vaultState.selectedFolderId = "all";
   uiState.noteFilter = "";
   uiState.commandOpen = false;
+  resetSearchState();
   uiState.contextOpen = false;
   uiState.explorerOpen = true;
   const saved = await flushVault();
@@ -895,6 +1122,7 @@ export async function clearVault(): Promise<boolean> {
     savedVersion = previousSavedVersion;
   }
   notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
+
   return saved;
 }
 
@@ -916,6 +1144,7 @@ function noteStemKey(note: Note): string {
 
 function noteFileNameKeys(note: Note): Set<string> {
   const stem = noteStemKey(note);
+
   return new Set([`${stem}.md`, `${stem}.markdown`]);
 }
 
@@ -936,7 +1165,9 @@ function safeNoteStem(title: string): string {
       byteLength += encoder.encode(addition).length;
     }
     previousWasReplacement = forbidden;
-    if (byteLength >= 120) break;
+    if (byteLength >= 120) {
+      break;
+    }
   }
 
   result = result.replace(/^[ .]+|[ .]+$/g, "") || "Untitled note";
@@ -944,14 +1175,20 @@ function safeNoteStem(title: string): string {
   if (["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"].includes(windowsBase)) {
     return `_${result}`;
   }
+
   return result;
 }
 
 function uniqueNoteTitle(base: string): string {
   const normalized = new Set(vaultState.notes.map((note) => note.title.toLocaleLowerCase()));
-  if (!normalized.has(base.toLocaleLowerCase())) return base;
+  if (!normalized.has(base.toLocaleLowerCase())) {
+    return base;
+  }
   let suffix = 2;
-  while (normalized.has(`${base} ${suffix}`.toLocaleLowerCase())) suffix += 1;
+  while (normalized.has(`${base} ${suffix}`.toLocaleLowerCase())) {
+    suffix += 1;
+  }
+
   return `${base} ${suffix}`;
 }
 
@@ -973,6 +1210,7 @@ function ensureFolderPath(path: string): string | null {
     }
     parentId = folder.id;
   }
+
   return parentId;
 }
 
@@ -988,6 +1226,7 @@ function descendantFolderIds(id: string): string[] {
       }
     }
   }
+
   return result;
 }
 
@@ -999,6 +1238,7 @@ function createId(prefix: string): string {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
   return `${prefix}-${random}`;
 }
 
@@ -1010,11 +1250,16 @@ interface StoredVault {
 
 function readStoredVault(): StoredVault | null {
   const raw = safeStorageGet(STORAGE_KEY);
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   try {
     const parsed = JSON.parse(raw) as Partial<VaultData>;
-    if (!Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) return null;
+    if (!Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) {
+      return null;
+    }
     const vault = normalizeVault(parsed);
+
     return {
       raw,
       vault,
@@ -1058,6 +1303,7 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
           description: currentWideSnippet.description,
         };
       }
+
       return snippet;
     });
 
@@ -1115,10 +1361,19 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
   uiState.lastSavedAt = Date.now();
   uiState.noteFilter = "";
   uiState.commandOpen = false;
+  resetSearchState();
   uiState.vaultChooserOpen = false;
   if (workspace.warnings.length) {
     notify(`${workspace.warnings.length} ${workspace.warnings.length === 1 ? "file warning" : "file warnings"} while opening the vault`, "warning");
   }
+}
+
+function resetSearchState(): void {
+  searchState.query = "";
+  searchState.scope = "all";
+  searchState.exactTag = null;
+  searchState.quickQuery = "";
+  searchState.focusRequest += 1;
 }
 
 function mergeRecentVaults(
@@ -1126,19 +1381,24 @@ function mergeRecentVaults(
   recentVaults: VaultDescriptor[],
 ): VaultDescriptor[] {
   const merged = [current, ...recentVaults.filter((vault) => vault.path !== current.path)];
+
   return merged.slice(0, 12);
 }
 
 async function flushBeforeVaultChange(): Promise<boolean> {
-  if (savedVersion >= dirtyVersion) return true;
+  if (savedVersion >= dirtyVersion) {
+    return true;
+  }
   if (vaultSession.phase !== "ready") {
     vaultSession.error = "Choose a vault before saving changes.";
+
     return false;
   }
   const saved = await flushVault();
   if (!saved) {
     vaultSession.error = "Save the current changes before switching vaults.";
   }
+
   return saved;
 }
 
@@ -1147,25 +1407,34 @@ function persistBrowserVault(vault: VaultData): boolean {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(vault));
     uiState.saveStatus = "saved";
     uiState.lastSavedAt = Date.now();
+
     return true;
   } catch {
     uiState.saveStatus = "error";
+
     return false;
   }
 }
 
 function installVaultLifecycleHandlers(): void {
-  if (typeof window === "undefined" || externalCheckTimer) return;
+  if (typeof window === "undefined" || externalCheckTimer) {
+    return;
+  }
 
   window.addEventListener("blur", () => void flushVault());
   window.addEventListener("focus", () => void refreshWorkspaceFromDisk());
   window.addEventListener("beforeunload", () => void flushVault());
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") void flushVault();
-    else void refreshWorkspaceFromDisk();
+    if (document.visibilityState === "hidden") {
+      void flushVault();
+    } else {
+      void refreshWorkspaceFromDisk();
+    }
   });
 
-  if (vaultSession.backend === "native") void installNativeCloseHandler();
+  if (vaultSession.backend === "native") {
+    void installNativeCloseHandler();
+  }
 
   externalCheckTimer = setInterval(
     () => void refreshWorkspaceFromDisk(),
@@ -1174,22 +1443,30 @@ function installVaultLifecycleHandlers(): void {
 }
 
 async function installNativeCloseHandler(): Promise<void> {
-  if (closeHandlerInstalled) return;
+  if (closeHandlerInstalled) {
+    return;
+  }
   closeHandlerInstalled = true;
   const appWindow = getCurrentWindow();
   try {
     await appWindow.onCloseRequested(async (event) => {
-      if (closingAfterSave) return;
+      if (closingAfterSave) {
+        return;
+      }
       if (vaultSession.busy) {
         event.preventDefault();
         notify("Wait for the current vault action to finish before closing", "warning");
+
         return;
       }
-      if (savedVersion >= dirtyVersion && !saveInFlight) return;
+      if (savedVersion >= dirtyVersion && !saveInFlight) {
+        return;
+      }
       event.preventDefault();
       const saved = await flushVault();
       if (!saved) {
         notify(vaultSession.error || "Save the current changes before closing", "warning");
+
         return;
       }
       closingAfterSave = true;
@@ -1219,7 +1496,9 @@ async function refreshWorkspaceFromDisk(): Promise<void> {
   const generation = sessionGeneration;
   try {
     const revision = await getWorkspaceRevision(path);
-    if (revision === vaultSession.revision) return;
+    if (revision === vaultSession.revision) {
+      return;
+    }
     const workspace = await openWorkspace(path, createEmptyVault());
     if (
       generation !== sessionGeneration
@@ -1244,18 +1523,26 @@ function setVaultError(error: unknown, fallback: string): void {
 
 function isRevisionConflict(message: string): boolean {
   const normalized = message.toLocaleLowerCase();
+
   return normalized.includes("changed")
     && (normalized.includes("vault") || normalized.includes("file") || normalized.includes("disk"));
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  if (typeof error === "string" && error.trim()) return error;
-  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
   return fallback;
 }
 
 function safeStorageGet(key: string): string | null {
-  if (typeof localStorage === "undefined") return null;
+  if (typeof localStorage === "undefined") {
+    return null;
+  }
   try {
     return localStorage.getItem(key);
   } catch {
@@ -1264,12 +1551,26 @@ function safeStorageGet(key: string): string | null {
 }
 
 function safeStorageSet(key: string, value: string): void {
-  if (typeof localStorage === "undefined") return;
+  if (typeof localStorage === "undefined") {
+    return;
+  }
   try {
     localStorage.setItem(key, value);
   } catch {
-    // The filesystem vault is already complete, and the original browser payload remains intact.
+    // Local preferences are non-critical when browser storage is unavailable.
   }
+}
+
+function readStoredZoom(): number {
+  const storedZoom = Number.parseFloat(safeStorageGet(APP_ZOOM_KEY) ?? "");
+
+  return Number.isFinite(storedZoom) ? clampZoom(storedZoom) : 1;
+}
+
+function clampZoom(zoom: number): number {
+  const roundedZoom = Number((Math.round(zoom / ZOOM_STEP) * ZOOM_STEP).toFixed(2));
+
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, roundedZoom));
 }
 
 function storageFingerprint(value: string): string {
@@ -1278,11 +1579,14 @@ function storageFingerprint(value: string): string {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 16_777_619);
   }
+
   return `v1-${value.length}-${(hash >>> 0).toString(16)}`;
 }
 
 function applyEnabledSnippets(): void {
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined") {
+    return;
+  }
   let style = document.querySelector<HTMLStyleElement>("#obsidian-at-home-user-snippets");
   if (!style) {
     style = document.createElement("style");

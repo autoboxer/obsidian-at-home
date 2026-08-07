@@ -109,9 +109,13 @@ const LANGUAGE_ALIASES: Record<string, string> = {
 
 /** Highlight only explicitly supported top-level fence languages. */
 export function highlightCode(code: string, language: string): string | undefined {
-  if (code.length > MAX_HIGHLIGHT_CHARS) return undefined;
+  if (code.length > MAX_HIGHLIGHT_CHARS) {
+    return undefined;
+  }
   const normalized = LANGUAGE_ALIASES[language.toLowerCase()];
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   try {
     return hljs.highlight(code, { language: normalized, ignoreIllegals: true }).value;
   } catch {

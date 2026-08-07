@@ -480,6 +480,7 @@ fn should_visit_note_entry(entry: &DirEntry) -> bool {
     }
     if entry.file_type().is_dir() {
         let name = entry.file_name().to_string_lossy();
+
         return !name.eq_ignore_ascii_case(".obsidian")
             && !name.eq_ignore_ascii_case(".trash");
     }
@@ -499,12 +500,14 @@ fn import_snippets(root: &Path, warnings: &mut WarningCollector) -> Vec<VaultSni
     let obsidian = root.join(".obsidian");
     if is_symlink(&obsidian) {
         warnings.push("Skipped .obsidian because it is a symbolic link.".to_owned());
+
         return Vec::new();
     }
 
     let snippets_directory = obsidian.join("snippets");
     if is_symlink(&snippets_directory) {
         warnings.push("Skipped .obsidian/snippets because it is a symbolic link.".to_owned());
+
         return Vec::new();
     }
     if !snippets_directory.is_dir() {
@@ -516,6 +519,7 @@ fn import_snippets(root: &Path, warnings: &mut WarningCollector) -> Vec<VaultSni
         Ok(entries) => entries,
         Err(error) => {
             warnings.push(format!("Could not read CSS snippets: {error}"));
+
             return Vec::new();
         }
     };
@@ -595,21 +599,25 @@ fn read_enabled_snippets(obsidian: &Path, warnings: &mut WarningCollector) -> Ha
         Err(error) if error.kind() == io::ErrorKind::NotFound => return HashSet::new(),
         Err(error) => {
             warnings.push(format!("Could not inspect .obsidian/appearance.json: {error}"));
+
             return HashSet::new();
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         warnings.push("Skipped .obsidian/appearance.json because it is not a regular file.".into());
+
         return HashSet::new();
     }
     if metadata.len() > 1024 * 1024 {
         warnings.push("Skipped .obsidian/appearance.json because it is unexpectedly large.".into());
+
         return HashSet::new();
     }
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) => {
             warnings.push(format!("Could not read .obsidian/appearance.json: {error}"));
+
             return HashSet::new();
         }
     };
@@ -619,6 +627,7 @@ fn read_enabled_snippets(obsidian: &Path, warnings: &mut WarningCollector) -> Ha
             warnings.push(format!(
                 "Could not parse .obsidian/appearance.json; snippets were imported as disabled: {error}"
             ));
+
             return HashSet::new();
         }
     };
@@ -781,6 +790,7 @@ fn parse_yaml_scalar(value: &str) -> String {
         if escaped {
             output.push('\\');
         }
+
         return output;
     }
 
@@ -977,13 +987,16 @@ fn write_unique_text_file(
                 if let Err(error) = file.write_all(content.as_bytes()) {
                     drop(file);
                     let _ = fs::remove_file(&path);
+
                     return Err(error);
                 }
                 if let Err(error) = file.flush() {
                     drop(file);
                     let _ = fs::remove_file(&path);
+
                     return Err(error);
                 }
+
                 return Ok(path);
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

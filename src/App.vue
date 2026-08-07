@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import ActivityRail from "./components/ActivityRail.vue";
 import AppIcon from "./components/AppIcon.vue";
 import CommandPalette from "./components/CommandPalette.vue";
@@ -11,7 +11,18 @@ import SettingsView from "./components/SettingsView.vue";
 import SnippetStudio from "./components/SnippetStudio.vue";
 import TemplateGallery from "./components/TemplateGallery.vue";
 import VaultChooser from "./components/VaultChooser.vue";
-import { activeNote, createNote, uiState, vaultSession, vaultState } from "./stores/vault";
+import { applyAppZoom } from "./services/native";
+import {
+  activeNote,
+  createNote,
+  openQuickSearch,
+  resetZoom,
+  uiState,
+  vaultSession,
+  vaultState,
+  zoomIn,
+  zoomOut,
+} from "./stores/vault";
 import type { ToolView } from "./types";
 
 const requestedView = new URLSearchParams(window.location.search).get("view") as ToolView | null;
@@ -27,11 +38,26 @@ const appInteractionBlocked = computed(
   () => vaultSession.phase !== "ready" || uiState.vaultChooserOpen,
 );
 
+watch(
+  () => uiState.zoom,
+  (zoom) => void applyAppZoom(zoom),
+  { immediate: true },
+);
+
 const titlebarContext = computed(() => {
-  if (uiState.tool === "notes") return activeNote.value?.title || vaultState.name;
-  if (uiState.tool === "search") return "Search";
-  if (uiState.tool === "templates") return "Templates";
-  if (uiState.tool === "snippets") return "CSS snippets";
+  if (uiState.tool === "notes") {
+    return activeNote.value?.title || vaultState.name;
+  }
+  if (uiState.tool === "search") {
+    return "Search";
+  }
+  if (uiState.tool === "templates") {
+    return "Templates";
+  }
+  if (uiState.tool === "snippets") {
+    return "CSS snippets";
+  }
+
   return "Settings";
 });
 
@@ -47,24 +73,47 @@ function handleKeyboard(event: KeyboardEvent): void {
     || !modifier && !isEditing && key === "/"
   );
 
+  if (modifier && !event.altKey && ["+", "=", "-", "_", "0"].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === "0") {
+      resetZoom();
+    } else if (event.key === "-" || event.key === "_") {
+      zoomOut();
+    } else {
+      zoomIn();
+    }
+
+    return;
+  }
+
   if (vaultSession.phase !== "ready" || uiState.vaultChooserOpen) {
-    if (appShortcut) event.preventDefault();
+    if (appShortcut) {
+      event.preventDefault();
+    }
+
     return;
   }
 
   if (modifier && key === "k") {
     event.preventDefault();
-    uiState.commandOpen = !uiState.commandOpen;
+    if (uiState.commandOpen) {
+      uiState.commandOpen = false;
+    } else {
+      openQuickSearch();
+    }
+
     return;
   }
   if (modifier && key === "n") {
     event.preventDefault();
     createNote();
+
     return;
   }
   if (modifier && event.shiftKey && key === "t") {
     event.preventDefault();
     uiState.tool = "templates";
+
     return;
   }
   if (modifier && key === "\\") {
@@ -75,10 +124,14 @@ function handleKeyboard(event: KeyboardEvent): void {
     } else {
       uiState.explorerOpen = !uiState.explorerOpen;
     }
+
     return;
   }
   if (event.key === "Escape" && uiState.commandOpen) {
+    event.preventDefault();
+    event.stopPropagation();
     uiState.commandOpen = false;
+
     return;
   }
 

@@ -22,27 +22,39 @@ const canClose = computed(
 const nativeAvailable = computed(() => vaultSession.backend === "native");
 const nameReady = computed(() => vaultName.value.trim().length > 0);
 const errorTitle = computed(() => {
-  if (vaultSession.conflict) return "This vault changed on disk";
-  if (vaultSession.phase === "error") return "Couldn’t open your vaults";
+  if (vaultSession.conflict) {
+    return "This vault changed on disk";
+  }
+  if (vaultSession.phase === "error") {
+    return "Couldn’t open your vaults";
+  }
+
   return "Couldn’t save or open this vault";
 });
 
 function closeChooser(): void {
-  if (canClose.value) uiState.vaultChooserOpen = false;
+  if (canClose.value) {
+    uiState.vaultChooserOpen = false;
+  }
 }
 
 function handleWindowKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") closeChooser();
+  if (event.key === "Escape") {
+    closeChooser();
+  }
 }
 
 function handleDialogKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Tab" || !dialog.value) return;
+  if (event.key !== "Tab" || !dialog.value) {
+    return;
+  }
   const focusable = Array.from(dialog.value.querySelectorAll<HTMLElement>(
     "button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex='-1'])",
   )).filter((element) => !element.hasAttribute("hidden"));
   if (!focusable.length) {
     event.preventDefault();
     dialog.value.focus();
+
     return;
   }
   const first = focusable[0];
@@ -61,9 +73,13 @@ function focusInitialControl(): void {
     const recoveryAction = dialog.value?.querySelector<HTMLButtonElement>(
       ".vault-chooser-conflict button:not(:disabled)",
     );
-    if (recoveryAction) recoveryAction.focus();
-    else if (nameField.value && !nameField.value.disabled) nameField.value.select();
-    else dialog.value?.focus();
+    if (recoveryAction) {
+      recoveryAction.focus();
+    } else if (nameField.value && !nameField.value.disabled) {
+      nameField.value.select();
+    } else {
+      dialog.value?.focus();
+    }
   });
 }
 
@@ -80,29 +96,45 @@ onMounted(() => {
 onBeforeUnmount(() => window.removeEventListener("keydown", handleWindowKeydown));
 
 async function createVault(useLegacy: boolean): Promise<void> {
-  if (!nativeAvailable.value || vaultSession.busy || !nameReady.value) return;
+  if (!nativeAvailable.value || vaultSession.busy || !nameReady.value) {
+    return;
+  }
   const succeeded = await createFilesystemVault(vaultName.value.trim(), useLegacy);
-  if (succeeded) closeChooser();
+  if (succeeded) {
+    closeChooser();
+  }
 }
 
 async function openVault(): Promise<void> {
-  if (!nativeAvailable.value || vaultSession.busy) return;
+  if (!nativeAvailable.value || vaultSession.busy) {
+    return;
+  }
   const succeeded = await openFilesystemVault();
-  if (succeeded) closeChooser();
+  if (succeeded) {
+    closeChooser();
+  }
 }
 
 async function switchVault(path: string): Promise<void> {
-  if (!nativeAvailable.value || vaultSession.busy || path === vaultSession.path) return;
+  if (!nativeAvailable.value || vaultSession.busy || path === vaultSession.path) {
+    return;
+  }
   const succeeded = await switchFilesystemVault(path);
-  if (succeeded) closeChooser();
+  if (succeeded) {
+    closeChooser();
+  }
 }
 
 async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
-  if (vaultSession.busy) return;
+  if (vaultSession.busy) {
+    return;
+  }
   const succeeded = reloadFromDisk
     ? await reloadFilesystemVault()
     : await overwriteFilesystemVault();
-  if (succeeded) closeChooser();
+  if (succeeded) {
+    closeChooser();
+  }
 }
 </script>
 

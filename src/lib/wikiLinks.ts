@@ -24,6 +24,7 @@ export function normalizeWikiTarget(value: string): string {
 export function wikiTargetTitle(value: string): string {
   const normalized = normalizeWikiTarget(value);
   const slash = normalized.lastIndexOf("/");
+
   return normalized.slice(slash + 1);
 }
 
@@ -56,7 +57,9 @@ export function parseWikiLinks(markdown: string): WikiLink[] {
     }
 
     const parsed = parseWikiLinkAt(markdown, index);
-    if (!parsed) continue;
+    if (!parsed) {
+      continue;
+    }
 
     links.push(parsed);
     index += parsed.raw.length - 1;
@@ -73,16 +76,22 @@ export function parseWikiLinkAt(
   const embedded = source[index] === "!";
   const openIndex = embedded ? index + 1 : index;
 
-  if (embedded && isEscaped(source, index)) return undefined;
+  if (embedded && isEscaped(source, index)) {
+    return undefined;
+  }
 
   if (source[openIndex] !== "[" || source[openIndex + 1] !== "[") {
     return undefined;
   }
 
-  if (isEscaped(source, openIndex)) return undefined;
+  if (isEscaped(source, openIndex)) {
+    return undefined;
+  }
 
   const closeIndex = findWikiClose(source, openIndex + 2);
-  if (closeIndex < 0) return undefined;
+  if (closeIndex < 0) {
+    return undefined;
+  }
 
   const inner = source.slice(openIndex + 2, closeIndex);
   if (!inner.trim() || inner.includes("\n") || inner.includes("\r")) {
@@ -97,7 +106,9 @@ export function parseWikiLinkAt(
   const target = normalizeWikiTarget(rawTarget);
 
   // A heading-only link is valid, but a link with neither a target nor heading is not.
-  if (!target && !heading) return undefined;
+  if (!target && !heading) {
+    return undefined;
+  }
 
   const fallbackDisplay = target
     ? wikiTargetTitle(target)
@@ -129,14 +140,18 @@ export function resolveWikiLink(
   const rawTarget = typeof link === "string" ? link : link.target;
   const normalizedTarget = normalizeForComparison(rawTarget);
 
-  if (!normalizedTarget) return sourceNote;
+  if (!normalizedTarget) {
+    return sourceNote;
+  }
 
   const targetTitle = normalizeForComparison(wikiTargetTitle(rawTarget));
   let basenameMatch: Note | undefined;
 
   for (const note of notes) {
     const normalizedTitle = normalizeForComparison(note.title);
-    if (normalizedTitle === normalizedTarget) return note;
+    if (normalizedTitle === normalizedTarget) {
+      return note;
+    }
 
     if (
       !basenameMatch &&
@@ -158,15 +173,21 @@ export function findBacklinks(
     ? resolveWikiLink(target, notes)
     : target;
 
-  if (!targetNote) return [];
+  if (!targetNote) {
+    return [];
+  }
 
   const backlinks: Backlink[] = [];
   for (const note of notes) {
-    if (note.id === targetNote.id) continue;
+    if (note.id === targetNote.id) {
+      continue;
+    }
 
     for (const link of parseWikiLinks(note.content)) {
       const resolved = resolveWikiLink(link, notes, note);
-      if (resolved?.id !== targetNote.id) continue;
+      if (resolved?.id !== targetNote.id) {
+        continue;
+      }
 
       backlinks.push({
         note,
@@ -221,7 +242,9 @@ function codeRanges(markdown: string): TextRange[] {
   let match: RegExpExecArray | null;
 
   while ((match = linePattern.exec(markdown)) !== null) {
-    if (!match[0]) break;
+    if (!match[0]) {
+      break;
+    }
     const lineStart = match.index;
     const line = match[0].replace(/\r?\n$/, "");
 
@@ -247,10 +270,14 @@ function codeRanges(markdown: string): TextRange[] {
       }
     }
 
-    if (linePattern.lastIndex >= markdown.length) break;
+    if (linePattern.lastIndex >= markdown.length) {
+      break;
+    }
   }
 
-  if (fence) ranges.push({ start: fence.start, end: markdown.length });
+  if (fence) {
+    ranges.push({ start: fence.start, end: markdown.length });
+  }
 
   // Inline code ranges only need to be found outside fences.
   let fenceIndex = 0;
@@ -263,10 +290,14 @@ function codeRanges(markdown: string): TextRange[] {
       index = fenced.end - 1;
       continue;
     }
-    if (markdown[index] !== "`" || isEscaped(markdown, index)) continue;
+    if (markdown[index] !== "`" || isEscaped(markdown, index)) {
+      continue;
+    }
 
     const start = index;
-    while (markdown[index + 1] === "`") index += 1;
+    while (markdown[index + 1] === "`") {
+      index += 1;
+    }
     const size = index - start + 1;
     const delimiter = "`".repeat(size);
     const close = markdown.indexOf(delimiter, index + 1);
@@ -289,6 +320,7 @@ function findWikiClose(source: string, start: number): number {
       return index;
     }
   }
+
   return -1;
 }
 
@@ -304,6 +336,7 @@ function splitUnescaped(value: string, separator: string, limit = Infinity): str
   }
 
   pieces.push(value.slice(start));
+
   return pieces;
 }
 
@@ -316,5 +349,6 @@ function isEscaped(value: string, index: number): boolean {
   for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
     slashCount += 1;
   }
+
   return slashCount % 2 === 1;
 }

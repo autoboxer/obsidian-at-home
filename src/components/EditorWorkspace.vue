@@ -21,6 +21,7 @@ import SourceEditor from "./SourceEditor.vue";
 const tagInputOpen = ref(false);
 const tagInput = ref("");
 const tagField = ref<HTMLInputElement>();
+const tagSuggestionIndex = ref(-1);
 const noteMenuOpen = ref(false);
 const quickFolderOpen = ref(false);
 const quickFolderName = ref("");
@@ -29,8 +30,33 @@ const quickFolderButton = ref<HTMLButtonElement>();
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
 const sortedFolders = computed(() => [...vaultState.folders].sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
+const tagSuggestions = computed(() => {
+  const query = normalizeTag(tagInput.value).toLocaleLowerCase();
+  const appliedTags = new Set(activeNote.value?.tags.map((tag) => tag.toLocaleLowerCase()) ?? []);
+  const uniqueTags = new Map<string, string>();
+
+  for (const note of vaultState.notes) {
+    for (const tag of note.tags) {
+      if (!uniqueTags.has(tag.toLocaleLowerCase())) {
+        uniqueTags.set(tag.toLocaleLowerCase(), tag);
+      }
+    }
+  }
+
+  return [...uniqueTags.values()]
+    .filter((tag) => !appliedTags.has(tag.toLocaleLowerCase()))
+    .filter((tag) => !query || tag.toLocaleLowerCase().includes(query))
+    .sort((a, b) => {
+      const aStartsWithQuery = query && a.toLocaleLowerCase().startsWith(query) ? 0 : 1;
+      const bStartsWithQuery = query && b.toLocaleLowerCase().startsWith(query) ? 0 : 1;
+
+      return aStartsWithQuery - bStartsWithQuery || a.localeCompare(b);
+    })
+    .slice(0, 7);
+});
 const wordCount = computed(() => {
   const content = activeNote.value?.content ?? "";
+
   return content.trim() ? content.trim().split(/\s+/).length : 0;
 });
 const characterCount = computed(() => activeNote.value?.content.length ?? 0);
@@ -42,33 +68,81 @@ const modes: Array<{ id: EditorMode; label: string; icon: string }> = [
 ];
 
 function setTitle(event: Event): void {
-  if (!activeNote.value) return;
+  if (!activeNote.value) {
+    return;
+  }
   updateNote(activeNote.value.id, { title: (event.target as HTMLInputElement).value });
 }
 
 function setContent(content: string): void {
-  if (activeNote.value) updateNote(activeNote.value.id, { content });
+  if (activeNote.value) {
+    updateNote(activeNote.value.id, { content });
+  }
 }
 
 function setFolder(event: Event): void {
-  if (!activeNote.value) return;
+  if (!activeNote.value) {
+    return;
+  }
   const value = (event.target as HTMLSelectElement).value;
   updateNote(activeNote.value.id, { folderId: value || null });
 }
 
 function openTagInput(): void {
+  tagInput.value = "";
+  tagSuggestionIndex.value = -1;
   tagInputOpen.value = true;
-  nextTick(() => tagField.value?.focus());
+  nextTick(() => {
+    tagField.value?.focus();
+    tagField.value?.select();
+  });
 }
 
-function addTag(): void {
-  if (!activeNote.value) return;
-  const tag = tagInput.value.trim().replace(/^#/, "").replace(/\s+/g, "-");
-  if (tag && !activeNote.value.tags.includes(tag)) {
+function normalizeTag(value: string): string {
+  return value.trim().replace(/^#/, "").replace(/\s+/g, "-");
+}
+
+function addTag(suggestedTag?: string): void {
+  if (!activeNote.value) {
+    return;
+  }
+
+  const tag = normalizeTag(suggestedTag ?? tagInput.value);
+  const alreadyApplied = activeNote.value.tags.some(
+    (candidate) => candidate.toLocaleLowerCase() === tag.toLocaleLowerCase(),
+  );
+  if (tag && !alreadyApplied) {
     updateNote(activeNote.value.id, { tags: [...activeNote.value.tags, tag] });
   }
+
   tagInput.value = "";
+  tagSuggestionIndex.value = -1;
   tagInputOpen.value = false;
+}
+
+function submitTag(): void {
+  const suggestion = tagSuggestionIndex.value >= 0
+    ? tagSuggestions.value[tagSuggestionIndex.value]
+    : undefined;
+  addTag(suggestion);
+}
+
+function cancelTagInput(): void {
+  tagInput.value = "";
+  tagSuggestionIndex.value = -1;
+  tagInputOpen.value = false;
+}
+
+function handleTagKeydown(event: KeyboardEvent): void {
+  if (event.key === "ArrowDown" && tagSuggestions.value.length) {
+    event.preventDefault();
+    tagSuggestionIndex.value = (tagSuggestionIndex.value + 1) % tagSuggestions.value.length;
+  } else if (event.key === "ArrowUp" && tagSuggestions.value.length) {
+    event.preventDefault();
+    tagSuggestionIndex.value = tagSuggestionIndex.value <= 0
+      ? tagSuggestions.value.length - 1
+      : tagSuggestionIndex.value - 1;
+  }
 }
 
 function removeTag(tag: string): void {
@@ -78,7 +152,9 @@ function removeTag(tag: string): void {
 }
 
 function requestDelete(): void {
-  if (!activeNote.value) return;
+  if (!activeNote.value) {
+    return;
+  }
   noteMenuOpen.value = false;
   if (window.confirm(`Delete “${activeNote.value.title || "Untitled note"}”? This cannot be undone.`)) {
     deleteNote(activeNote.value.id);
@@ -93,27 +169,39 @@ function openQuickFolder(): void {
 function closeQuickFolder(restoreFocus = false): void {
   quickFolderOpen.value = false;
   quickFolderName.value = "";
-  if (restoreFocus) nextTick(() => quickFolderButton.value?.focus());
+  if (restoreFocus) {
+    nextTick(() => quickFolderButton.value?.focus());
+  }
 }
 
 function submitQuickFolder(): void {
   const name = quickFolderName.value.trim();
-  if (name) createFolder(name);
+  if (name) {
+    createFolder(name);
+  }
   closeQuickFolder(true);
 }
 
 function handleQuickFolderFocusOut(event: FocusEvent): void {
   const form = event.currentTarget as HTMLElement;
   const next = event.relatedTarget;
-  if (!(next instanceof Node) || !form.contains(next)) closeQuickFolder();
+  if (!(next instanceof Node) || !form.contains(next)) {
+    closeQuickFolder();
+  }
 }
 
 watch(
   () => uiState.explorerOpen,
   (open) => {
-    if (open) closeQuickFolder();
+    if (open) {
+      closeQuickFolder();
+    }
   },
 );
+
+watch(tagInput, () => {
+  tagSuggestionIndex.value = -1;
+});
 </script>
 
 <template>
@@ -246,6 +334,7 @@ watch(
         <div class="document-heading">
           <input
             class="note-title-input"
+            data-ui-region="note-title"
             :value="activeNote.title"
             aria-label="Note title"
             placeholder="Untitled note"
@@ -269,9 +358,40 @@ watch(
               </button>
             </span>
             <Transition name="chip-swap" mode="out-in">
-              <form v-if="tagInputOpen" key="tag-input" class="inline-tag-form" @submit.prevent="addTag">
+              <form v-if="tagInputOpen" key="tag-input" class="inline-tag-form" @submit.prevent="submitTag">
                 <span>#</span>
-                <input ref="tagField" v-model="tagInput" placeholder="tag" @blur="addTag" @keydown.esc="tagInputOpen = false" />
+                <input
+                  ref="tagField"
+                  v-model="tagInput"
+                  placeholder="tag"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  autocorrect="off"
+                  spellcheck="false"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-controls="tag-suggestions"
+                  :aria-expanded="tagSuggestions.length > 0"
+                  :aria-activedescendant="tagSuggestionIndex >= 0 ? `tag-suggestion-${tagSuggestionIndex}` : undefined"
+                  @blur="addTag()"
+                  @keydown="handleTagKeydown"
+                  @keydown.esc.prevent="cancelTagInput"
+                />
+                <div v-if="tagSuggestions.length" id="tag-suggestions" class="tag-suggestions" role="listbox">
+                  <button
+                    v-for="(tag, index) in tagSuggestions"
+                    :id="`tag-suggestion-${index}`"
+                    :key="tag"
+                    type="button"
+                    role="option"
+                    :aria-selected="index === tagSuggestionIndex"
+                    :class="{ active: index === tagSuggestionIndex }"
+                    @mouseenter="tagSuggestionIndex = index"
+                    @mousedown.prevent="addTag(tag)"
+                  >
+                    <span>#</span>{{ tag }}
+                  </button>
+                </div>
               </form>
               <button v-else key="tag-button" type="button" class="add-tag-button" @click="openTagInput">
                 <AppIcon name="plus" :size="12" /> Add tag
@@ -299,7 +419,11 @@ watch(
             :aria-hidden="vaultState.editorMode === 'source'"
             :inert="vaultState.editorMode === 'source'"
           >
-            <MarkdownPreview :content="activeNote.content" @open-wiki="createLinkedNote" />
+            <MarkdownPreview
+              :content="activeNote.content"
+              @open-wiki="createLinkedNote"
+              @update:content="setContent"
+            />
           </div>
         </div>
       </section>

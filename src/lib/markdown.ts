@@ -16,6 +16,7 @@ interface RenderContext {
   options: MarkdownRenderOptions;
   depth: number;
   listDepth: number;
+  taskCounter: { value: number };
 }
 
 interface ListTextPart {
@@ -30,6 +31,7 @@ interface ListHtmlPart {
 
 interface ListItem {
   checked?: boolean;
+  taskIndex?: number;
   parts: Array<ListTextPart | ListHtmlPart>;
 }
 
@@ -60,20 +62,32 @@ export function renderMarkdown(
   options: MarkdownRenderOptions = {},
 ): string {
   const safeMarkdown = markdown.replace(/\0/g, "");
+
   return renderBlocks(stripLeadingFrontmatterForPreview(safeMarkdown), {
     options,
     depth: 0,
     listDepth: 0,
+    taskCounter: { value: 0 },
   });
 }
 
 function stripLeadingFrontmatterForPreview(markdown: string): string {
+  const frontmatterEnd = leadingFrontmatterEnd(markdown);
+
+  return frontmatterEnd ? markdown.slice(frontmatterEnd) : markdown;
+}
+
+function leadingFrontmatterEnd(markdown: string): number {
   const start = markdown.startsWith("\u{feff}") ? 1 : 0;
   const openingEnd = markdown.indexOf("\n", start);
-  if (openingEnd < 0) return markdown;
+  if (openingEnd < 0) {
+    return 0;
+  }
 
   const opening = markdown.slice(start, openingEnd).replace(/\r$/, "").trimEnd();
-  if (opening !== "---") return markdown;
+  if (opening !== "---") {
+    return 0;
+  }
 
   let lineStart = openingEnd + 1;
   while (lineStart <= markdown.length) {
@@ -81,10 +95,72 @@ function stripLeadingFrontmatterForPreview(markdown: string): string {
     const lineEnd = newline < 0 ? markdown.length : newline;
     const line = markdown.slice(lineStart, lineEnd).replace(/\r$/, "").trimEnd();
     if (line === "---" || line === "...") {
-      return newline < 0 ? "" : markdown.slice(newline + 1);
+      return newline < 0 ? markdown.length : newline + 1;
     }
-    if (newline < 0) break;
+    if (newline < 0) {
+      break;
+    }
     lineStart = newline + 1;
+  }
+
+  return 0;
+}
+
+/** Toggle a rendered task checkbox while preserving the rest of the Markdown. */
+export function toggleMarkdownTask(
+  markdown: string,
+  taskIndex: number,
+  checked: boolean,
+): string {
+  if (!Number.isInteger(taskIndex) || taskIndex < 0) {
+    return markdown;
+  }
+
+  const bodyStart = leadingFrontmatterEnd(markdown);
+  let currentTask = 0;
+  let cursor = bodyStart;
+  let fence: { marker: string; size: number; quoteDepth: number } | undefined;
+
+  while (cursor <= markdown.length) {
+    const newline = markdown.indexOf("\n", cursor);
+    const lineEnd = newline < 0 ? markdown.length : newline;
+    const line = markdown.slice(cursor, lineEnd).replace(/\r$/, "");
+    const quotePrefix = line.match(/^((?: {0,3}> ?)+)/)?.[1] ?? "";
+    const quoteDepth = quotePrefix.match(/>/g)?.length ?? 0;
+    const unquotedLine = line.slice(quotePrefix.length);
+
+    if (fence && quoteDepth < fence.quoteDepth) {
+      fence = undefined;
+    }
+
+    const fenceMatch = unquotedLine.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const run = fenceMatch[1]!;
+      if (!fence) {
+        fence = { marker: run[0]!, size: run.length, quoteDepth };
+      } else if (run[0] === fence.marker && run.length >= fence.size) {
+        fence = undefined;
+      }
+    } else if (!fence) {
+      const task = line.match(
+        /^(?:(?: {0,3}> ?)+)?[ \t]*(?:[-+*]|\d{1,9}[.)])[\t ]+\[([ xX])\]/,
+      );
+      if (task) {
+        if (currentTask === taskIndex) {
+          const markerOffset = task[0].lastIndexOf("[") + 1;
+
+          return `${markdown.slice(0, cursor + markerOffset)}${checked ? "x" : " "}${markdown.slice(
+            cursor + markerOffset + 1,
+          )}`;
+        }
+        currentTask += 1;
+      }
+    }
+
+    if (newline < 0) {
+      break;
+    }
+    cursor = newline + 1;
   }
 
   return markdown;
@@ -106,7 +182,9 @@ export function sanitizeLinkUrl(value: string): string | undefined {
     .trim()
     .replace(/^<|>$/g, "")
     .replace(/[\u0000-\u001f\u007f]/g, "");
-  if (!url) return undefined;
+  if (!url) {
+    return undefined;
+  }
 
   const compact = url.replace(/[\s\u00a0]+/g, "").toLocaleLowerCase();
   const scheme = compact.match(/^([a-z][a-z0-9+.-]*):/i)?.[1];
@@ -116,13 +194,18 @@ export function sanitizeLinkUrl(value: string): string | undefined {
 
   // Backslashes can be interpreted as slashes by URL parsers, so reject them
   // instead of allowing a disguised scheme-relative destination.
-  if (url.includes("\\")) return undefined;
+  if (url.includes("\\")) {
+    return undefined;
+  }
+
   return url;
 }
 
 function renderBlocks(markdown: string, context: RenderContext): string {
   // Prevent pathological recursive blockquotes from consuming the call stack.
-  if (context.depth > 16) return `<p>${renderInline(markdown, context)}</p>`;
+  if (context.depth > 16) {
+    return `<p>${renderInline(markdown, context)}</p>`;
+  }
 
   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
   const blocks: string[] = [];
@@ -244,6 +327,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
             context,
           )}</td>`,
         ).join("");
+
         return `<tr>${cells}</tr>`;
       }).join("");
 
@@ -272,7 +356,9 @@ function renderBlocks(markdown: string, context: RenderContext): string {
 }
 
 function renderInline(source: string, context: RenderContext, depth = 0): string {
-  if (depth > 12) return escapeHtml(source);
+  if (depth > 12) {
+    return escapeHtml(source);
+  }
 
   let html = "";
   for (let index = 0; index < source.length; index += 1) {
@@ -286,12 +372,16 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
 
     if (character === "`") {
       let delimiterLength = 1;
-      while (source[index + delimiterLength] === "`") delimiterLength += 1;
+      while (source[index + delimiterLength] === "`") {
+        delimiterLength += 1;
+      }
       const delimiter = "`".repeat(delimiterLength);
       const close = source.indexOf(delimiter, index + delimiterLength);
       if (close >= 0) {
         let code = source.slice(index + delimiterLength, close).replace(/\n/g, " ");
-        if (/^\s.*\s$/.test(code) && code.trim()) code = code.slice(1, -1);
+        if (/^\s.*\s$/.test(code) && code.trim()) {
+          code = code.slice(1, -1);
+        }
         html += `<code>${escapeHtml(code)}</code>`;
         index = close + delimiterLength - 1;
         continue;
@@ -385,7 +475,9 @@ function parseMarkdownLink(
   depth: number,
 ): ParsedMarkdownLink | undefined {
   const labelEnd = findUnescaped(source, "]", start + 1);
-  if (labelEnd < 0 || source[labelEnd + 1] !== "(") return undefined;
+  if (labelEnd < 0 || source[labelEnd + 1] !== "(") {
+    return undefined;
+  }
 
   let parentheses = 1;
   let destinationEnd = -1;
@@ -394,7 +486,9 @@ function parseMarkdownLink(
       index += 1;
       continue;
     }
-    if (source[index] === "(") parentheses += 1;
+    if (source[index] === "(") {
+      parentheses += 1;
+    }
     if (source[index] === ")") {
       parentheses -= 1;
       if (parentheses === 0) {
@@ -403,14 +497,18 @@ function parseMarkdownLink(
       }
     }
   }
-  if (destinationEnd < 0) return undefined;
+  if (destinationEnd < 0) {
+    return undefined;
+  }
 
   const label = source.slice(start + 1, labelEnd);
   const rawDestination = source.slice(labelEnd + 2, destinationEnd).trim();
   const destinationMatch = rawDestination.match(
     /^(<[^>]+>|\S+?)(?:\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?$/,
   );
-  if (!destinationMatch) return undefined;
+  if (!destinationMatch) {
+    return undefined;
+  }
 
   const destination = destinationMatch[1]!.replace(/^<|>$/g, "");
   const title = destinationMatch[2] ?? destinationMatch[3] ?? destinationMatch[4];
@@ -428,6 +526,7 @@ function parseMarkdownLink(
     ? ' target="_blank" rel="noopener noreferrer"'
     : "";
   const titleAttribute = title ? ` title="${escapeHtml(title)}"` : "";
+
   return {
     html: `<a href="${escapeHtml(safeUrl)}"${titleAttribute}${targetAttributes}>${labelHtml}</a>`,
     end: destinationEnd,
@@ -438,10 +537,15 @@ function findClosingDelimiter(source: string, delimiter: string, start: number):
   let cursor = start;
   while (cursor < source.length) {
     const index = source.indexOf(delimiter, cursor);
-    if (index < 0) return -1;
-    if (source[index - 1] !== "\\") return index;
+    if (index < 0) {
+      return -1;
+    }
+    if (source[index - 1] !== "\\") {
+      return index;
+    }
     cursor = index + delimiter.length;
   }
+
   return -1;
 }
 
@@ -451,15 +555,21 @@ function findUnescaped(source: string, needle: string, start: number): number {
       index += 1;
       continue;
     }
-    if (source[index] === needle) return index;
+    if (source[index] === needle) {
+      return index;
+    }
   }
+
   return -1;
 }
 
 function matchListItem(line: string): MatchedListItem | undefined {
   const match = line.match(/^([ \t]*)(?:(\d{1,9})[.)]|([-+*]))[\t ]+(.*)$/);
-  if (!match) return undefined;
+  if (!match) {
+    return undefined;
+  }
   const ordered = Boolean(match[2]);
+
   return {
     ordered,
     start: ordered ? Math.max(1, Number.parseInt(match[2]!, 10)) : 1,
@@ -475,7 +585,9 @@ function renderList(
   baseIndent: number,
 ): RenderedList {
   const first = matchListItem(lines[startIndex] ?? "");
-  if (!first) return { html: "", nextIndex: startIndex + 1 };
+  if (!first) {
+    return { html: "", nextIndex: startIndex + 1 };
+  }
 
   const ordered = first.ordered;
   const start = first.start;
@@ -484,10 +596,16 @@ function renderList(
 
   while (index < lines.length) {
     const item = matchListItem(lines[index]!);
-    if (!item || item.indent !== baseIndent || item.ordered !== ordered) break;
+    if (!item || item.indent !== baseIndent || item.ordered !== ordered) {
+      break;
+    }
     index += 1;
 
     const task = item.text.match(/^\[([ xX])\][\t ]+(.*)$/);
+    const taskIndex = task ? context.taskCounter.value : undefined;
+    if (task) {
+      context.taskCounter.value += 1;
+    }
     const parts: Array<ListTextPart | ListHtmlPart> = [{
       type: "text",
       value: task ? task[2]! : item.text,
@@ -497,22 +615,32 @@ function renderList(
       const nextLine = lines[index]!;
       if (!nextLine.trim()) {
         let lookahead = index + 1;
-        while (lookahead < lines.length && !lines[lookahead]!.trim()) lookahead += 1;
-        if (lookahead >= lines.length) break;
+        while (lookahead < lines.length && !lines[lookahead]!.trim()) {
+          lookahead += 1;
+        }
+        if (lookahead >= lines.length) {
+          break;
+        }
 
         const following = lines[lookahead]!;
         const followingItem = matchListItem(following);
         const followingIndent = indentationWidth(following.match(/^[ \t]*/)?.[0] ?? "");
-        if (!followingItem && followingIndent <= baseIndent) break;
+        if (!followingItem && followingIndent <= baseIndent) {
+          break;
+        }
 
         index = lookahead;
-        if (followingItem?.indent === baseIndent) break;
+        if (followingItem?.indent === baseIndent) {
+          break;
+        }
         continue;
       }
 
       const nested = matchListItem(nextLine);
       if (nested) {
-        if (nested.indent <= baseIndent) break;
+        if (nested.indent <= baseIndent) {
+          break;
+        }
         if (context.listDepth >= 16) {
           parts.push({ type: "text", value: nested.text });
           index += 1;
@@ -529,16 +657,22 @@ function renderList(
         continue;
       }
 
-      if (indentationWidth(nextLine.match(/^[ \t]*/)?.[0] ?? "") <= baseIndent) break;
+      if (indentationWidth(nextLine.match(/^[ \t]*/)?.[0] ?? "") <= baseIndent) {
+        break;
+      }
       const previous = parts.at(-1);
-      if (previous?.type === "text") previous.value += `\n${nextLine.trim()}`;
-      else parts.push({ type: "text", value: nextLine.trim() });
+      if (previous?.type === "text") {
+        previous.value += `\n${nextLine.trim()}`;
+      } else {
+        parts.push({ type: "text", value: nextLine.trim() });
+      }
       index += 1;
     }
 
     items.push({
       parts,
       ...(task ? { checked: task[1]!.toLocaleLowerCase() === "x" } : {}),
+      ...(taskIndex === undefined ? {} : { taskIndex }),
     });
   }
 
@@ -557,15 +691,17 @@ function renderList(
       return `<li>${renderParts(item.parts)}</li>`;
     }
 
-    const checkbox = `<input type="checkbox" disabled${item.checked ? " checked" : ""} aria-label="${
+    const checkbox = `<input type="checkbox" data-task-index="${item.taskIndex}"${item.checked ? " checked" : ""} aria-label="${
       item.checked ? "Completed task" : "Incomplete task"
     }">`;
     const [firstPart, ...remainingParts] = item.parts;
     const firstHtml = firstPart?.type === "text" ? renderInline(firstPart.value, context) : "";
+
     return `<li class="task-list-item"><span class="task-list-row">${checkbox}<span>${
       firstHtml
     }</span></span>${renderParts(firstPart?.type === "html" ? item.parts : remainingParts)}</li>`;
   }).join("");
+
   return {
     html: `<${tag} class="${classes}"${startAttribute}>${itemHtml}</${tag}>`,
     nextIndex: index,
@@ -574,12 +710,16 @@ function renderList(
 
 function indentationWidth(value: string): number {
   let width = 0;
-  for (const character of value) width += character === "\t" ? 4 : 1;
+  for (const character of value) {
+    width += character === "\t" ? 4 : 1;
+  }
+
   return width;
 }
 
 function isBlockStart(lines: readonly string[], index: number): boolean {
   const line = lines[index] ?? "";
+
   return /^ {0,3}(?:`{3,}|~{3,}|#{1,6}[\t ]|>)/.test(line) ||
     /^[ \t]*(?:[-+*]|\d{1,9}[.)])[\t ]/.test(line) ||
     /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
@@ -587,22 +727,32 @@ function isBlockStart(lines: readonly string[], index: number): boolean {
 }
 
 function looksLikeTableRow(line: string): boolean {
-  if (!line.includes("|")) return false;
+  if (!line.includes("|")) {
+    return false;
+  }
+
   return splitTableRow(line).length > 1;
 }
 
 function isTable(lines: readonly string[], index: number): boolean {
   const header = lines[index] ?? "";
   const delimiter = lines[index + 1] ?? "";
-  if (!looksLikeTableRow(header) || !delimiter.includes("|")) return false;
+  if (!looksLikeTableRow(header) || !delimiter.includes("|")) {
+    return false;
+  }
   const cells = splitTableRow(delimiter);
+
   return cells.length > 0 && cells.every((cell) => /^\s*:?-{3,}:?\s*$/.test(cell));
 }
 
 function splitTableRow(line: string): string[] {
   let value = line.trim();
-  if (value.startsWith("|")) value = value.slice(1);
-  if (value.endsWith("|") && value[value.length - 2] !== "\\") value = value.slice(0, -1);
+  if (value.startsWith("|")) {
+    value = value.slice(1);
+  }
+  if (value.endsWith("|") && value[value.length - 2] !== "\\") {
+    value = value.slice(0, -1);
+  }
 
   const cells: string[] = [];
   let cell = "";
@@ -616,9 +766,14 @@ function splitTableRow(line: string): string[] {
     }
     if (character === "`") {
       let run = 1;
-      while (value[index + run] === "`") run += 1;
-      if (codeDelimiter === 0) codeDelimiter = run;
-      else if (codeDelimiter === run) codeDelimiter = 0;
+      while (value[index + run] === "`") {
+        run += 1;
+      }
+      if (codeDelimiter === 0) {
+        codeDelimiter = run;
+      } else if (codeDelimiter === run) {
+        codeDelimiter = 0;
+      }
       cell += "`".repeat(run);
       index += run - 1;
       continue;
@@ -631,14 +786,22 @@ function splitTableRow(line: string): string[] {
     cell += character;
   }
   cells.push(cell);
+
   return cells;
 }
 
 function tableAlignment(value: string): "left" | "center" | "right" | undefined {
   const trimmed = value.trim();
-  if (trimmed.startsWith(":") && trimmed.endsWith(":")) return "center";
-  if (trimmed.endsWith(":")) return "right";
-  if (trimmed.startsWith(":")) return "left";
+  if (trimmed.startsWith(":") && trimmed.endsWith(":")) {
+    return "center";
+  }
+  if (trimmed.endsWith(":")) {
+    return "right";
+  }
+  if (trimmed.startsWith(":")) {
+    return "left";
+  }
+
   return undefined;
 }
 
@@ -655,5 +818,6 @@ function slugifyHeading(value: string): string {
     .toLocaleLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "");
+
   return slug || "section";
 }

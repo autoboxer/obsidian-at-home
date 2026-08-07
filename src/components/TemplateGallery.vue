@@ -17,7 +17,10 @@ const filter = ref("");
 
 const filteredTemplates = computed(() => {
   const query = filter.value.toLocaleLowerCase().trim();
-  if (!query) return vaultState.templates;
+  if (!query) {
+    return vaultState.templates;
+  }
+
   return vaultState.templates.filter((template) =>
     `${template.name} ${template.description}`.toLocaleLowerCase().includes(query),
   );
@@ -25,7 +28,9 @@ const filteredTemplates = computed(() => {
 
 function useTemplate(id: string): void {
   const note = createFromTemplate(id);
-  if (note) uiState.tool = "notes";
+  if (note) {
+    uiState.tool = "notes";
+  }
 }
 
 function openCreate(): void {
@@ -51,7 +56,9 @@ function openEdit(template: NoteTemplate): void {
 }
 
 function submitTemplate(): void {
-  if (!draft.name.trim() || !draft.content.trim()) return;
+  if (!draft.name.trim() || !draft.content.trim()) {
+    return;
+  }
   saveTemplate({
     id: editingId.value ?? undefined,
     name: draft.name,

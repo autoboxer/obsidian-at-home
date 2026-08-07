@@ -203,6 +203,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
 
 export function createEmptyVault(now = Date.now()): VaultData {
   const starter = createSeedVault(now);
+
   return {
     ...starter,
     notes: [],

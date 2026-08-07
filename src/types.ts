@@ -1,4 +1,5 @@
 export type EditorMode = "source" | "split" | "reading";
+export type SearchScope = "all" | "titles" | "content" | "tags";
 export type ToolView = "notes" | "search" | "templates" | "snippets" | "settings";
 
 export interface Note {

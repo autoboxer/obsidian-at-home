@@ -42,6 +42,7 @@ const forgetConfirming = ref(false);
 const wordCount = computed(() =>
   vaultState.notes.reduce((total, note) => {
     const words = note.content.trim().match(/\S+/g);
+
     return total + (words?.length ?? 0);
   }, 0),
 );
@@ -58,7 +59,10 @@ const vaultStats = computed(() => [
 ]);
 
 const importFolderCount = computed(() => {
-  if (!importReview.value) return 0;
+  if (!importReview.value) {
+    return 0;
+  }
+
   return new Set(
     importReview.value.notes
       .map((note) => note.folderPath)
@@ -82,19 +86,31 @@ function formatCount(value: number): string {
 }
 
 function feedbackIcon(tone: FeedbackTone): string {
-  if (tone === "success") return "check";
-  if (tone === "error") return "x";
+  if (tone === "success") {
+    return "check";
+  }
+  if (tone === "error") {
+    return "x";
+  }
+
   return "info";
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  if (typeof error === "string" && error.trim()) return error;
-  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
   return fallback;
 }
 
 async function chooseVaultToImport(): Promise<void> {
-  if (!nativeAvailable || activeTask.value) return;
+  if (!nativeAvailable || activeTask.value) {
+    return;
+  }
 
   activeTask.value = "import";
   feedback.value = null;
@@ -110,6 +126,7 @@ async function chooseVaultToImport(): Promise<void> {
         title: "Import cancelled",
         message: "Nothing changed in your vault.",
       };
+
       return;
     }
 
@@ -145,9 +162,13 @@ function cancelImportReview(): void {
 }
 
 async function applyImport(replace: boolean): Promise<void> {
-  if (activeTask.value) return;
+  if (activeTask.value) {
+    return;
+  }
   const result = importReview.value;
-  if (!result) return;
+  if (!result) {
+    return;
+  }
 
   activeTask.value = "import";
   try {
@@ -182,7 +203,9 @@ async function applyImport(replace: boolean): Promise<void> {
 }
 
 async function exportVault(): Promise<void> {
-  if (!nativeAvailable || activeTask.value) return;
+  if (!nativeAvailable || activeTask.value) {
+    return;
+  }
 
   activeTask.value = "export";
   feedback.value = null;
@@ -198,6 +221,7 @@ async function exportVault(): Promise<void> {
         title: "Export cancelled",
         message: "No files were written.",
       };
+
       return;
     }
 
@@ -232,7 +256,9 @@ function resetTransferState(): void {
 }
 
 async function revealCurrentVault(): Promise<void> {
-  if (!nativeAvailable || !vaultSession.path || activeTask.value) return;
+  if (!nativeAvailable || !vaultSession.path || activeTask.value) {
+    return;
+  }
   activeTask.value = "show";
   try {
     await showCurrentVaultInFolder();
@@ -254,7 +280,9 @@ function manageVaults(): void {
 }
 
 async function clearCurrentVault(): Promise<void> {
-  if (activeTask.value) return;
+  if (activeTask.value) {
+    return;
+  }
   activeTask.value = "clear";
   try {
     const saved = await clearVault();
@@ -280,7 +308,9 @@ async function clearCurrentVault(): Promise<void> {
 }
 
 async function forgetVault(): Promise<void> {
-  if (activeTask.value) return;
+  if (activeTask.value) {
+    return;
+  }
   activeTask.value = "forget";
   const forgottenName = vaultState.name;
   try {

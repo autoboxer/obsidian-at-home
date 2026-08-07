@@ -4,13 +4,19 @@ import { createSearchSnippet, searchNotes } from "../lib";
 import {
   createNote,
   folderNameMap,
+  searchState,
   selectNote,
   uiState,
   vaultState,
 } from "../stores/vault";
 import AppIcon from "./AppIcon.vue";
 
-const query = ref("");
+const query = computed({
+  get: () => searchState.quickQuery,
+  set: (value: string) => {
+    searchState.quickQuery = value;
+  },
+});
 const selectedIndex = ref(0);
 const input = ref<HTMLInputElement>();
 
@@ -24,9 +30,8 @@ const results = computed(() => query.value.trim()
 
 watch(() => uiState.commandOpen, (open) => {
   if (open) {
-    query.value = uiState.noteFilter;
     selectedIndex.value = 0;
-    nextTick(() => input.value?.focus());
+    void focusInput();
   }
 });
 
@@ -34,7 +39,15 @@ watch(query, () => {
   selectedIndex.value = 0;
 });
 
-onMounted(() => nextTick(() => input.value?.focus()));
+onMounted(() => void focusInput());
+
+async function focusInput(): Promise<void> {
+  await nextTick();
+  window.requestAnimationFrame(() => {
+    input.value?.focus({ preventScroll: true });
+    input.value?.select();
+  });
+}
 
 function close(): void {
   uiState.commandOpen = false;
@@ -43,7 +56,6 @@ function close(): void {
 function chooseNote(id: string): void {
   selectNote(id);
   uiState.tool = "notes";
-  uiState.noteFilter = "";
   close();
 }
 
@@ -53,8 +65,7 @@ function create(): void {
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
-    close();
+  if (event.isComposing) {
     return;
   }
   if (event.key === "ArrowDown") {
@@ -66,16 +77,33 @@ function onKeydown(event: KeyboardEvent): void {
   } else if (event.key === "Enter") {
     event.preventDefault();
     const result = results.value[selectedIndex.value];
-    if (result) chooseNote(result.note.id);
-    else if (!query.value) create();
+    if (result) {
+      chooseNote(result.note.id);
+    } else if (!query.value) {
+      create();
+    }
   }
+}
+
+function handleDialogKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Escape" || event.isComposing) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  close();
 }
 
 function highlightTitle(title: string): string {
   const needle = query.value.trim();
-  if (!needle) return escapeHtml(title);
+  if (!needle) {
+    return escapeHtml(title);
+  }
   const index = title.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
-  if (index < 0) return escapeHtml(title);
+  if (index < 0) {
+    return escapeHtml(title);
+  }
+
   return `${escapeHtml(title.slice(0, index))}<mark>${escapeHtml(title.slice(index, index + needle.length))}</mark>${escapeHtml(title.slice(index + needle.length))}`;
 }
 
@@ -86,14 +114,25 @@ function escapeHtml(value: string): string {
 
 <template>
   <div class="modal-backdrop command-backdrop" data-ui-region="quick-switcher" @mousedown.self="close">
-    <section class="command-palette" role="dialog" aria-modal="true" aria-label="Quick search">
+    <section
+      class="command-palette"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Quick search"
+      @keydown="handleDialogKeydown"
+    >
       <div class="command-input-wrap">
         <AppIcon name="search" :size="20" />
         <input
           ref="input"
           v-model="query"
+          autofocus
           placeholder="Search notes, content, and tags…"
           aria-label="Search all notes"
+          autocomplete="off"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
           @keydown="onKeydown"
         />
         <kbd>esc</kbd>

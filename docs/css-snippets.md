@@ -26,6 +26,7 @@ Use a view selector when a style should apply only while that screen is open.
 | `[data-ui-region="activity-rail"]` | Left navigation |
 | `[data-ui-region="vault-panel"]` | Vault and files panel |
 | `[data-ui-region="editor"]` | Note editor |
+| `[data-ui-region="note-title"]` | Note title field |
 | `[data-ui-region="context-panel"]` | Links and note details |
 | `[data-ui-region="search"]` | Search page |
 | `[data-ui-region="templates"]` | Templates page |
@@ -52,7 +53,7 @@ The context panel also exposes `[data-context-view="links"]` and `[data-context-
 | `[data-editor-pane="preview"]` | Rendered pane |
 | `.source-textarea` | Markdown source text |
 | `.markdown-preview` | Rendered note |
-| `.note-title-input` | Note title |
+| `[data-ui-region="note-title"]` | Note title |
 | `.tag-chip` | Note tags |
 
 Source and preview panes stay mounted while hidden. Combine view and pane selectors to limit a style to one mode:

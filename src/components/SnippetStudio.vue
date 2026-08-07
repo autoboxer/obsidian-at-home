@@ -16,7 +16,9 @@ const activeSnippet = computed(() => vaultState.snippets.find((snippet) => snipp
 watch(activeSnippet, (snippet) => loadDraft(snippet), { immediate: true });
 
 function loadDraft(snippet?: CssSnippet): void {
-  if (!snippet) return;
+  if (!snippet) {
+    return;
+  }
   Object.assign(draft, { name: snippet.name, description: snippet.description, css: snippet.css });
   dirty.value = false;
 }
@@ -26,7 +28,9 @@ function markDirty(): void {
 }
 
 function save(): void {
-  if (!activeSnippet.value) return;
+  if (!activeSnippet.value) {
+    return;
+  }
   saveSnippet({ id: activeSnippet.value.id, ...draft });
   dirty.value = false;
   notify("CSS snippet saved", "success");
@@ -48,7 +52,9 @@ function toggle(snippet: CssSnippet): void {
 
 function remove(): void {
   const snippet = activeSnippet.value;
-  if (!snippet || snippet.builtIn) return;
+  if (!snippet || snippet.builtIn) {
+    return;
+  }
   if (window.confirm(`Delete the CSS snippet “${snippet.name}”?`)) {
     deleteSnippet(snippet.id);
     activeId.value = vaultState.snippets[0]?.id ?? null;
@@ -172,6 +178,7 @@ async function closeReference(): Promise<void> {
               <code>[data-ui-region="activity-rail"]</code><span>Left navigation</span>
               <code>[data-ui-region="vault-panel"]</code><span>Vault and files panel</span>
               <code>[data-ui-region="editor"]</code><span>Note editor</span>
+              <code>[data-ui-region="note-title"]</code><span>Note title field</span>
               <code>[data-ui-region="context-panel"]</code><span>Links and note details</span>
               <code>[data-ui-region="search"]</code><span>Search page</span>
               <code>[data-ui-region="templates"]</code><span>Templates page</span>
@@ -199,7 +206,7 @@ async function closeReference(): Promise<void> {
               <code>[data-context-view="info"]</code><span>Info context tab</span>
               <code>.source-textarea</code><span>Markdown source</span>
               <code>.markdown-preview</code><span>Rendered note</span>
-              <code>.note-title-input</code><span>Note title</span>
+              <code>[data-ui-region="note-title"]</code><span>Note title</span>
               <code>.tag-chip</code><span>Note tags</span>
             </div>
           </details>

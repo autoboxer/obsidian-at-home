@@ -1,3 +1,4 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   ExportResult,
   ImportResult,
@@ -10,11 +11,27 @@ import type {
 
 export const isTauri = (): boolean => Boolean(window.__TAURI__?.core?.invoke);
 
+export async function applyAppZoom(scaleFactor: number): Promise<void> {
+  if (isTauri()) {
+    try {
+      await getCurrentWebview().setZoom(scaleFactor);
+      document.documentElement.style.zoom = "";
+
+      return;
+    } catch {
+      // CSS zoom keeps browser previews and older webviews functional.
+    }
+  }
+
+  document.documentElement.style.zoom = String(scaleFactor);
+}
+
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const tauriInvoke = window.__TAURI__?.core?.invoke;
   if (!tauriInvoke) {
     throw new Error("Native vault access is available in the Obsidian At Home desktop app.");
   }
+
   return tauriInvoke<T>(command, args);
 }
 
