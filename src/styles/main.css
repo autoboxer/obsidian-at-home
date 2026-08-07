@@ -2394,6 +2394,65 @@ pre {
   text-transform: uppercase;
 }
 
+.markdown-preview > .markdown-heading-section:first-child > h1,
+.markdown-preview > .markdown-heading-section:first-child > h2,
+.markdown-preview > .markdown-heading-section:first-child > h3,
+.markdown-preview > .markdown-heading-section:first-child > h4,
+.markdown-preview > .markdown-heading-section:first-child > h5,
+.markdown-preview > .markdown-heading-section:first-child > h6 {
+  margin-top: 0;
+}
+
+.markdown-preview > .markdown-heading-section:last-child .markdown-heading-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-heading-body[hidden] {
+  display: none;
+}
+
+.markdown-heading-toggle {
+  position: absolute;
+  top: 0.61em;
+  left: -1.65rem;
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  transform: translateY(-50%);
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.markdown-heading-toggle:hover,
+.markdown-heading-toggle:focus-visible,
+.markdown-heading-section > h1:hover > .markdown-heading-toggle,
+.markdown-heading-section > h2:hover > .markdown-heading-toggle,
+.markdown-heading-section > h3:hover > .markdown-heading-toggle,
+.markdown-heading-section > h4:hover > .markdown-heading-toggle,
+.markdown-heading-section > h5:hover > .markdown-heading-toggle,
+.markdown-heading-section > h6:hover > .markdown-heading-toggle {
+  border-color: var(--border);
+  background: var(--surface-control-hover);
+  color: var(--violet-bright);
+}
+
+.markdown-heading-chevron {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateX(-1px) rotate(-45deg);
+  transition: transform 140ms ease;
+}
+
+.markdown-heading-toggle[aria-expanded="true"] .markdown-heading-chevron {
+  transform: translateY(-1px) rotate(45deg);
+}
+
 .markdown-preview p {
   margin: 0 0 1.18em;
 }

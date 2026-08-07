@@ -242,6 +242,8 @@ async function closeReference(): Promise<void> {
               <code>.markdown-preview pre code</code><span>Code blocks</span>
               <code>.markdown-preview table</code><span>Tables</span>
               <code>.markdown-preview .task-list-item</code><span>Tasks</span>
+              <code>.markdown-heading-toggle</code><span>Heading disclosure buttons</span>
+              <code>.markdown-heading-section.is-collapsed</code><span>Collapsed heading sections</span>
               <code>.markdown-preview .language-js</code><span>Language-specific code</span>
             </div>
           </details>

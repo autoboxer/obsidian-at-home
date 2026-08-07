@@ -421,6 +421,8 @@ watch(tagInput, () => {
           >
             <MarkdownPreview
               :content="activeNote.content"
+              :note-id="activeNote.id"
+              :collapsible-headings="vaultState.editorMode === 'reading'"
               @open-wiki="createLinkedNote"
               @update:content="setContent"
             />
