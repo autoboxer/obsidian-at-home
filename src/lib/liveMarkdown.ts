@@ -1,8 +1,11 @@
 export type LiveMarkdownBlockType =
   | "blank"
+  | "blockquote"
   | "code"
   | "frontmatter"
   | "heading"
+  | "horizontal-rule"
+  | "list"
   | "task"
   | "text";
 
@@ -17,6 +20,18 @@ export interface LiveMarkdownTask {
   check: LiveMarkdownRange;
 }
 
+export interface LiveMarkdownList {
+  ordered: boolean;
+  depth: number;
+  indentation: number;
+  marker: LiveMarkdownRange;
+  number?: number;
+}
+
+export interface LiveMarkdownQuote {
+  depth: number;
+}
+
 export interface LiveMarkdownBlock {
   type: LiveMarkdownBlockType;
   lineNumber: number;
@@ -27,6 +42,8 @@ export interface LiveMarkdownBlock {
   content: LiveMarkdownRange;
   syntax: LiveMarkdownRange[];
   headingLevel?: number;
+  list?: LiveMarkdownList;
+  quote?: LiveMarkdownQuote;
   task?: LiveMarkdownTask;
 }
 
@@ -83,6 +100,13 @@ export function parseLiveMarkdownBlocks(value: string): LiveMarkdownBlock[] {
       continue;
     }
 
+    const horizontalRule = parseHorizontalRule(line);
+    if (horizontalRule) {
+      blocks.push(horizontalRule);
+
+      continue;
+    }
+
     const heading = parseHeading(line);
     if (heading) {
       blocks.push(heading);
@@ -91,8 +115,24 @@ export function parseLiveMarkdownBlocks(value: string): LiveMarkdownBlock[] {
     }
 
     const task = parseTask(line);
-    blocks.push(task ?? createPlainBlock(line, "text"));
+    if (task) {
+      blocks.push(task);
+
+      continue;
+    }
+
+    const list = parseList(line);
+    if (list) {
+      blocks.push(list);
+
+      continue;
+    }
+
+    const quote = parseBlockquote(line);
+    blocks.push(quote ?? createPlainBlock(line, "text"));
   }
+
+  arrangeListItems(blocks);
 
   return blocks;
 }
@@ -234,6 +274,21 @@ function parseHeading(line: SourceLine): LiveMarkdownBlock | undefined {
   };
 }
 
+function parseHorizontalRule(line: SourceLine): LiveMarkdownBlock | undefined {
+  if (!/^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line.source)) {
+    return undefined;
+  }
+
+  const syntax = { from: line.from, to: line.to };
+
+  return {
+    ...line,
+    type: "horizontal-rule",
+    content: { from: line.to, to: line.to },
+    syntax: [syntax],
+  };
+}
+
 function parseTask(line: SourceLine): LiveMarkdownBlock | undefined {
   const task = line.source.match(
     /^([ \t]*)([-+*]|\d{1,9}[.)])([ \t]+)\[([ xX])\]([ \t]+)(.*)$/,
@@ -253,12 +308,159 @@ function parseTask(line: SourceLine): LiveMarkdownBlock | undefined {
     type: "task",
     content: { from: contentFrom, to: line.to },
     syntax: [marker],
+    list: createListMetadata(
+      task[1]!,
+      task[2]!,
+      markerStart,
+    ),
     task: {
       checked: task[4]!.toLocaleLowerCase() === "x",
       marker,
       check: { from: checkFrom, to: checkFrom + 1 },
     },
   };
+}
+
+function parseList(line: SourceLine): LiveMarkdownBlock | undefined {
+  const list = line.source.match(
+    /^([ \t]*)([-+*]|\d{1,9}[.)])([ \t]+)(.*)$/,
+  );
+  if (!list) {
+    return undefined;
+  }
+
+  const markerStart = line.from + list[1]!.length;
+  const markerEnd = markerStart + list[2]!.length;
+  const contentFrom = markerEnd + list[3]!.length;
+
+  return {
+    ...line,
+    type: "list",
+    content: { from: contentFrom, to: line.to },
+    syntax: [{ from: markerStart, to: contentFrom }],
+    list: createListMetadata(
+      list[1]!,
+      list[2]!,
+      markerStart,
+    ),
+  };
+}
+
+function parseBlockquote(line: SourceLine): LiveMarkdownBlock | undefined {
+  let prefixLength = 0;
+  let depth = 0;
+
+  while (prefixLength < line.source.length) {
+    const marker = line.source.slice(prefixLength).match(/^ {0,3}> ?/)?.[0];
+    if (!marker) {
+      break;
+    }
+
+    prefixLength += marker.length;
+    depth += 1;
+  }
+
+  if (!depth) {
+    return undefined;
+  }
+
+  const contentFrom = line.from + prefixLength;
+  const marker = { from: line.from, to: contentFrom };
+
+  return {
+    ...line,
+    type: "blockquote",
+    content: { from: contentFrom, to: line.to },
+    syntax: [marker],
+    quote: { depth },
+  };
+}
+
+function createListMetadata(
+  indentation: string,
+  sourceMarker: string,
+  markerFrom: number,
+): LiveMarkdownList {
+  const orderedMarker = sourceMarker.match(/^(\d{1,9})[.)]$/);
+
+  return {
+    ordered: Boolean(orderedMarker),
+    depth: 0,
+    indentation: indentationWidth(indentation),
+    marker: {
+      from: markerFrom,
+      to: markerFrom + sourceMarker.length,
+    },
+    ...(orderedMarker
+      ? { number: Math.max(1, Number.parseInt(orderedMarker[1]!, 10)) }
+      : {}),
+  };
+}
+
+interface ListLevel {
+  indentation: number;
+  ordered: boolean;
+  number?: number;
+}
+
+function arrangeListItems(blocks: readonly LiveMarkdownBlock[]): void {
+  const levels: ListLevel[] = [];
+
+  for (const block of blocks) {
+    if (!block.list) {
+      levels.length = 0;
+
+      continue;
+    }
+
+    const list = block.list;
+    const matchingLevel = levels.findIndex((level) => level.indentation === list.indentation);
+    let depth = matchingLevel;
+
+    if (matchingLevel >= 0) {
+      levels.length = matchingLevel + 1;
+    } else {
+      let parentDepth = levels.length - 1;
+      while (parentDepth >= 0 && levels[parentDepth]!.indentation >= list.indentation) {
+        parentDepth -= 1;
+      }
+
+      levels.length = parentDepth + 1;
+      depth = levels.length;
+      levels.push(createListLevel(list));
+    }
+
+    let level = levels[depth]!;
+    if (level.ordered !== list.ordered) {
+      level = createListLevel(list);
+      levels[depth] = level;
+    } else if (matchingLevel >= 0 && level.ordered) {
+      level.number = (level.number ?? 0) + 1;
+    }
+
+    list.depth = depth;
+    if (list.ordered) {
+      list.number = level.number ?? 1;
+    }
+  }
+}
+
+function createListLevel(list: LiveMarkdownList): ListLevel {
+  return {
+    indentation: list.indentation,
+    ordered: list.ordered,
+    ...(list.ordered ? { number: list.number ?? 1 } : {}),
+  };
+}
+
+function indentationWidth(indentation: string): number {
+  let width = 0;
+
+  for (const character of indentation) {
+    width += character === "\t" ? 4 : 1;
+  }
+
+  return width;
 }
 
 function createPlainBlock(

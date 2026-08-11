@@ -2457,6 +2457,64 @@ pre {
   text-decoration-color: color-mix(in srgb, var(--red) 45%, transparent);
 }
 
+.live-list-indent,
+.live-list-prefix,
+.live-quote-prefix {
+  white-space: pre;
+}
+
+.live-list-control {
+  position: relative;
+  display: inline-block;
+  white-space: pre;
+}
+
+.live-list-prefix,
+.live-quote-prefix {
+  color: transparent;
+}
+
+.live-list-marker {
+  position: absolute;
+  top: 0;
+  right: 0.35em;
+  color: color-mix(in srgb, var(--violet) 72%, var(--text-soft));
+  font-weight: 650;
+}
+
+.live-markdown-block.is-blockquote .live-markdown-content {
+  color: var(--blockquote-text);
+}
+
+.live-markdown-block.is-blockquote .live-markdown-content::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--violet) 55%, transparent);
+  content: "";
+}
+
+.live-markdown-block.quote-depth-2 .live-markdown-content::before {
+  box-shadow: 0.62em 0 color-mix(in srgb, var(--violet) 38%, transparent);
+}
+
+.live-markdown-block.quote-depth-3 .live-markdown-content::before {
+  box-shadow:
+    0.62em 0 color-mix(in srgb, var(--violet) 38%, transparent),
+    1.24em 0 color-mix(in srgb, var(--violet) 25%, transparent);
+}
+
+.live-horizontal-rule {
+  display: block;
+  width: 100%;
+  height: 1px;
+  margin-top: calc((var(--source-editor-line-height) - 1px) / 2);
+  background: var(--border-strong);
+}
+
 .live-task-indent {
   white-space: pre;
 }

@@ -34,6 +34,22 @@ const selectionEnd = ref(0);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const INDENT = "  ";
+const UNORDERED_LIST_MARKERS = ["•", "◦", "▪"] as const;
+const ROMAN_NUMERALS: ReadonlyArray<readonly [number, string]> = [
+  [1_000, "m"],
+  [900, "cm"],
+  [500, "d"],
+  [400, "cd"],
+  [100, "c"],
+  [90, "xc"],
+  [50, "l"],
+  [40, "xl"],
+  [10, "x"],
+  [9, "ix"],
+  [5, "v"],
+  [4, "iv"],
+  [1, "i"],
+];
 
 interface ListLine {
   indent: string;
@@ -185,19 +201,87 @@ function blockSource(block: LiveMarkdownBlock): string {
 }
 
 function blockRendersInline(block: LiveMarkdownBlock): boolean {
-  return block.type === "heading" ||
+  return block.type === "blockquote" ||
+    block.type === "heading" ||
+    block.type === "list" ||
     block.type === "task" ||
     block.type === "text";
 }
 
+function blockHasLiveRendering(block: LiveMarkdownBlock): boolean {
+  return blockRendersInline(block) || block.type === "horizontal-rule";
+}
+
 function blockInlineSource(block: LiveMarkdownBlock): string {
-  return block.type === "heading" || block.type === "task"
-    ? props.modelValue.slice(block.content.from, block.content.to)
-    : block.source;
+  return props.modelValue.slice(block.content.from, block.content.to);
 }
 
 function blockInlineSegments(block: LiveMarkdownBlock): readonly LiveMarkdownInlineSegment[] {
   return inlineSegmentsByLine.value.get(block.lineNumber) ?? [];
+}
+
+function blockPrefix(block: LiveMarkdownBlock): string {
+  return props.modelValue.slice(block.from, block.content.from);
+}
+
+function blockListPrefix(block: LiveMarkdownBlock): string {
+  return block.list
+    ? props.modelValue.slice(block.list.marker.from, block.content.from)
+    : "";
+}
+
+function blockListMarker(block: LiveMarkdownBlock): string {
+  if (!block.list) {
+    return "";
+  }
+  if (!block.list.ordered) {
+    return UNORDERED_LIST_MARKERS[block.list.depth % 3]!;
+  }
+
+  const number = block.list.number ?? 1;
+  if (block.list.depth % 3 === 1) {
+    return `${alphabeticListMarker(number)}.`;
+  }
+  if (block.list.depth % 3 === 2) {
+    return `${romanListMarker(number)}.`;
+  }
+
+  return `${number}.`;
+}
+
+function alphabeticListMarker(number: number): string {
+  if (number < 1) {
+    return String(number);
+  }
+
+  let value = number;
+  let marker = "";
+
+  while (value > 0) {
+    value -= 1;
+    marker = String.fromCharCode(97 + (value % 26)) + marker;
+    value = Math.floor(value / 26);
+  }
+
+  return marker;
+}
+
+function romanListMarker(number: number): string {
+  if (number < 1 || number > 3_999) {
+    return String(number);
+  }
+
+  let remaining = number;
+  let marker = "";
+
+  for (const [value, numeral] of ROMAN_NUMERALS) {
+    while (remaining >= value) {
+      marker += numeral;
+      remaining -= value;
+    }
+  }
+
+  return marker;
 }
 
 function normalizeInlineLinkTarget(value: string): string {
@@ -219,9 +303,11 @@ function inlineWikiLinkIsResolved(target: string): boolean {
 }
 
 function blockIndent(block: LiveMarkdownBlock): string {
-  return block.task
-    ? props.modelValue.slice(block.from, block.task.marker.from)
-    : "";
+  const markerFrom = block.task?.marker.from ?? block.list?.marker.from;
+
+  return markerFrom === undefined
+    ? ""
+    : props.modelValue.slice(block.from, markerFrom);
 }
 
 function blockTaskMarker(block: LiveMarkdownBlock): string {
@@ -625,10 +711,12 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
         :class="[
           `is-${block.type}`,
           block.headingLevel ? `heading-level-${block.headingLevel}` : undefined,
+          block.list ? `list-depth-${block.list.depth % 3}` : undefined,
+          block.quote ? `quote-depth-${Math.min(block.quote.depth, 3)}` : undefined,
           { 'is-active': blockIsActive(block), 'is-checked': block.task?.checked },
         ]"
       >
-        <template v-if="blockIsActive(block) || !blockRendersInline(block)">
+        <template v-if="blockIsActive(block) || !blockHasLiveRendering(block)">
           <span aria-hidden="true">{{ blockSource(block) }}</span>
         </template>
         <template v-else>
@@ -637,7 +725,12 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
             class="live-markdown-content"
             :class="{ 'is-heading': block.type === 'heading' }"
           >
-            <template v-if="block.type === 'task'">
+            <span
+              v-if="block.type === 'horizontal-rule'"
+              class="live-horizontal-rule"
+              aria-hidden="true"
+            />
+            <template v-else-if="block.type === 'task'">
               <span class="live-task-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
               <span class="live-task-control">
                 <span class="live-task-marker" aria-hidden="true">{{ blockTaskMarker(block) }}</span>
@@ -657,6 +750,18 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
                 class="live-task-content"
                 :segments="blockInlineSegments(block)"
               />
+            </template>
+            <template v-else-if="block.type === 'list'">
+              <span class="live-list-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
+              <span class="live-list-control">
+                <span class="live-list-prefix" aria-hidden="true">{{ blockListPrefix(block) }}</span>
+                <span class="live-list-marker" aria-hidden="true">{{ blockListMarker(block) }}</span>
+              </span>
+              <LiveMarkdownInline :segments="blockInlineSegments(block)" />
+            </template>
+            <template v-else-if="block.type === 'blockquote'">
+              <span class="live-quote-prefix" aria-hidden="true">{{ blockPrefix(block) }}</span>
+              <LiveMarkdownInline :segments="blockInlineSegments(block)" />
             </template>
             <LiveMarkdownInline
               v-else
