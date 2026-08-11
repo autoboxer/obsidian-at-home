@@ -179,6 +179,7 @@ async function closeReference(): Promise<void> {
               <code>[data-ui-region="vault-panel"]</code><span>Vault and files panel</span>
               <code>[data-ui-region="editor"]</code><span>Note editor</span>
               <code>[data-ui-region="note-title"]</code><span>Note title field</span>
+              <code>[data-ui-region="document-search"]</code><span>Find-in-note bar</span>
               <code>[data-ui-region="context-panel"]</code><span>Links and note details</span>
               <code>[data-ui-region="search"]</code><span>Search page</span>
               <code>[data-ui-region="templates"]</code><span>Templates page</span>
@@ -205,6 +206,7 @@ async function closeReference(): Promise<void> {
               <code>.source-editor</code><span>Live Markdown editor</span>
               <code>.live-markdown-layer</code><span>Formatted Markdown layer</span>
               <code>.source-textarea</code><span>Source input and caret</span>
+              <code>.document-search-bar</code><span>Find-in-note controls</span>
               <code>[data-ui-region="note-title"]</code><span>Note title</span>
               <code>.tag-chip</code><span>Note tags</span>
             </div>
