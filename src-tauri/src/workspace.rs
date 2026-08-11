@@ -106,7 +106,6 @@ pub struct VaultData {
     #[serde(default)]
     pub recent_note_ids: Vec<String>,
     pub selected_folder_id: String,
-    pub editor_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -173,8 +172,6 @@ struct WorkspaceState {
     recent_note_ids: Vec<String>,
     #[serde(default = "default_folder_selection")]
     selected_folder_id: String,
-    #[serde(default = "default_editor_mode")]
-    editor_mode: String,
     #[serde(default)]
     last_committed_transaction_id: Option<String>,
 }
@@ -192,7 +189,6 @@ impl Default for WorkspaceState {
             active_note_id: None,
             recent_note_ids: Vec::new(),
             selected_folder_id: default_folder_selection(),
-            editor_mode: default_editor_mode(),
             last_committed_transaction_id: None,
         }
     }
@@ -625,11 +621,6 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         active_note_id: active_note_id.clone(),
         recent_note_ids: recent_note_ids.clone(),
         selected_folder_id: selected_folder_id.clone(),
-        editor_mode: normalize_editor_mode(if state_was_present {
-            &state.editor_mode
-        } else {
-            &defaults.editor_mode
-        }),
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
     };
     if state_was_present || !state_file_was_present {
@@ -655,7 +646,6 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             active_note_id,
             recent_note_ids,
             selected_folder_id,
-            editor_mode: state.editor_mode,
         },
         descriptor: VaultDescriptor {
             name: vault_name,
@@ -779,7 +769,6 @@ fn save_workspace_files(
         active_note_id: vault.active_note_id.clone(),
         recent_note_ids,
         selected_folder_id: vault.selected_folder_id.clone(),
-        editor_mode: normalize_editor_mode(&vault.editor_mode),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
     };
 
@@ -3323,13 +3312,6 @@ fn display_vault_name(requested: &str, root: &Path) -> String {
         .to_owned()
 }
 
-fn normalize_editor_mode(mode: &str) -> String {
-    match mode {
-        "split" | "reading" => mode.to_owned(),
-        _ => "source".to_owned(),
-    }
-}
-
 fn normalize_recent_note_ids(
     recent_note_ids: &[String],
     active_note_id: Option<&str>,
@@ -3376,10 +3358,6 @@ fn default_folder_selection() -> String {
     "all".to_owned()
 }
 
-fn default_editor_mode() -> String {
-    "source".to_owned()
-}
-
 fn lock_workspace_io() -> Result<MutexGuard<'static, ()>, String> {
     WORKSPACE_IO_LOCK
         .lock()
@@ -3413,6 +3391,27 @@ impl WarningCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vault_data_matches_frontend_contract_without_editor_mode() {
+        let value = serde_json::json!({
+            "name": "Test vault",
+            "notes": [],
+            "folders": [],
+            "templates": [],
+            "snippets": [],
+            "activeNoteId": null,
+            "recentNoteIds": [],
+            "selectedFolderId": "all"
+        });
+
+        let vault: VaultData =
+            serde_json::from_value(value).expect("vault data should deserialize");
+        let serialized = serde_json::to_value(vault).expect("vault data should serialize");
+
+        assert_eq!(serialized["name"], "Test vault");
+        assert!(serialized.get("editorMode").is_none());
+    }
 
     #[test]
     fn normalizes_recent_notes() {
