@@ -40,7 +40,7 @@ function create(): void {
   const snippet = saveSnippet({
     name: "New snippet",
     description: "A custom style for your vault.",
-    css: `.markdown-preview {\n  /* Add your styles here */\n}\n`,
+    css: `.source-editor {\n  /* Add your styles here */\n}\n`,
     enabled: true,
   });
   activeId.value = snippet.id;
@@ -123,7 +123,7 @@ async function closeReference(): Promise<void> {
         </div>
 
         <footer class="snippet-help">
-          <span><AppIcon name="info" :size="15" /> Target the rendered note with <code>.markdown-preview</code> or the source editor with <code>.source-editor</code>.</span>
+          <span><AppIcon name="info" :size="15" /> Target the unified note editor with <code>.source-editor</code> and its formatted content with <code>.live-markdown-layer</code>.</span>
           <button ref="referenceButton" type="button" class="snippet-reference-button" @click="openReference">
             Selector reference
           </button>
@@ -196,18 +196,15 @@ async function closeReference(): Promise<void> {
           </details>
 
           <details>
-            <summary>Editor views and panes</summary>
+            <summary>Editor and context</summary>
             <div class="snippet-reference-grid">
-              <code>[data-editor-view="source"]</code><span>Source view</span>
-              <code>[data-editor-view="split"]</code><span>Split view</span>
-              <code>[data-editor-view="reading"]</code><span>Reading view</span>
-              <code>[data-editor-pane="source"]</code><span>Source pane</span>
-              <code>[data-editor-pane="preview"]</code><span>Rendered pane</span>
+              <code>[data-editor-view="live"]</code><span>Unified editor view</span>
+              <code>[data-editor-pane="live"]</code><span>Unified note pane</span>
               <code>[data-context-view="links"]</code><span>Links context tab</span>
               <code>[data-context-view="info"]</code><span>Info context tab</span>
-              <code>.source-editor</code><span>Live Markdown source editor</span>
+              <code>.source-editor</code><span>Live Markdown editor</span>
+              <code>.live-markdown-layer</code><span>Formatted Markdown layer</span>
               <code>.source-textarea</code><span>Source input and caret</span>
-              <code>.markdown-preview</code><span>Rendered note</span>
               <code>[data-ui-region="note-title"]</code><span>Note title</span>
               <code>.tag-chip</code><span>Note tags</span>
             </div>
@@ -236,26 +233,29 @@ async function closeReference(): Promise<void> {
           </details>
 
           <details>
-            <summary>Rendered Markdown</summary>
+            <summary>Live Markdown</summary>
             <div class="snippet-reference-grid">
-              <code>.markdown-preview h1</code><span>Level-one headings</span>
-              <code>.markdown-preview .wiki-link</code><span>Wiki links</span>
-              <code>.wiki-link.is-unresolved</code><span>Unresolved wiki links</span>
-              <code>.markdown-preview blockquote</code><span>Blockquotes</span>
-              <code>.markdown-preview pre code</code><span>Code blocks</span>
-              <code>.markdown-preview table</code><span>Tables</span>
-              <code>.markdown-preview .task-list-item</code><span>Tasks</span>
-              <code>.markdown-heading-toggle</code><span>Heading disclosure buttons</span>
-              <code>.markdown-heading-section.is-collapsed</code><span>Collapsed heading sections</span>
-              <code>.markdown-preview .language-js</code><span>Language-specific code</span>
+              <code>.live-markdown-block.heading-level-1</code><span>Level-one headings</span>
+              <code>.live-inline-segment.is-wiki-link</code><span>Wiki links</span>
+              <code>.live-inline-segment.is-wiki-link.is-unresolved</code><span>Unresolved wiki links</span>
+              <code>.live-markdown-block.is-blockquote</code><span>Blockquotes</span>
+              <code>.live-code-block</code><span>Code blocks</span>
+              <code>.live-table-block</code><span>Tables</span>
+              <code>.live-markdown-block.is-task</code><span>Tasks</span>
+              <code>.live-task-checkbox</code><span>Task checkboxes</span>
+              <code>.live-code-language-button</code><span>Code language control</span>
+              <code>.live-code-body .hljs-keyword</code><span>Highlighted keywords</span>
             </div>
           </details>
 
           <div class="snippet-reference-example">
             <span>Example</span>
-            <pre><code>[data-editor-view="reading"] .markdown-preview {
-  --page-width: 900px;
-  font-size: 18px;
+            <pre><code>[data-editor-view="live"] .source-editor {
+  --source-editor-line-height: calc(var(--note-font-size) * 1.85);
+}
+
+.live-markdown-content.is-heading {
+  color: #c9c1ff;
 }
 
 [data-app-view="settings"] [data-ui-region="titlebar"] {

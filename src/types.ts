@@ -1,4 +1,3 @@
-export type EditorMode = "source" | "split" | "reading";
 export type SearchScope = "all" | "titles" | "content" | "tags";
 export type ToolView = "notes" | "search" | "templates" | "snippets" | "settings";
 
@@ -51,7 +50,6 @@ export interface VaultData {
   activeNoteId: string | null;
   recentNoteIds: string[];
   selectedFolderId: "all" | "favorites";
-  editorMode: EditorMode;
 }
 
 export interface VaultDescriptor {

@@ -44,7 +44,6 @@ const emit = defineEmits<{
   openLink: [href: string];
   openWiki: [target: string];
   "update:modelValue": [value: string];
-  scroll: [element: HTMLTextAreaElement];
 }>();
 
 const textarea = ref<HTMLTextAreaElement>();
@@ -215,7 +214,6 @@ function onScroll(): void {
     visualLayer.value.scrollTop = textarea.value.scrollTop;
     visualLayer.value.scrollLeft = textarea.value.scrollLeft;
   }
-  emit("scroll", textarea.value);
 }
 
 function onRenderedLinkClick(event: MouseEvent): void {
@@ -455,12 +453,6 @@ function toggleLiveTask(block: LiveMarkdownBlock): void {
     applyEdit(next, selectionStart, selectionEnd, selectionDirection);
   }
 }
-
-function getScrollElement(): HTMLTextAreaElement | undefined {
-  return textarea.value;
-}
-
-defineExpose({ getScrollElement });
 
 function onKeydown(event: KeyboardEvent): void {
   const element = textarea.value;

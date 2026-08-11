@@ -34,7 +34,7 @@ The Notes view always shows the tree from the root of the vault. Notes can live 
 
 ## Write with Markdown
 
-Choose **Source** to edit Markdown, **Split** to edit beside a preview, or **Read** to see the formatted note. The app supports the Markdown features below; it is not a complete CommonMark implementation.
+Write directly in the live Markdown editor. Formatting stays visible while you read, and the Markdown source appears when you place the cursor on a line or interactive region. The app supports the Markdown features below; it is not a complete CommonMark implementation.
 
 ### 1. Headings and inline text
 
@@ -103,20 +103,19 @@ Open **Keyboard shortcuts** from the bottom of the activity rail for the complet
 
 ## Customize with CSS snippets
 
-Open **CSS snippets**, create a snippet, then save and enable it. Use **Selector reference** in that panel to find stable targets for app views, panels, controls, editor modes, and rendered Markdown.
+Open **CSS snippets**, create a snippet, then save and enable it. Use **Selector reference** in that panel to find stable targets for app views, panels, controls, and live Markdown.
 
 \`\`\`css
-.markdown-preview {
-  --page-width: 900px;
-  font-size: 17px;
+.source-editor {
+  --source-editor-line-height: calc(var(--note-font-size) * 1.85);
 }
 
-.markdown-preview .wiki-link {
+.live-inline-segment.is-wiki-link {
   color: #c9b4f3;
 }
 
-.source-editor {
-  --source-editor-line-height: calc(var(--note-font-size) * 1.85);
+.live-markdown-block.heading-level-1 .live-markdown-content {
+  color: #ddd5ff;
 }
 \`\`\`
 
@@ -170,12 +169,12 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
   const snippets: CssSnippet[] = [
     {
       id: "snippet-editor-serif",
-      name: "Comfortable reading",
-      description: "Use a readable line height and spacing for rendered notes.",
+      name: "Comfortable writing",
+      description: "Use relaxed line height and spacing in the live editor.",
       enabled: true,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.markdown-preview {\n  --note-font: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n}\n\n.markdown-preview p {\n  line-height: 1.74;\n  letter-spacing: -0.006em;\n}`,
+      css: `.source-editor {\n  --source-editor-line-height: calc(var(--note-font-size) * 1.82);\n}\n\n.live-markdown-layer,\n.source-textarea {\n  letter-spacing: -0.006em;\n}`,
     },
     {
       id: "snippet-violet-headings",
@@ -184,16 +183,16 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.markdown-preview h1,\n.markdown-preview h2 {\n  color: #c9c1ff;\n}`,
+      css: `.live-markdown-content.is-heading {\n  color: #c9c1ff;\n}`,
     },
     {
       id: "snippet-wide-page",
-      name: "Wide reading page",
-      description: "Increase the rendered note width for long-form notes.",
+      name: "Wide editor",
+      description: "Reduce side padding for notes that benefit from more room.",
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.markdown-preview {\n  --page-width: 980px;\n}`,
+      css: `.live-markdown-layer,\n.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`,
     },
   ];
 
@@ -206,7 +205,6 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     activeNoteId: "note-getting-started",
     recentNoteIds: ["note-getting-started"],
     selectedFolderId: "all",
-    editorMode: "source",
   };
 }
 
