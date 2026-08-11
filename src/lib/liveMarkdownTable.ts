@@ -203,12 +203,19 @@ function trimCellRange(
   source: string,
   range: { from: number; to: number },
 ): { from: number; to: number } {
+  const originalFrom = range.from;
   let { from, to } = range;
   while (from < to && /\s/.test(source[from]!)) {
     from += 1;
   }
   while (to > from && /\s/.test(source[to - 1]!)) {
     to -= 1;
+  }
+
+  if (from === to && range.to > originalFrom) {
+    const insertionPoint = Math.min(originalFrom + 1, range.to);
+
+    return { from: insertionPoint, to: insertionPoint };
   }
 
   return { from, to };

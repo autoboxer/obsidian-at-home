@@ -69,6 +69,8 @@ Press Enter at the end of a list item to continue the list. Press Tab or Shift+T
 | CSS snippets | Customize the interface |
 | Obsidian transfer | Copy notes into or out of the current vault |
 
+Inside a table, press Tab or Shift+Tab to move between cells. Press Enter to move down the current column. Moving beyond the final row creates another row.
+
 ### 5. Quotes and code blocks
 
 > Start a line with \`>\` to create a blockquote.

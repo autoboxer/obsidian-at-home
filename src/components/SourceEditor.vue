@@ -16,6 +16,7 @@ import {
   indexLiveMarkdownTableLines,
   parseLiveMarkdownTables,
 } from "../lib/liveMarkdownTable";
+import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { LiveMarkdownBlock } from "../lib/liveMarkdown";
@@ -28,6 +29,7 @@ import type {
   LiveMarkdownTable as LiveMarkdownTableModel,
   LiveMarkdownTableLine,
 } from "../lib/liveMarkdownTable";
+import type { LiveMarkdownTableNavigationEdit } from "../lib/liveMarkdownTableNavigation";
 import AppIcon from "./AppIcon.vue";
 import LiveMarkdownCodeBlock from "./LiveMarkdownCodeBlock.vue";
 import LiveMarkdownInline from "./LiveMarkdownInline.vue";
@@ -495,14 +497,41 @@ function onKeydown(event: KeyboardEvent): void {
 
   const commandModifier = event.metaKey || event.ctrlKey || event.altKey;
 
-  if (event.key === "Enter" && !commandModifier && !event.shiftKey && handleSmartEnter(element)) {
-    event.preventDefault();
+  if (event.key === "Enter" && !commandModifier && !event.shiftKey) {
+    const tableEdit = navigateLiveMarkdownTable(
+      element.value,
+      tables.value,
+      element.selectionStart,
+      element.selectionEnd,
+      "next-row",
+    );
+    if (tableEdit) {
+      event.preventDefault();
+      applyTableNavigation(element, tableEdit);
 
-    return;
+      return;
+    }
+    if (handleSmartEnter(element)) {
+      event.preventDefault();
+
+      return;
+    }
   }
 
   if (event.key === "Tab" && !commandModifier) {
+    const tableEdit = navigateLiveMarkdownTable(
+      element.value,
+      tables.value,
+      element.selectionStart,
+      element.selectionEnd,
+      event.shiftKey ? "previous-cell" : "next-cell",
+    );
     event.preventDefault();
+    if (tableEdit) {
+      applyTableNavigation(element, tableEdit);
+
+      return;
+    }
     if (!adjustSelectedLines(element, event.shiftKey) && !event.shiftKey) {
       replaceSelection(INDENT);
     }
@@ -610,6 +639,20 @@ function applyEdit(
     element.setSelectionRange(selectionStart, selectionEnd, direction ?? "none");
     onSelection();
   });
+}
+
+function applyTableNavigation(
+  element: HTMLTextAreaElement,
+  edit: LiveMarkdownTableNavigationEdit,
+): void {
+  if (edit.value !== element.value) {
+    applyEdit(edit.value, edit.selectionStart, edit.selectionEnd);
+
+    return;
+  }
+
+  element.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+  onSelection();
 }
 
 function handleSmartEnter(element: HTMLTextAreaElement): boolean {
