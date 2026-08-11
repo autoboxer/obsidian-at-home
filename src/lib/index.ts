@@ -1,3 +1,4 @@
+export * from "./documentSearch";
 export * from "./liveMarkdown";
 export * from "./liveMarkdownCode";
 export * from "./liveMarkdownInline";
