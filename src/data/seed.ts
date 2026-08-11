@@ -97,6 +97,7 @@ For a broader syntax reference, see the [CommonMark Markdown Reference](https://
 - **⌘/Ctrl B** — toggle bold text
 - **⌘/Ctrl I** — toggle italic text
 - **⌘/Ctrl Shift X** — toggle strikethrough text
+- **⌘/Ctrl F** — find text in the current note; use Tab or Shift+Tab to move through matches
 - **Select text, then press Backtick** — wrap it as inline code
 
 Open **Keyboard shortcuts** from the bottom of the activity rail for the complete reference.

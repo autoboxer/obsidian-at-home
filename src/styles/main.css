@@ -2276,6 +2276,139 @@ pre {
   display: none;
 }
 
+::highlight(document-search-match) {
+  background-color: color-mix(in srgb, var(--amber) 42%, transparent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--amber) 72%, transparent);
+  text-underline-offset: 2px;
+}
+
+::highlight(document-search-active) {
+  background-color: color-mix(in srgb, var(--amber) 84%, var(--bg-deep));
+  color: var(--bg-deep);
+  text-decoration-color: var(--bg-deep);
+}
+
+.document-search-trigger,
+.document-search-bar {
+  position: absolute;
+  z-index: 20;
+  top: 10px;
+  right: 12px;
+}
+
+.document-search-trigger {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-toolbar) 94%, transparent);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-muted);
+}
+
+.document-search-trigger:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-control-hover);
+  color: var(--text);
+}
+
+.document-search-trigger:focus-visible,
+.document-search-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.document-search-bar {
+  display: grid;
+  width: min(470px, calc(100% - 24px));
+  min-height: 40px;
+  grid-template-columns: minmax(90px, 1fr) auto repeat(3, 27px);
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-popup);
+  box-shadow: var(--shadow-lg);
+  font-family: var(--font-sans);
+}
+
+.document-search-field {
+  display: flex;
+  height: 29px;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-control);
+  color: var(--text-muted);
+}
+
+.document-search-field:focus-within {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  color: var(--text-soft);
+}
+
+.document-search-field input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.document-search-status {
+  min-width: 64px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.document-search-button {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+
+.document-search-button:hover:not(:disabled) {
+  background: var(--surface-control-hover);
+  color: var(--text);
+}
+
+.document-search-button:disabled {
+  cursor: default;
+  opacity: 0.34;
+}
+
+.document-search-button.previous .app-icon {
+  transform: rotate(180deg);
+}
+
+.document-search-button.close {
+  margin-left: 1px;
+  border-left: 1px solid var(--border-faint);
+  border-radius: 0 6px 6px 0;
+}
+
+.source-editor.is-searching .editor-gutter pre,
+.source-editor.is-searching :is(.live-markdown-layer, .source-textarea) {
+  padding-top: 62px;
+}
+
 .live-markdown-block {
   position: relative;
   min-height: var(--source-editor-line-height);

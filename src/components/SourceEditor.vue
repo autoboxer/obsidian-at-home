@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import { useDocumentSearch } from "../composables/useDocumentSearch";
 import { useLiveMarkdownRegionLayout } from "../composables/useLiveMarkdownRegionLayout";
 import {
   activeLiveMarkdownBlocks,
@@ -54,6 +55,22 @@ const selectionStart = ref(0);
 const selectionEnd = ref(0);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
+const {
+  closeSearch: closeDocumentSearch,
+  handleEditorSearchKeydown: handleDocumentSearchKeydown,
+  handleSearchInputKeydown: handleDocumentSearchInputKeydown,
+  isOpen: documentSearchOpen,
+  matchCount: documentSearchMatchCount,
+  moveToMatch: moveToDocumentSearchMatch,
+  openSearch: openDocumentSearch,
+  query: documentSearchQuery,
+  searchInput: documentSearchInput,
+  statusText: documentSearchStatus,
+} = useDocumentSearch({
+  content: () => props.modelValue,
+  scrollElement: textarea,
+  visualLayer,
+});
 const INDENT = "  ";
 const LIVE_CODE_BLOCK_SELECTOR = [
   ".live-markdown-block.is-code-opening",
@@ -849,7 +866,11 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
 </script>
 
 <template>
-  <div class="source-editor">
+  <div
+    class="source-editor"
+    :class="{ 'is-searching': documentSearchOpen }"
+    @keydown.capture="handleDocumentSearchKeydown"
+  >
     <div ref="gutter" class="editor-gutter" aria-hidden="true">
       <pre>{{ lineNumbers }}</pre>
     </div>
@@ -962,6 +983,86 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
       @scroll="onScroll"
       @keydown="onKeydown"
     />
+
+    <Transition name="popover-fade">
+      <form
+        v-if="documentSearchOpen"
+        class="document-search-bar"
+        data-ui-region="document-search"
+        role="search"
+        aria-label="Find in note"
+        @submit.prevent="moveToDocumentSearchMatch('next')"
+      >
+        <label class="document-search-field">
+          <AppIcon name="search" :size="14" />
+          <input
+            ref="documentSearchInput"
+            v-model="documentSearchQuery"
+            type="search"
+            placeholder="Find in note"
+            aria-label="Find in note"
+            aria-describedby="document-search-status"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            @keydown="handleDocumentSearchInputKeydown"
+          />
+        </label>
+        <span
+          id="document-search-status"
+          class="document-search-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >{{ documentSearchStatus }}</span>
+        <button
+          type="button"
+          class="document-search-button previous"
+          :disabled="!documentSearchMatchCount"
+          aria-label="Previous match"
+          aria-keyshortcuts="Shift+Tab Shift+F3"
+          title="Previous match (Shift+Tab)"
+          @mousedown.prevent
+          @click="moveToDocumentSearchMatch('previous')"
+        >
+          <AppIcon name="chevron-down" :size="13" />
+        </button>
+        <button
+          type="button"
+          class="document-search-button"
+          :disabled="!documentSearchMatchCount"
+          aria-label="Next match"
+          aria-keyshortcuts="Tab F3"
+          title="Next match (Tab)"
+          @mousedown.prevent
+          @click="moveToDocumentSearchMatch('next')"
+        >
+          <AppIcon name="chevron-down" :size="13" />
+        </button>
+        <button
+          type="button"
+          class="document-search-button close"
+          aria-label="Close find in note"
+          title="Close (Escape)"
+          @mousedown.prevent
+          @click="closeDocumentSearch"
+        >
+          <AppIcon name="x" :size="13" />
+        </button>
+      </form>
+
+      <button
+        v-else
+        type="button"
+        class="document-search-trigger"
+        aria-label="Find in note"
+        aria-keyshortcuts="Control+F Meta+F"
+        title="Find in note"
+        @click="openDocumentSearch"
+      >
+        <AppIcon name="search" :size="14" />
+      </button>
+    </Transition>
 
     <Transition name="popover-fade">
       <div v-if="suggestions.length" class="wiki-suggestions" role="listbox">
