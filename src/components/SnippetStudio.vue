@@ -189,6 +189,7 @@ async function closeReference(): Promise<void> {
               <code>[data-ui-region="quick-switcher"]</code><span>Quick switcher</span>
               <code>[data-ui-region="vault-chooser"]</code><span>Vault chooser</span>
               <code>[data-ui-region="template-dialog"]</code><span>Template editor</span>
+              <code>[data-ui-region="keyboard-shortcuts"]</code><span>Keyboard shortcut reference</span>
               <code>[data-ui-region="selector-reference"]</code><span>This selector guide</span>
               <code>[data-ui-region="notification"]</code><span>Notifications</span>
             </div>
@@ -226,6 +227,7 @@ async function closeReference(): Promise<void> {
               <code>.popover-menu</code><span>Context menus</span>
               <code>.command-palette</code><span>Quick switcher dialog</span>
               <code>.vault-chooser-dialog</code><span>Vault chooser dialog</span>
+              <code>.shortcut-reference-modal</code><span>Keyboard shortcut dialog</span>
               <code>.editor-modal</code><span>Editor dialogs</span>
               <code>.primary-action-button</code><span>Primary buttons</span>
               <code>.app-toast</code><span>Notifications</span>

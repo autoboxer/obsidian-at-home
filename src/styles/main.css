@@ -4205,6 +4205,140 @@ pre {
   line-height: 1.65;
 }
 
+.shortcut-reference-modal {
+  display: flex;
+  width: min(100%, 720px);
+  max-height: min(84vh, 760px);
+  flex-direction: column;
+  overflow: hidden;
+  outline: 0;
+}
+
+.shortcut-reference-content {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 18px 20px 22px;
+  overflow-y: auto;
+}
+
+.shortcut-reference-content > p {
+  grid-column: 1 / -1;
+  margin: 0 0 2px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.shortcut-reference-group {
+  overflow: hidden;
+  border: 1px solid var(--border-faint);
+  border-radius: 9px;
+  background: var(--surface-control);
+}
+
+.shortcut-reference-group.group-workspace {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.shortcut-reference-group.group-editor {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+}
+
+.shortcut-reference-group.group-view {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.shortcut-reference-group h3 {
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-faint);
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.065em;
+  text-transform: uppercase;
+}
+
+.shortcut-reference-group dl,
+.shortcut-reference-group dd {
+  margin: 0;
+}
+
+.shortcut-reference-row {
+  display: grid;
+  min-height: 49px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 11px;
+}
+
+.shortcut-reference-row + .shortcut-reference-row {
+  border-top: 1px solid var(--border-faint);
+}
+
+.shortcut-reference-row dt {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shortcut-reference-row strong {
+  color: var(--text-soft);
+  font-size: 10.5px;
+  font-weight: 610;
+}
+
+.shortcut-reference-row small {
+  color: var(--text-faint);
+  font-size: 8.5px;
+  line-height: 1.35;
+}
+
+.shortcut-reference-keys {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.shortcut-reference-keys kbd {
+  display: inline-grid;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-control-hover);
+  box-shadow: inset 0 -1px var(--border-faint);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .shortcut-reference-content {
+    grid-template-columns: 1fr;
+  }
+
+  .shortcut-reference-group.group-workspace,
+  .shortcut-reference-group.group-editor,
+  .shortcut-reference-group.group-view {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
 /* Dialogs and command palette */
 .modal-backdrop {
   position: fixed;
