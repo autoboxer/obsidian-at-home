@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import {
+  activeLiveMarkdownBlocks,
+  parseLiveMarkdownBlocks,
+  setLiveMarkdownTaskChecked,
+} from "../lib/liveMarkdown";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
+import type { LiveMarkdownBlock } from "../lib/liveMarkdown";
 import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
@@ -15,7 +21,10 @@ const emit = defineEmits<{
 
 const textarea = ref<HTMLTextAreaElement>();
 const gutter = ref<HTMLElement>();
-const cursor = ref(0);
+const visualLayer = ref<HTMLElement>();
+const editorFocused = ref(false);
+const selectionStart = ref(0);
+const selectionEnd = ref(0);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const INDENT = "  ";
@@ -36,8 +45,18 @@ interface TextEdit {
   added: number;
 }
 
-const lineCount = computed(() => Math.max(1, props.modelValue.split("\n").length));
+const liveBlocks = computed(() => parseLiveMarkdownBlocks(props.modelValue));
+const lineCount = computed(() => liveBlocks.value.length);
 const lineNumbers = computed(() => Array.from({ length: lineCount.value }, (_, index) => index + 1).join("\n"));
+const activeBlockLines = computed(() => new Set(
+  editorFocused.value
+    ? activeLiveMarkdownBlocks(
+      liveBlocks.value,
+      selectionStart.value,
+      selectionEnd.value,
+    ).map((block) => block.lineNumber)
+    : [],
+));
 const suggestions = computed(() => {
   if (suggestionQuery.value === null) {
     return [];
@@ -57,7 +76,7 @@ const suggestions = computed(() => {
 
 function onInput(event: Event): void {
   const element = event.target as HTMLTextAreaElement;
-  cursor.value = element.selectionStart;
+  updateSelection(element);
   emit("update:modelValue", element.value);
   updateSuggestions(element);
 }
@@ -66,8 +85,17 @@ function onSelection(): void {
   if (!textarea.value) {
     return;
   }
-  cursor.value = textarea.value.selectionStart;
+  updateSelection(textarea.value);
   updateSuggestions(textarea.value);
+}
+
+function onFocus(): void {
+  editorFocused.value = true;
+  onSelection();
+}
+
+function onBlur(): void {
+  editorFocused.value = false;
 }
 
 function onScroll(): void {
@@ -75,7 +103,59 @@ function onScroll(): void {
     return;
   }
   gutter.value.scrollTop = textarea.value.scrollTop;
+  if (visualLayer.value) {
+    visualLayer.value.scrollTop = textarea.value.scrollTop;
+    visualLayer.value.scrollLeft = textarea.value.scrollLeft;
+  }
   emit("scroll", textarea.value);
+}
+
+function updateSelection(element: HTMLTextAreaElement): void {
+  selectionStart.value = element.selectionStart;
+  selectionEnd.value = element.selectionEnd;
+}
+
+function blockIsActive(block: LiveMarkdownBlock): boolean {
+  return activeBlockLines.value.has(block.lineNumber);
+}
+
+function blockContent(block: LiveMarkdownBlock): string {
+  return props.modelValue.slice(block.content.from, block.content.to) || "\u00a0";
+}
+
+function blockSource(block: LiveMarkdownBlock): string {
+  return block.source || "\u00a0";
+}
+
+function blockIndent(block: LiveMarkdownBlock): string {
+  return block.task
+    ? props.modelValue.slice(block.from, block.task.marker.from)
+    : "";
+}
+
+function blockTaskMarker(block: LiveMarkdownBlock): string {
+  return block.task
+    ? props.modelValue.slice(block.task.marker.from, block.task.marker.to)
+    : "";
+}
+
+function toggleLiveTask(block: LiveMarkdownBlock): void {
+  const element = textarea.value;
+  if (!block.task || !element) {
+    return;
+  }
+
+  const selectionStart = element.selectionStart;
+  const selectionEnd = element.selectionEnd;
+  const selectionDirection = element.selectionDirection;
+  const next = setLiveMarkdownTaskChecked(
+    props.modelValue,
+    block,
+    !block.task.checked,
+  );
+  if (next !== props.modelValue) {
+    applyEdit(next, selectionStart, selectionEnd, selectionDirection);
+  }
 }
 
 function getScrollElement(): HTMLTextAreaElement | undefined {
@@ -442,12 +522,51 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
     <div ref="gutter" class="editor-gutter" aria-hidden="true">
       <pre>{{ lineNumbers }}</pre>
     </div>
+    <div ref="visualLayer" class="live-markdown-layer">
+      <div
+        v-for="block in liveBlocks"
+        :key="`${block.lineNumber}:${block.from}`"
+        class="live-markdown-block"
+        :class="[
+          `is-${block.type}`,
+          block.headingLevel ? `heading-level-${block.headingLevel}` : undefined,
+          { 'is-active': blockIsActive(block), 'is-checked': block.task?.checked },
+        ]"
+      >
+        <template v-if="blockIsActive(block) || (block.type !== 'heading' && block.type !== 'task')">
+          <span aria-hidden="true">{{ blockSource(block) }}</span>
+        </template>
+        <template v-else-if="block.type === 'heading'">
+          <span aria-hidden="true">{{ blockContent(block) }}</span>
+        </template>
+        <template v-else>
+          <span class="live-task-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
+          <span class="live-task-control">
+            <span class="live-task-marker" aria-hidden="true">{{ blockTaskMarker(block) }}</span>
+            <button
+              type="button"
+              class="live-task-checkbox"
+              :aria-label="block.task?.checked ? 'Mark task incomplete' : 'Mark task complete'"
+              :aria-pressed="block.task?.checked"
+              tabindex="-1"
+              @mousedown.prevent
+              @click.stop="toggleLiveTask(block)"
+            >
+              <AppIcon v-if="block.task?.checked" name="check" :size="9" :stroke-width="2.4" />
+            </button>
+          </span>
+          <span class="live-task-content" aria-hidden="true">{{ blockContent(block) }}</span>
+        </template>
+      </div>
+    </div>
     <textarea
       ref="textarea"
       class="source-textarea"
       :value="modelValue"
       spellcheck="true"
       aria-label="Markdown source"
+      @blur="onBlur"
+      @focus="onFocus"
       @input="onInput"
       @click="onSelection"
       @keyup="onSelection"

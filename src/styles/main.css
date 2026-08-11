@@ -2286,6 +2286,8 @@ pre {
 }
 
 .source-editor {
+  --source-editor-line-height: calc(var(--note-font-size) * 1.72);
+
   position: relative;
   display: grid;
   width: 100%;
@@ -2317,23 +2319,126 @@ pre {
   font: inherit;
 }
 
+.live-markdown-layer,
 .source-textarea {
+  grid-row: 1;
+  grid-column: 2;
   width: 100%;
   height: 100%;
   min-height: 0;
   padding: 32px clamp(25px, 4vw, 62px) 90px clamp(24px, 3.5vw, 50px);
-  resize: none;
-  overflow: auto;
-  border: 0;
-  background: transparent;
   color: #d4cfda;
   font-family: var(--mono);
   font-size: 13px;
   font-variant-ligatures: contextual;
-  line-height: 1.72;
+  line-height: var(--source-editor-line-height);
   tab-size: 2;
   white-space: pre-wrap;
   word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.live-markdown-layer {
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+  scrollbar-width: none;
+  user-select: none;
+}
+
+.live-markdown-layer::-webkit-scrollbar {
+  display: none;
+}
+
+.live-markdown-block {
+  min-height: var(--source-editor-line-height);
+  line-height: var(--source-editor-line-height);
+}
+
+.live-markdown-block.is-heading {
+  color: var(--heading-text);
+  font-weight: 650;
+}
+
+.live-markdown-block.heading-level-1 {
+  font-weight: 760;
+}
+
+.live-markdown-block.heading-level-2 {
+  font-weight: 720;
+}
+
+.live-markdown-block.heading-level-3 {
+  font-weight: 680;
+}
+
+.live-markdown-block.heading-level-6 {
+  color: color-mix(in srgb, var(--heading-text) 80%, var(--text-muted));
+}
+
+.live-markdown-block.is-active {
+  color: var(--editor-text);
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.live-task-indent {
+  white-space: pre;
+}
+
+.live-task-control {
+  position: relative;
+  display: inline-block;
+  white-space: pre;
+}
+
+.live-task-marker {
+  color: transparent;
+}
+
+.live-task-checkbox {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  display: grid;
+  width: 1em;
+  height: 1em;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--violet) 45%, var(--border-strong));
+  border-radius: 0.25em;
+  background: color-mix(in srgb, var(--surface-control) 88%, transparent);
+  color: var(--text-on-accent);
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.live-task-checkbox:hover {
+  border-color: var(--violet);
+  background: var(--surface-control-hover);
+}
+
+.live-markdown-block.is-checked .live-task-checkbox {
+  border-color: var(--violet);
+  background: var(--violet);
+}
+
+.live-markdown-block.is-checked .live-task-content {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.source-textarea {
+  position: relative;
+  z-index: 1;
+  resize: none;
+  overflow: auto;
+  border: 0;
+  background: transparent;
+  caret-color: var(--editor-text);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 .source-textarea:focus-visible {
@@ -2646,6 +2751,11 @@ pre {
   display: flex;
   align-items: flex-start;
   gap: 0.58em;
+}
+
+.markdown-preview .task-list-row > input:checked + span {
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .markdown-preview input[type="checkbox"] {
@@ -5820,6 +5930,7 @@ pre {
     font-size: 30px;
   }
 
+  .live-markdown-layer,
   .source-textarea {
     padding-right: 28px;
     padding-left: 25px;
@@ -6863,13 +6974,21 @@ pre {
 .editor-gutter {
   border-right-color: var(--border-faint);
   color: var(--text-faint);
-  line-height: calc(var(--note-font-size) * 1.72);
+  line-height: var(--source-editor-line-height);
+}
+
+.live-markdown-layer,
+.source-textarea {
+  font-family: var(--note-font-family);
+  font-size: var(--note-font-size);
+}
+
+.live-markdown-layer {
+  color: var(--editor-text);
 }
 
 .source-textarea {
-  color: var(--editor-text);
-  font-family: var(--note-font-family);
-  font-size: var(--note-font-size);
+  color: transparent;
 }
 
 .source-textarea::selection {

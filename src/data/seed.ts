@@ -113,8 +113,8 @@ Open **CSS snippets**, create a snippet, then save and enable it. Use **Selector
   color: #c9b4f3;
 }
 
-.source-textarea {
-  line-height: 1.85;
+.source-editor {
+  --source-editor-line-height: calc(var(--note-font-size) * 1.85);
 }
 \`\`\`
 

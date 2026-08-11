@@ -123,7 +123,7 @@ async function closeReference(): Promise<void> {
         </div>
 
         <footer class="snippet-help">
-          <span><AppIcon name="info" :size="15" /> Target the rendered note with <code>.markdown-preview</code> or the source with <code>.source-textarea</code>.</span>
+          <span><AppIcon name="info" :size="15" /> Target the rendered note with <code>.markdown-preview</code> or the source editor with <code>.source-editor</code>.</span>
           <button ref="referenceButton" type="button" class="snippet-reference-button" @click="openReference">
             Selector reference
           </button>
@@ -205,7 +205,8 @@ async function closeReference(): Promise<void> {
               <code>[data-editor-pane="preview"]</code><span>Rendered pane</span>
               <code>[data-context-view="links"]</code><span>Links context tab</span>
               <code>[data-context-view="info"]</code><span>Info context tab</span>
-              <code>.source-textarea</code><span>Markdown source</span>
+              <code>.source-editor</code><span>Live Markdown source editor</span>
+              <code>.source-textarea</code><span>Source input and caret</span>
               <code>.markdown-preview</code><span>Rendered note</span>
               <code>[data-ui-region="note-title"]</code><span>Note title</span>
               <code>.tag-chip</code><span>Note tags</span>
