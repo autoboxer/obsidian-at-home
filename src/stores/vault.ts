@@ -15,7 +15,6 @@ import {
 } from "../services/native";
 import type {
   CssSnippet,
-  EditorMode,
   ExportNote,
   ExportSnippet,
   ExportTemplate,
@@ -639,10 +638,6 @@ export function openSearchWorkspace(
 export function openQuickSearch(query = ""): void {
   searchState.quickQuery = query;
   uiState.commandOpen = true;
-}
-
-export function setEditorMode(mode: EditorMode): void {
-  vaultState.editorMode = mode;
 }
 
 export function setZoom(zoom: number): void {
@@ -1470,27 +1465,20 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
   }));
   const folders = Array.isArray(input.folders) ? input.folders : fallback.folders;
 
-  const currentReadingSnippet = fallback.snippets.find(
-    (snippet) => snippet.id === "snippet-editor-serif",
-  );
-  const currentWideSnippet = fallback.snippets.find(
-    (snippet) => snippet.id === "snippet-wide-page",
+  const currentBuiltInSnippets = new Map(
+    fallback.snippets
+      .filter((snippet) => snippet.builtIn)
+      .map((snippet) => [snippet.id, snippet]),
   );
   const snippets = (Array.isArray(input.snippets) ? input.snippets : fallback.snippets)
     .map((snippet) => {
-      if (snippet.id === "snippet-editor-serif" && snippet.builtIn && currentReadingSnippet) {
+      const current = currentBuiltInSnippets.get(snippet.id);
+      if (snippet.builtIn && current) {
         return {
           ...snippet,
-          name: currentReadingSnippet.name,
-          description: currentReadingSnippet.description,
-          css: currentReadingSnippet.css,
-        };
-      }
-      if (snippet.id === "snippet-wide-page" && snippet.builtIn && currentWideSnippet) {
-        return {
-          ...snippet,
-          name: currentWideSnippet.name,
-          description: currentWideSnippet.description,
+          name: current.name,
+          description: current.description,
+          css: current.css,
         };
       }
 
@@ -1518,9 +1506,6 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     activeNoteId,
     recentNoteIds,
     selectedFolderId,
-    editorMode: ["source", "split", "reading"].includes(input.editorMode ?? "")
-      ? input.editorMode as EditorMode
-      : "source",
   };
 }
 

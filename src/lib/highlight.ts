@@ -45,74 +45,94 @@ hljs.registerLanguage("wasm", wasm);
 hljs.registerLanguage("xml", xml);
 hljs.registerLanguage("yaml", yaml);
 
-const LANGUAGE_ALIASES: Record<string, string> = {
-  bash: "bash",
-  shell: "bash",
-  sh: "bash",
-  zsh: "bash",
-  css: "css",
-  diff: "diff",
-  patch: "diff",
-  dockerfile: "dockerfile",
-  docker: "dockerfile",
-  go: "go",
-  golang: "go",
-  graphql: "graphql",
-  gql: "graphql",
-  http: "http",
-  https: "http",
-  ini: "ini",
-  toml: "ini",
-  javascript: "javascript",
-  js: "javascript",
-  jsx: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  json: "json",
-  jsonc: "json",
-  makefile: "makefile",
-  make: "makefile",
-  mk: "makefile",
-  mak: "makefile",
-  markdown: "markdown",
-  md: "markdown",
-  mkdown: "markdown",
-  mkd: "markdown",
-  nginx: "nginx",
-  nginxconf: "nginx",
-  protobuf: "protobuf",
-  proto: "protobuf",
-  python: "python",
-  py: "python",
-  gyp: "python",
-  ipython: "python",
-  rust: "rust",
-  rs: "rust",
-  sql: "sql",
-  typescript: "typescript",
-  ts: "typescript",
-  tsx: "typescript",
-  mts: "typescript",
-  cts: "typescript",
-  wasm: "wasm",
-  wat: "wasm",
-  webassembly: "wasm",
-  vue: "xml",
-  html: "xml",
-  xml: "xml",
-  svg: "xml",
-  xhtml: "xml",
-  plist: "xml",
-  yaml: "yaml",
-  yml: "yaml",
-};
+export interface CodeLanguageOption {
+  value: string;
+  label: string;
+  aliases: readonly string[];
+  highlightAs?: string;
+}
 
-/** Highlight only explicitly supported top-level fence languages. */
-export function highlightCode(code: string, language: string): string | undefined {
+function codeLanguage(
+  value: string,
+  label: string,
+  aliases: readonly string[] = [],
+  highlightAs = value || undefined,
+): CodeLanguageOption {
+  return {
+    value,
+    label,
+    aliases,
+    ...(highlightAs ? { highlightAs } : {}),
+  };
+}
+
+export const CODE_LANGUAGE_OPTIONS: readonly CodeLanguageOption[] = [
+  codeLanguage("", "Plain text", ["text", "txt", "none"]),
+  codeLanguage("bash", "Bash / Shell", ["shell", "sh", "zsh"]),
+  codeLanguage("css", "CSS"),
+  codeLanguage("diff", "Diff / Patch", ["patch"]),
+  codeLanguage("dockerfile", "Dockerfile", ["docker"]),
+  codeLanguage("go", "Go", ["golang"]),
+  codeLanguage("graphql", "GraphQL", ["gql"]),
+  codeLanguage(
+    "html",
+    "HTML / XML",
+    ["xml", "svg", "xhtml", "plist"],
+    "xml",
+  ),
+  codeLanguage("http", "HTTP", ["https"]),
+  codeLanguage("javascript", "JavaScript", ["js", "jsx", "mjs", "cjs"]),
+  codeLanguage("json", "JSON", ["jsonc"]),
+  codeLanguage("makefile", "Makefile", ["make", "mk", "mak"]),
+  codeLanguage("markdown", "Markdown", ["md", "mkdown", "mkd"]),
+  codeLanguage("nginx", "Nginx", ["nginxconf"]),
+  codeLanguage("protobuf", "Protocol Buffers", ["proto"]),
+  codeLanguage("python", "Python", ["py", "gyp", "ipython"]),
+  codeLanguage("rust", "Rust", ["rs"]),
+  codeLanguage("sql", "SQL"),
+  codeLanguage("toml", "TOML / INI", ["ini"], "ini"),
+  codeLanguage(
+    "typescript",
+    "TypeScript",
+    ["ts", "tsx", "mts", "cts"],
+  ),
+  codeLanguage("vue", "Vue", [], "xml"),
+  codeLanguage("wasm", "WebAssembly", ["wat", "webassembly"]),
+  codeLanguage("yaml", "YAML", ["yml"]),
+];
+
+const LANGUAGE_ALIASES = new Map<string, string>();
+
+for (const option of CODE_LANGUAGE_OPTIONS) {
+  if (!option.highlightAs) {
+    continue;
+  }
+
+  LANGUAGE_ALIASES.set(option.value, option.highlightAs);
+  for (const alias of option.aliases) {
+    LANGUAGE_ALIASES.set(alias, option.highlightAs);
+  }
+}
+
+export function findCodeLanguageOption(
+  language: string,
+): CodeLanguageOption | undefined {
+  const normalized = language.trim().toLocaleLowerCase();
+
+  return CODE_LANGUAGE_OPTIONS.find((option) =>
+    option.value === normalized || option.aliases.includes(normalized)
+  );
+}
+
+/** Highlight only explicitly supported top-level fence languages */
+export function highlightCode(
+  code: string,
+  language: string,
+): string | undefined {
   if (code.length > MAX_HIGHLIGHT_CHARS) {
     return undefined;
   }
-  const normalized = LANGUAGE_ALIASES[language.toLowerCase()];
+  const normalized = LANGUAGE_ALIASES.get(language.toLowerCase());
   if (!normalized) {
     return undefined;
   }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, nextTick, ref, watch } from "vue";
 import {
   activeNote,
@@ -13,16 +14,13 @@ import {
   forwardNavigationNote,
   navigateBack,
   navigateForward,
-  setEditorMode,
+  notify,
   togglePinned,
   uiState,
   updateNote,
   vaultState,
 } from "../stores/vault";
-import { useSplitScrollSync } from "../composables/useSplitScrollSync";
-import type { EditorMode } from "../types";
 import AppIcon from "./AppIcon.vue";
-import MarkdownPreview from "./MarkdownPreview.vue";
 import SourceEditor from "./SourceEditor.vue";
 
 const tagInputOpen = ref(false);
@@ -34,18 +32,6 @@ const quickFolderOpen = ref(false);
 const quickFolderName = ref("");
 const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
-const {
-  editorCanvas,
-  sourceEditor,
-  previewPane,
-  handleSourceScroll,
-  handlePreviewScroll,
-  claimScrollPane,
-} = useSplitScrollSync({
-  mode: () => vaultState.editorMode,
-  noteId: () => activeNote.value?.id,
-  content: () => activeNote.value?.content,
-});
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
 const sortedFolders = computed(() => [...vaultState.folders].sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
@@ -86,12 +72,6 @@ const forwardNavigationLabel = computed(() => forwardNavigationNote.value
   ? `Forward to “${forwardNavigationNote.value.title.trim() || "Untitled note"}”`
   : "No next note");
 
-const modes: Array<{ id: EditorMode; label: string; icon: string }> = [
-  { id: "source", label: "Source", icon: "code" },
-  { id: "split", label: "Split", icon: "columns" },
-  { id: "reading", label: "Read", icon: "eye" },
-];
-
 function setTitle(event: Event): void {
   if (!activeNote.value) {
     return;
@@ -105,14 +85,12 @@ function setContent(content: string): void {
   }
 }
 
-function setSourceContent(content: string): void {
-  claimScrollPane("source");
-  setContent(content);
-}
-
-function setPreviewContent(content: string): void {
-  claimScrollPane("preview");
-  setContent(content);
+async function openRenderedLink(href: string): Promise<void> {
+  try {
+    await openUrl(href);
+  } catch {
+    notify("Could not open that link", "warning");
+  }
 }
 
 function setFolder(event: Event): void {
@@ -240,7 +218,7 @@ watch(tagInput, () => {
 </script>
 
 <template>
-  <main class="editor-workspace" data-ui-region="editor" :data-editor-view="vaultState.editorMode">
+  <main class="editor-workspace" data-ui-region="editor" data-editor-view="live">
     <header class="editor-toolbar">
       <div class="editor-crumbs">
         <button
@@ -338,19 +316,6 @@ watch(tagInput, () => {
       </div>
 
       <div v-if="activeNote" class="editor-toolbar-actions">
-        <div class="mode-switcher" aria-label="Editor view">
-          <button
-            v-for="mode in modes"
-            :key="mode.id"
-            type="button"
-            :class="{ active: vaultState.editorMode === mode.id }"
-            :title="mode.label"
-            @click="setEditorMode(mode.id)"
-          >
-            <AppIcon :name="mode.icon" :size="15" />
-            <span>{{ mode.label }}</span>
-          </button>
-        </div>
         <button
           class="icon-button"
           type="button"
@@ -457,43 +422,15 @@ watch(tagInput, () => {
           </div>
         </div>
 
-        <div ref="editorCanvas" class="editor-canvas" :class="`mode-${vaultState.editorMode}`">
-          <div
-            class="editor-pane editor-page"
-            data-editor-pane="source"
-            :aria-hidden="vaultState.editorMode === 'reading'"
-            :inert="vaultState.editorMode === 'reading'"
-          >
-            <SourceEditor
-              ref="sourceEditor"
-              :model-value="activeNote.content"
-              :note-titles="noteTitles"
-              @keydown="claimScrollPane('source')"
-              @pointerdown="claimScrollPane('source')"
-              @scroll="handleSourceScroll"
-              @update:model-value="setSourceContent"
-              @wheel.passive="claimScrollPane('source')"
-            />
-          </div>
-          <div
-            ref="previewPane"
-            class="preview-pane preview-page"
-            data-editor-pane="preview"
-            :aria-hidden="vaultState.editorMode === 'source'"
-            :inert="vaultState.editorMode === 'source'"
-            @keydown="claimScrollPane('preview')"
-            @pointerdown="claimScrollPane('preview')"
-            @scroll.passive="handlePreviewScroll"
-            @wheel.passive="claimScrollPane('preview')"
-          >
-            <MarkdownPreview
-              :content="activeNote.content"
-              :note-id="activeNote.id"
-              :collapsible-headings="vaultState.editorMode === 'reading'"
-              @open-wiki="createLinkedNote"
-              @update:content="setPreviewContent"
-            />
-          </div>
+        <div class="editor-canvas" data-editor-pane="live">
+          <SourceEditor
+            :key="activeNote.id"
+            :model-value="activeNote.content"
+            :note-titles="noteTitles"
+            @open-link="openRenderedLink"
+            @open-wiki="createLinkedNote"
+            @update:model-value="setContent"
+          />
         </div>
       </section>
 

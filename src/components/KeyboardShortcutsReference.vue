@@ -44,6 +44,9 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: "Indent", detail: "Current list item or selected lines", keys: ["Tab"] },
       { label: "Outdent", detail: "Current list item or selected lines", keys: ["Shift", "Tab"] },
       { label: "Continue a list", detail: "Also completes an opening code fence", keys: ["Enter"] },
+      { label: "Move to the next table cell", detail: "Creates a row after the final cell", keys: ["Tab"] },
+      { label: "Move to the previous table cell", keys: ["Shift", "Tab"] },
+      { label: "Move down a table column", detail: "Creates a row at the table boundary", keys: ["Enter"] },
     ],
   },
   {
