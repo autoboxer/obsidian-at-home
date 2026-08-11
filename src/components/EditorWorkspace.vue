@@ -2,11 +2,17 @@
 import { computed, nextTick, ref, watch } from "vue";
 import {
   activeNote,
+  backNavigationNote,
+  canNavigateBack,
+  canNavigateForward,
   createFolder,
   createLinkedNote,
   createNote,
   deleteNote,
   folderPath,
+  forwardNavigationNote,
+  navigateBack,
+  navigateForward,
   setEditorMode,
   togglePinned,
   uiState,
@@ -73,6 +79,12 @@ const wordCount = computed(() => {
   return content.trim() ? content.trim().split(/\s+/).length : 0;
 });
 const characterCount = computed(() => activeNote.value?.content.length ?? 0);
+const backNavigationLabel = computed(() => backNavigationNote.value
+  ? `Back to “${backNavigationNote.value.title.trim() || "Untitled note"}”`
+  : "No previous note");
+const forwardNavigationLabel = computed(() => forwardNavigationNote.value
+  ? `Forward to “${forwardNavigationNote.value.title.trim() || "Untitled note"}”`
+  : "No next note");
 
 const modes: Array<{ id: EditorMode; label: string; icon: string }> = [
   { id: "source", label: "Source", icon: "code" },
@@ -242,6 +254,28 @@ watch(tagInput, () => {
         >
           <AppIcon name="sidebar" :size="17" />
         </button>
+        <div v-if="activeNote" class="note-navigation" role="group" aria-label="Note history">
+          <button
+            class="icon-button subtle"
+            type="button"
+            :disabled="!canNavigateBack"
+            :title="backNavigationLabel"
+            :aria-label="backNavigationLabel"
+            @click="navigateBack"
+          >
+            <AppIcon name="history-back" :size="15" />
+          </button>
+          <button
+            class="icon-button subtle"
+            type="button"
+            :disabled="!canNavigateForward"
+            :title="forwardNavigationLabel"
+            :aria-label="forwardNavigationLabel"
+            @click="navigateForward"
+          >
+            <AppIcon name="history-forward" :size="15" />
+          </button>
+        </div>
         <Transition name="chip-swap">
           <div v-if="!uiState.explorerOpen" class="vault-hidden-actions">
             <button

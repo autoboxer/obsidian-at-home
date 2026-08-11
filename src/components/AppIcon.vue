@@ -33,6 +33,8 @@ const paths: Record<string, string> = {
   trash: '<path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/>',
   star: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z"/>',
   command: '<path d="M9 7V5a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v14a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3Z"/>',
+  "history-back": '<path d="M19 12H5M10 7l-5 5 5 5"/>',
+  "history-forward": '<path d="M5 12h14M14 7l5 5-5 5"/>',
   arrow: '<path d="M5 12h14M14 7l5 5-5 5"/>',
   enter: '<path d="M5 5v4a4 4 0 0 0 4 4h10M15 9l4 4-4 4"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17M8 14h.01M12 14h.01M16 14h.01"/>',
