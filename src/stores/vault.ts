@@ -36,6 +36,7 @@ const LEGACY_MIGRATED_KEY = "obsidian-at-home.vault.filesystem-migrated.v1";
 const APP_ZOOM_KEY = "obsidian-at-home.zoom.v1";
 const PERSIST_DELAY = 220;
 const EXTERNAL_CHECK_DELAY = 3_000;
+const NOTE_NAVIGATION_LIMIT = 100;
 
 export const MIN_ZOOM = 0.7;
 export const MAX_ZOOM = 1.5;
@@ -75,6 +76,11 @@ interface SearchState {
   focusRequest: number;
 }
 
+interface NoteNavigationState {
+  back: string[];
+  forward: string[];
+}
+
 export const vaultState = reactive<VaultData>(createEmptyVault());
 
 export const vaultSession = reactive<VaultSessionState>({
@@ -110,6 +116,11 @@ export const searchState = reactive<SearchState>({
   exactTag: null,
   quickQuery: "",
   focusRequest: 0,
+});
+
+const noteNavigationState = reactive<NoteNavigationState>({
+  back: [],
+  forward: [],
 });
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
@@ -169,6 +180,7 @@ async function initializeVaultStorage(): Promise<void> {
     const storedVault = readStoredVault();
     const browserVault = storedVault?.vault ?? createSeedVault();
     hydrateVault(browserVault);
+    resetNoteNavigation();
     if (storedVault?.needsRewrite) {
       safeStorageSet(STORAGE_KEY, JSON.stringify(browserVault));
     }
@@ -200,6 +212,7 @@ async function initializeVaultStorage(): Promise<void> {
       applyWorkspace(result.workspace, result.recentVaults);
     } else {
       hydrateVault(createEmptyVault());
+      resetNoteNavigation();
       vaultSession.phase = "needs-vault";
       vaultSession.path = null;
       vaultSession.revision = 0;
@@ -209,6 +222,7 @@ async function initializeVaultStorage(): Promise<void> {
     }
   } catch (error) {
     hydrateVault(createEmptyVault());
+    resetNoteNavigation();
     vaultSession.phase = "error";
     vaultSession.error = errorMessage(error, "The vault list could not be opened.");
     uiState.vaultChooserOpen = true;
@@ -339,6 +353,7 @@ export async function forgetCurrentVault(): Promise<boolean> {
     vaultSession.warnings = [];
     vaultSession.phase = "needs-vault";
     hydrateVault(createEmptyVault());
+    resetNoteNavigation();
     dirtyVersion = 0;
     savedVersion = 0;
     uiState.vaultChooserOpen = true;
@@ -506,6 +521,18 @@ export const activeNote = computed<Note | undefined>(() =>
   vaultState.notes.find((note) => note.id === vaultState.activeNoteId),
 );
 
+export const backNavigationNote = computed<Note | undefined>(() =>
+  findNoteNavigationTarget(noteNavigationState.back),
+);
+
+export const forwardNavigationNote = computed<Note | undefined>(() =>
+  findNoteNavigationTarget(noteNavigationState.forward),
+);
+
+export const canNavigateBack = computed(() => Boolean(backNavigationNote.value));
+
+export const canNavigateForward = computed(() => Boolean(forwardNavigationNote.value));
+
 export const folderById = computed(() =>
   new Map(vaultState.folders.map((folder) => [folder.id, folder])),
 );
@@ -557,12 +584,19 @@ export function selectNote(id: string): void {
   if (!vaultState.notes.some((note) => note.id === id)) {
     return;
   }
-  const wasVisible = visibleNotes.value.some((note) => note.id === id);
-  vaultState.activeNoteId = id;
-  if (!wasVisible) {
-    vaultState.selectedFolderId = "all";
-    uiState.noteFilter = "";
+
+  if (id !== vaultState.activeNoteId) {
+    recordDirectNoteNavigation(vaultState.activeNoteId, id);
   }
+  activateNote(id);
+}
+
+export function navigateBack(): boolean {
+  return traverseNoteNavigation(noteNavigationState.back, noteNavigationState.forward);
+}
+
+export function navigateForward(): boolean {
+  return traverseNoteNavigation(noteNavigationState.forward, noteNavigationState.back);
 }
 
 export function selectFolder(selection: FolderSelection): void {
@@ -633,7 +667,7 @@ export function createNote(folderId?: string | null, title = "Untitled note", co
     note.content = `# ${note.title}\n\n`;
   }
   vaultState.notes.unshift(note);
-  vaultState.activeNoteId = note.id;
+  selectNote(note.id);
   vaultState.selectedFolderId = "all";
   uiState.tool = "notes";
   uiState.noteFilter = "";
@@ -728,9 +762,18 @@ export function deleteNote(id: string): void {
   if (index < 0) {
     return;
   }
+
+  const wasActive = vaultState.activeNoteId === id;
   vaultState.notes.splice(index, 1);
-  if (vaultState.activeNoteId === id) {
-    vaultState.activeNoteId = vaultState.notes[Math.min(index, vaultState.notes.length - 1)]?.id ?? null;
+  removeNoteFromNavigation(id);
+  if (wasActive) {
+    const fallbackNote = vaultState.notes[Math.min(index, vaultState.notes.length - 1)];
+    noteNavigationState.forward.splice(0);
+    if (fallbackNote) {
+      activateNote(fallbackNote.id);
+    } else {
+      vaultState.activeNoteId = null;
+    }
   }
   notify("Note deleted", "neutral");
 }
@@ -978,16 +1021,19 @@ export async function mergeImportedVault(
   clearTimeout(persistTimer);
   const previousVault = snapshotVault();
   const previousSavedVersion = savedVersion;
+  const previousActiveNoteId = vaultState.activeNoteId;
+  const previousNoteNavigation = snapshotNoteNavigation();
   if (replace) {
     vaultState.notes.splice(0);
     vaultState.folders.splice(0);
   }
 
   const now = Date.now();
+  let firstImportedNoteId: string | null = null;
   for (const imported of result.notes) {
     const folderId = ensureFolderPath(imported.folderPath);
     const title = uniqueNoteTitle(imported.title || "Untitled note");
-    vaultState.notes.push({
+    const note: Note = {
       id: createId("note"),
       title,
       content: imported.content,
@@ -997,7 +1043,9 @@ export async function mergeImportedVault(
       pinned: false,
       createdAt: now,
       updatedAt: now,
-    });
+    };
+    firstImportedNoteId ??= note.id;
+    vaultState.notes.push(note);
   }
 
   for (const imported of result.snippets) {
@@ -1017,15 +1065,17 @@ export async function mergeImportedVault(
     });
   }
 
-  vaultState.activeNoteId = result.notes.length
-    ? vaultState.notes[vaultState.notes.length - result.notes.length]?.id ?? vaultState.notes[0]?.id ?? null
-    : replace
-      ? null
-      : vaultState.activeNoteId;
+  vaultState.activeNoteId = firstImportedNoteId ?? (replace ? null : previousActiveNoteId);
   vaultState.selectedFolderId = "all";
+  if (replace) {
+    resetNoteNavigation();
+  } else if (firstImportedNoteId) {
+    recordDirectNoteNavigation(previousActiveNoteId, firstImportedNoteId);
+  }
   const saved = await flushVault();
   if (!saved) {
     hydrateVault(previousVault);
+    restoreNoteNavigation(previousNoteNavigation);
     dirtyVersion = previousSavedVersion;
     savedVersion = previousSavedVersion;
   }
@@ -1106,9 +1156,11 @@ export async function clearVault(): Promise<boolean> {
   clearTimeout(persistTimer);
   const previousVault = snapshotVault();
   const previousSavedVersion = savedVersion;
+  const previousNoteNavigation = snapshotNoteNavigation();
   vaultState.notes.splice(0);
   vaultState.folders.splice(0);
   vaultState.activeNoteId = null;
+  resetNoteNavigation();
   vaultState.selectedFolderId = "all";
   uiState.noteFilter = "";
   uiState.commandOpen = false;
@@ -1118,12 +1170,116 @@ export async function clearVault(): Promise<boolean> {
   const saved = await flushVault();
   if (!saved) {
     hydrateVault(previousVault);
+    restoreNoteNavigation(previousNoteNavigation);
     dirtyVersion = previousSavedVersion;
     savedVersion = previousSavedVersion;
   }
   notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
 
   return saved;
+}
+
+function activateNote(id: string): boolean {
+  if (!noteExists(id)) {
+    return false;
+  }
+
+  const wasVisible = visibleNotes.value.some((note) => note.id === id);
+  vaultState.activeNoteId = id;
+  if (!wasVisible) {
+    vaultState.selectedFolderId = "all";
+    uiState.noteFilter = "";
+  }
+
+  return true;
+}
+
+function recordDirectNoteNavigation(previousId: string | null, nextId: string): void {
+  if (previousId === nextId || !noteExists(nextId)) {
+    return;
+  }
+  if (previousId && noteExists(previousId)) {
+    pushNoteNavigationEntry(noteNavigationState.back, previousId);
+  }
+  noteNavigationState.forward.splice(0);
+}
+
+function traverseNoteNavigation(source: string[], destination: string[]): boolean {
+  while (source.length) {
+    const targetId = source.pop();
+    if (!targetId || targetId === vaultState.activeNoteId || !noteExists(targetId)) {
+      continue;
+    }
+
+    const previousId = vaultState.activeNoteId;
+    if (!activateNote(targetId)) {
+      continue;
+    }
+    if (previousId && noteExists(previousId)) {
+      pushNoteNavigationEntry(destination, previousId);
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+function pushNoteNavigationEntry(stack: string[], id: string): void {
+  if (stack[stack.length - 1] === id) {
+    return;
+  }
+  stack.push(id);
+  if (stack.length > NOTE_NAVIGATION_LIMIT) {
+    stack.splice(0, stack.length - NOTE_NAVIGATION_LIMIT);
+  }
+}
+
+function findNoteNavigationTarget(stack: string[]): Note | undefined {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const id = stack[index];
+    if (id === vaultState.activeNoteId) {
+      continue;
+    }
+    const note = vaultState.notes.find((candidate) => candidate.id === id);
+    if (note) {
+      return note;
+    }
+  }
+
+  return undefined;
+}
+
+function removeNoteFromNavigation(id: string): void {
+  noteNavigationState.back = noteNavigationState.back.filter((noteId) => noteId !== id);
+  noteNavigationState.forward = noteNavigationState.forward.filter((noteId) => noteId !== id);
+}
+
+function pruneNoteNavigation(): void {
+  const noteIds = new Set(vaultState.notes.map((note) => note.id));
+  noteNavigationState.back = noteNavigationState.back.filter((id) => noteIds.has(id));
+  noteNavigationState.forward = noteNavigationState.forward.filter((id) => noteIds.has(id));
+}
+
+function resetNoteNavigation(): void {
+  noteNavigationState.back.splice(0);
+  noteNavigationState.forward.splice(0);
+}
+
+function snapshotNoteNavigation(): NoteNavigationState {
+  return {
+    back: [...noteNavigationState.back],
+    forward: [...noteNavigationState.forward],
+  };
+}
+
+function restoreNoteNavigation(snapshot: NoteNavigationState): void {
+  noteNavigationState.back.splice(0, noteNavigationState.back.length, ...snapshot.back);
+  noteNavigationState.forward.splice(0, noteNavigationState.forward.length, ...snapshot.forward);
+}
+
+function noteExists(id: string): boolean {
+  return vaultState.notes.some((note) => note.id === id);
 }
 
 function currentFolderId(): string | null {
@@ -1346,8 +1502,14 @@ function hydrateVault(vault: Partial<VaultData>): void {
 }
 
 function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.recentVaults): void {
+  const previousPath = vaultSession.path;
   sessionGeneration += 1;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
+  if (previousPath === workspace.descriptor.path) {
+    pruneNoteNavigation();
+  } else {
+    resetNoteNavigation();
+  }
   vaultSession.phase = "ready";
   vaultSession.path = workspace.descriptor.path;
   vaultSession.revision = workspace.revision;
