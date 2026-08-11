@@ -5,9 +5,13 @@ import {
   parseLiveMarkdownBlocks,
   setLiveMarkdownTaskChecked,
 } from "../lib/liveMarkdown";
+import { parseLiveMarkdownInline } from "../lib/liveMarkdownInline";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
+import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { LiveMarkdownBlock } from "../lib/liveMarkdown";
+import type { LiveMarkdownInlineSegment } from "../lib/liveMarkdownInline";
 import AppIcon from "./AppIcon.vue";
+import LiveMarkdownInline from "./LiveMarkdownInline.vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -15,6 +19,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  openLink: [href: string];
+  openWiki: [target: string];
   "update:modelValue": [value: string];
   scroll: [element: HTMLTextAreaElement];
 }>();
@@ -57,6 +63,30 @@ const activeBlockLines = computed(() => new Set(
     ).map((block) => block.lineNumber)
     : [],
 ));
+const normalizedNoteTitles = computed(() => new Set(
+  props.noteTitles.flatMap((title) => [
+    normalizeInlineLinkTarget(title),
+    normalizeInlineLinkTarget(wikiTargetTitle(title)),
+  ]),
+));
+const inlineSegmentsByLine = computed(() => {
+  const segments = new Map<number, LiveMarkdownInlineSegment[]>();
+
+  for (const block of liveBlocks.value) {
+    if (!blockRendersInline(block)) {
+      continue;
+    }
+
+    segments.set(
+      block.lineNumber,
+      parseLiveMarkdownInline(blockInlineSource(block), {
+        resolveWikiLink: (target) => inlineWikiLinkIsResolved(target),
+      }),
+    );
+  }
+
+  return segments;
+});
 const suggestions = computed(() => {
   if (suggestionQuery.value === null) {
     return [];
@@ -110,6 +140,37 @@ function onScroll(): void {
   emit("scroll", textarea.value);
 }
 
+function onRenderedLinkClick(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const link = target.closest<HTMLAnchorElement>("a.live-inline-segment");
+  if (!link || !visualLayer.value?.contains(link)) {
+    return;
+  }
+  if (link.classList.contains("is-wiki-link")) {
+    event.preventDefault();
+    const wikiTarget = link.dataset.wikiTarget?.trim();
+    if (wikiTarget) {
+      emit("openWiki", wikiTarget);
+    }
+
+    return;
+  }
+  if (!window.__TAURI__) {
+    return;
+  }
+
+  event.preventDefault();
+  const rawHref = link.getAttribute("href") ?? "";
+  const href = rawHref.startsWith("//") ? `https:${rawHref}` : rawHref;
+  if (/^(?:https?|mailto):/i.test(href)) {
+    emit("openLink", href);
+  }
+}
+
 function updateSelection(element: HTMLTextAreaElement): void {
   selectionStart.value = element.selectionStart;
   selectionEnd.value = element.selectionEnd;
@@ -119,12 +180,42 @@ function blockIsActive(block: LiveMarkdownBlock): boolean {
   return activeBlockLines.value.has(block.lineNumber);
 }
 
-function blockContent(block: LiveMarkdownBlock): string {
-  return props.modelValue.slice(block.content.from, block.content.to) || "\u00a0";
-}
-
 function blockSource(block: LiveMarkdownBlock): string {
   return block.source || "\u00a0";
+}
+
+function blockRendersInline(block: LiveMarkdownBlock): boolean {
+  return block.type === "heading" ||
+    block.type === "task" ||
+    block.type === "text";
+}
+
+function blockInlineSource(block: LiveMarkdownBlock): string {
+  return block.type === "heading" || block.type === "task"
+    ? props.modelValue.slice(block.content.from, block.content.to)
+    : block.source;
+}
+
+function blockInlineSegments(block: LiveMarkdownBlock): readonly LiveMarkdownInlineSegment[] {
+  return inlineSegmentsByLine.value.get(block.lineNumber) ?? [];
+}
+
+function normalizeInlineLinkTarget(value: string): string {
+  return normalizeWikiTarget(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inlineWikiLinkIsResolved(target: string): boolean {
+  if (!target) {
+    return true;
+  }
+
+  return normalizedNoteTitles.value.has(normalizeInlineLinkTarget(target)) ||
+    normalizedNoteTitles.value.has(normalizeInlineLinkTarget(wikiTargetTitle(target)));
 }
 
 function blockIndent(block: LiveMarkdownBlock): string {
@@ -522,7 +613,11 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
     <div ref="gutter" class="editor-gutter" aria-hidden="true">
       <pre>{{ lineNumbers }}</pre>
     </div>
-    <div ref="visualLayer" class="live-markdown-layer">
+    <div
+      ref="visualLayer"
+      class="live-markdown-layer"
+      @click="onRenderedLinkClick"
+    >
       <div
         v-for="block in liveBlocks"
         :key="`${block.lineNumber}:${block.from}`"
@@ -533,29 +628,41 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
           { 'is-active': blockIsActive(block), 'is-checked': block.task?.checked },
         ]"
       >
-        <template v-if="blockIsActive(block) || (block.type !== 'heading' && block.type !== 'task')">
+        <template v-if="blockIsActive(block) || !blockRendersInline(block)">
           <span aria-hidden="true">{{ blockSource(block) }}</span>
         </template>
-        <template v-else-if="block.type === 'heading'">
-          <span aria-hidden="true">{{ blockContent(block) }}</span>
-        </template>
         <template v-else>
-          <span class="live-task-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
-          <span class="live-task-control">
-            <span class="live-task-marker" aria-hidden="true">{{ blockTaskMarker(block) }}</span>
-            <button
-              type="button"
-              class="live-task-checkbox"
-              :aria-label="block.task?.checked ? 'Mark task incomplete' : 'Mark task complete'"
-              :aria-pressed="block.task?.checked"
-              tabindex="-1"
-              @mousedown.prevent
-              @click.stop="toggleLiveTask(block)"
-            >
-              <AppIcon v-if="block.task?.checked" name="check" :size="9" :stroke-width="2.4" />
-            </button>
+          <span class="live-markdown-layout" aria-hidden="true">{{ blockSource(block) }}</span>
+          <span
+            class="live-markdown-content"
+            :class="{ 'is-heading': block.type === 'heading' }"
+          >
+            <template v-if="block.type === 'task'">
+              <span class="live-task-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
+              <span class="live-task-control">
+                <span class="live-task-marker" aria-hidden="true">{{ blockTaskMarker(block) }}</span>
+                <button
+                  type="button"
+                  class="live-task-checkbox"
+                  :aria-label="block.task?.checked ? 'Mark task incomplete' : 'Mark task complete'"
+                  :aria-pressed="block.task?.checked"
+                  tabindex="-1"
+                  @mousedown.prevent
+                  @click.stop="toggleLiveTask(block)"
+                >
+                  <AppIcon v-if="block.task?.checked" name="check" :size="9" :stroke-width="2.4" />
+                </button>
+              </span>
+              <LiveMarkdownInline
+                class="live-task-content"
+                :segments="blockInlineSegments(block)"
+              />
+            </template>
+            <LiveMarkdownInline
+              v-else
+              :segments="blockInlineSegments(block)"
+            />
           </span>
-          <span class="live-task-content" aria-hidden="true">{{ blockContent(block) }}</span>
         </template>
       </div>
     </div>

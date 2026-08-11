@@ -2351,35 +2351,110 @@ pre {
 }
 
 .live-markdown-block {
+  position: relative;
   min-height: var(--source-editor-line-height);
   line-height: var(--source-editor-line-height);
 }
 
-.live-markdown-block.is-heading {
+.live-markdown-layout {
+  display: block;
+  visibility: hidden;
+}
+
+.live-markdown-content {
+  position: absolute;
+  inset: 0;
+}
+
+.live-markdown-content.is-heading {
   color: var(--heading-text);
   font-weight: 650;
 }
 
-.live-markdown-block.heading-level-1 {
+.live-markdown-block.is-heading .live-markdown-layout {
   font-weight: 760;
 }
 
-.live-markdown-block.heading-level-2 {
+.live-markdown-block.heading-level-1 .live-markdown-content {
+  font-weight: 760;
+}
+
+.live-markdown-block.heading-level-2 .live-markdown-content {
   font-weight: 720;
 }
 
-.live-markdown-block.heading-level-3 {
+.live-markdown-block.heading-level-3 .live-markdown-content {
   font-weight: 680;
 }
 
-.live-markdown-block.heading-level-6 {
+.live-markdown-block.heading-level-6 .live-markdown-content {
   color: color-mix(in srgb, var(--heading-text) 80%, var(--text-muted));
 }
 
-.live-markdown-block.is-active {
-  color: var(--editor-text);
-  font-size: inherit;
-  font-weight: inherit;
+.live-inline-segment.is-strong {
+  color: var(--strong-text);
+  font-weight: 700;
+}
+
+.live-inline-segment.is-emphasis {
+  font-style: italic;
+}
+
+.live-inline-segment.is-strikethrough {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.live-inline-segment.is-code {
+  padding: 0.08em 0.3em 0.12em;
+  border: 1px solid var(--border-faint);
+  border-radius: 4px;
+  background: var(--surface-code);
+  color: var(--inline-code-text);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  white-space: pre-wrap;
+}
+
+.live-inline-segment.is-link {
+  color: var(--link-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--link-text) 30%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.live-inline-segment:is(.is-link, .is-wiki-link) {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.live-inline-segment:is(.is-link, .is-wiki-link):focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.live-inline-segment.is-wiki-link {
+  padding: 0.04em 0.2em 0.1em;
+  border-radius: 4px;
+  background: var(--violet-wash);
+  color: var(--link-text);
+  font-size: 0.92em;
+  font-weight: 580;
+  text-decoration: none;
+}
+
+.live-inline-segment.is-wiki-link.is-unresolved {
+  border-bottom: 1px dashed color-mix(in srgb, var(--amber) 50%, transparent);
+  background: var(--amber-wash);
+  color: var(--amber);
+}
+
+.live-inline-segment.is-unsafe-link {
+  color: var(--red);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--red) 45%, transparent);
 }
 
 .live-task-indent {

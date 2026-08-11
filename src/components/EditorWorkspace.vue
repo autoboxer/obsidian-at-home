@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, nextTick, ref, watch } from "vue";
 import {
   activeNote,
@@ -13,6 +14,7 @@ import {
   forwardNavigationNote,
   navigateBack,
   navigateForward,
+  notify,
   setEditorMode,
   togglePinned,
   uiState,
@@ -113,6 +115,14 @@ function setSourceContent(content: string): void {
 function setPreviewContent(content: string): void {
   claimScrollPane("preview");
   setContent(content);
+}
+
+async function openRenderedLink(href: string): Promise<void> {
+  try {
+    await openUrl(href);
+  } catch {
+    notify("Could not open that link", "warning");
+  }
 }
 
 function setFolder(event: Event): void {
@@ -469,6 +479,8 @@ watch(tagInput, () => {
               :model-value="activeNote.content"
               :note-titles="noteTitles"
               @keydown="claimScrollPane('source')"
+              @open-link="openRenderedLink"
+              @open-wiki="createLinkedNote"
               @pointerdown="claimScrollPane('source')"
               @scroll="handleSourceScroll"
               @update:model-value="setSourceContent"
