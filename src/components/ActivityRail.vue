@@ -12,6 +12,7 @@ import {
 } from "../stores/vault";
 import type { ToolView } from "../types";
 import AppIcon from "./AppIcon.vue";
+import KeyboardShortcutsReference from "./KeyboardShortcutsReference.vue";
 
 const primaryTools: Array<{ id: ToolView; label: string; icon: string; shortcut?: string }> = [
   { id: "notes", label: "Notes", icon: "notes" },
@@ -63,6 +64,7 @@ function handleZoomFocusOut(event: FocusEvent): void {
     </nav>
 
     <div class="rail-spacer" />
+    <KeyboardShortcutsReference />
     <div class="rail-zoom-control" @focusout="handleZoomFocusOut" @keydown.esc="zoomMenuOpen = false">
       <button
         type="button"
