@@ -5,23 +5,21 @@ import {
   watch,
 } from "vue";
 import type { Ref } from "vue";
-import type { LiveMarkdownCodeFence } from "../lib/liveMarkdownCode";
 
-interface LiveCodeFenceLayoutOptions {
-  container: Readonly<Ref<HTMLElement | undefined>>;
-  fences: Readonly<Ref<readonly LiveMarkdownCodeFence[]>>;
+export interface LiveMarkdownRegion {
+  lineNumbers: readonly number[];
 }
 
-const LIVE_CODE_BLOCK_SELECTOR = [
-  ".live-markdown-block.is-code-opening",
-  ".live-markdown-block.is-code-content",
-  ".live-markdown-block.is-code-closing",
-].join(", ");
+interface LiveMarkdownRegionLayoutOptions<Region extends LiveMarkdownRegion> {
+  blockSelector: string;
+  container: Readonly<Ref<HTMLElement | undefined>>;
+  regions: Readonly<Ref<readonly Region[]>>;
+}
 
-export function useLiveCodeFenceLayout(
-  options: LiveCodeFenceLayoutOptions,
+export function useLiveMarkdownRegionLayout<Region extends LiveMarkdownRegion>(
+  options: LiveMarkdownRegionLayoutOptions<Region>,
 ): {
-  heightForFence: (fence: LiveMarkdownCodeFence) => number | undefined;
+  heightForRegion: (region: Region) => number | undefined;
 } {
   const heights = shallowRef(new Map<number, number>());
   const observedBlocks = new Set<Element>();
@@ -48,7 +46,7 @@ export function useLiveCodeFenceLayout(
   });
 
   watch(
-    options.fences,
+    options.regions,
     () => {
       syncObservedBlocks();
       scheduleMeasurement();
@@ -56,10 +54,12 @@ export function useLiveCodeFenceLayout(
     { flush: "post" },
   );
 
-  function heightForFence(
-    fence: LiveMarkdownCodeFence,
-  ): number | undefined {
-    return heights.value.get(fence.openingLine);
+  function heightForRegion(region: Region): number | undefined {
+    const openingLine = region.lineNumbers[0];
+
+    return openingLine === undefined
+      ? undefined
+      : heights.value.get(openingLine);
   }
 
   function syncObservedBlocks(): void {
@@ -68,7 +68,7 @@ export function useLiveCodeFenceLayout(
     }
 
     const currentBlocks = new Set(
-      options.container.value.querySelectorAll(LIVE_CODE_BLOCK_SELECTOR),
+      options.container.value.querySelectorAll(options.blockSelector),
     );
     for (const block of observedBlocks) {
       if (!currentBlocks.has(block)) {
@@ -102,7 +102,7 @@ export function useLiveCodeFenceLayout(
 
     const blocks = new Map<number, HTMLElement>();
     for (const element of options.container.value.querySelectorAll<HTMLElement>(
-      LIVE_CODE_BLOCK_SELECTOR,
+      options.blockSelector,
     )) {
       const lineNumber = Number.parseInt(element.dataset.lineNumber ?? "", 10);
       if (Number.isInteger(lineNumber)) {
@@ -111,16 +111,22 @@ export function useLiveCodeFenceLayout(
     }
 
     const nextHeights = new Map<number, number>();
-    for (const fence of options.fences.value) {
-      const opening = blocks.get(fence.openingLine);
-      const closing = blocks.get(fence.lineNumbers.at(-1) ?? fence.openingLine);
+    for (const region of options.regions.value) {
+      const openingLine = region.lineNumbers[0];
+      const closingLine = region.lineNumbers.at(-1);
+      if (openingLine === undefined || closingLine === undefined) {
+        continue;
+      }
+
+      const opening = blocks.get(openingLine);
+      const closing = blocks.get(closingLine);
       if (!opening || !closing) {
         continue;
       }
 
       const height = closing.offsetTop + closing.offsetHeight - opening.offsetTop;
       if (height > 0) {
-        nextHeights.set(fence.openingLine, height);
+        nextHeights.set(openingLine, height);
       }
     }
 
@@ -129,7 +135,7 @@ export function useLiveCodeFenceLayout(
     }
   }
 
-  return { heightForFence };
+  return { heightForRegion };
 }
 
 function sameHeights(

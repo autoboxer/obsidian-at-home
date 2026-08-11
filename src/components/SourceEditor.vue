@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { useLiveCodeFenceLayout } from "../composables/useLiveCodeFenceLayout";
+import { useLiveMarkdownRegionLayout } from "../composables/useLiveMarkdownRegionLayout";
 import {
   activeLiveMarkdownBlocks,
   parseLiveMarkdownBlocks,
@@ -12,6 +12,10 @@ import {
   setLiveMarkdownCodeLanguage,
 } from "../lib/liveMarkdownCode";
 import { parseLiveMarkdownInline } from "../lib/liveMarkdownInline";
+import {
+  indexLiveMarkdownTableLines,
+  parseLiveMarkdownTables,
+} from "../lib/liveMarkdownTable";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { LiveMarkdownBlock } from "../lib/liveMarkdown";
@@ -20,9 +24,14 @@ import type {
   LiveMarkdownCodeFenceLine,
 } from "../lib/liveMarkdownCode";
 import type { LiveMarkdownInlineSegment } from "../lib/liveMarkdownInline";
+import type {
+  LiveMarkdownTable as LiveMarkdownTableModel,
+  LiveMarkdownTableLine,
+} from "../lib/liveMarkdownTable";
 import AppIcon from "./AppIcon.vue";
 import LiveMarkdownCodeBlock from "./LiveMarkdownCodeBlock.vue";
 import LiveMarkdownInline from "./LiveMarkdownInline.vue";
+import LiveMarkdownTable from "./LiveMarkdownTable.vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -45,6 +54,16 @@ const selectionEnd = ref(0);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const INDENT = "  ";
+const LIVE_CODE_BLOCK_SELECTOR = [
+  ".live-markdown-block.is-code-opening",
+  ".live-markdown-block.is-code-content",
+  ".live-markdown-block.is-code-closing",
+].join(", ");
+const LIVE_TABLE_BLOCK_SELECTOR = [
+  ".live-markdown-block.is-table-header",
+  ".live-markdown-block.is-table-delimiter",
+  ".live-markdown-block.is-table-body",
+].join(", ");
 const UNORDERED_LIST_MARKERS = ["•", "◦", "▪"] as const;
 const ROMAN_NUMERALS: ReadonlyArray<readonly [number, string]> = [
   [1_000, "m"],
@@ -81,9 +100,20 @@ interface TextEdit {
 const liveBlocks = computed(() => parseLiveMarkdownBlocks(props.modelValue));
 const codeFences = computed(() => parseLiveMarkdownCodeFences(props.modelValue));
 const codeFenceLines = computed(() => indexLiveMarkdownCodeFenceLines(codeFences.value));
-const { heightForFence: codeFenceHeight } = useLiveCodeFenceLayout({
+const tables = computed(() => parseLiveMarkdownTables(
+  props.modelValue,
+  liveBlocks.value,
+));
+const tableLines = computed(() => indexLiveMarkdownTableLines(tables.value));
+const { heightForRegion: codeFenceHeight } = useLiveMarkdownRegionLayout({
+  blockSelector: LIVE_CODE_BLOCK_SELECTOR,
   container: visualLayer,
-  fences: codeFences,
+  regions: codeFences,
+});
+const { heightForRegion: tableHeight } = useLiveMarkdownRegionLayout({
+  blockSelector: LIVE_TABLE_BLOCK_SELECTOR,
+  container: visualLayer,
+  regions: tables,
 });
 const lineCount = computed(() => liveBlocks.value.length);
 const lineNumbers = computed(() => Array.from({ length: lineCount.value }, (_, index) => index + 1).join("\n"));
@@ -99,9 +129,11 @@ const activeBlockLines = computed(() => {
   );
 
   for (const lineNumber of [...lines]) {
-    const codeFence = codeFenceLines.value.get(lineNumber)?.fence;
-    for (const codeLine of codeFence?.lineNumbers ?? []) {
-      lines.add(codeLine);
+    const regionLines = codeFenceLines.value.get(lineNumber)?.fence.lineNumbers ??
+      tableLines.value.get(lineNumber)?.table.lineNumbers ??
+      [];
+    for (const regionLine of regionLines) {
+      lines.add(regionLine);
     }
   }
 
@@ -117,7 +149,7 @@ const inlineSegmentsByLine = computed(() => {
   const segments = new Map<number, LiveMarkdownInlineSegment[]>();
 
   for (const block of liveBlocks.value) {
-    if (!blockRendersInline(block)) {
+    if (!blockRendersInline(block) || tableLines.value.has(block.lineNumber)) {
       continue;
     }
 
@@ -239,7 +271,8 @@ function blockRendersInline(block: LiveMarkdownBlock): boolean {
 function blockHasLiveRendering(block: LiveMarkdownBlock): boolean {
   return blockRendersInline(block) ||
     block.type === "horizontal-rule" ||
-    codeFenceLines.value.has(block.lineNumber);
+    codeFenceLines.value.has(block.lineNumber) ||
+    tableLines.value.has(block.lineNumber);
 }
 
 function blockCodeFenceLine(
@@ -254,6 +287,18 @@ function blockCodeFenceClass(block: LiveMarkdownBlock): string | undefined {
   return role ? `is-code-${role}` : undefined;
 }
 
+function blockTableLine(
+  block: LiveMarkdownBlock,
+): LiveMarkdownTableLine | undefined {
+  return tableLines.value.get(block.lineNumber);
+}
+
+function blockTableClass(block: LiveMarkdownBlock): string | undefined {
+  const role = blockTableLine(block)?.role;
+
+  return role ? `is-table-${role}` : undefined;
+}
+
 function openingCodeFence(block: LiveMarkdownBlock): LiveMarkdownCodeFence {
   const line = blockCodeFenceLine(block);
   if (!line || line.role !== "opening") {
@@ -261,6 +306,15 @@ function openingCodeFence(block: LiveMarkdownBlock): LiveMarkdownCodeFence {
   }
 
   return line.fence;
+}
+
+function openingTable(block: LiveMarkdownBlock): LiveMarkdownTableModel {
+  const line = blockTableLine(block);
+  if (!line || line.role !== "header") {
+    throw new Error("Expected a table header");
+  }
+
+  return line.table;
 }
 
 function changeCodeFenceLanguage(
@@ -780,6 +834,7 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
           block.list ? `list-depth-${block.list.depth % 3}` : undefined,
           block.quote ? `quote-depth-${Math.min(block.quote.depth, 3)}` : undefined,
           blockCodeFenceClass(block),
+          blockTableClass(block),
           { 'is-active': blockIsActive(block), 'is-checked': block.task?.checked },
         ]"
       >
@@ -792,8 +847,18 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
             class="live-markdown-content"
             :class="{ 'is-heading': block.type === 'heading' }"
           >
+            <LiveMarkdownTable
+              v-if="blockTableLine(block)?.role === 'header'"
+              :table="openingTable(block)"
+              :height="tableHeight(openingTable(block))"
+              :resolve-wiki-link="inlineWikiLinkIsResolved"
+            />
+            <span
+              v-else-if="blockTableLine(block)"
+              aria-hidden="true"
+            />
             <LiveMarkdownCodeBlock
-              v-if="blockCodeFenceLine(block)?.role === 'opening'"
+              v-else-if="blockCodeFenceLine(block)?.role === 'opening'"
               :fence="openingCodeFence(block)"
               :height="codeFenceHeight(openingCodeFence(block))"
               @update:language="changeCodeFenceLanguage(openingCodeFence(block), $event)"
