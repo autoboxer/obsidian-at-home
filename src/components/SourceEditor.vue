@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
@@ -134,12 +135,21 @@ function onKeydown(event: KeyboardEvent): void {
   }
 
   const modifier = event.metaKey || event.ctrlKey;
-  if (modifier && event.key.toLocaleLowerCase() === "b") {
+  const formattingModifier = modifier && !event.altKey;
+  const key = event.key.toLocaleLowerCase();
+
+  if (formattingModifier && !event.shiftKey && key === "b") {
     event.preventDefault();
-    wrapSelection("**", "**");
-  } else if (modifier && event.key.toLocaleLowerCase() === "i") {
+    toggleSelectionFormatting("**", ["__"]);
+  } else if (formattingModifier && !event.shiftKey && key === "i") {
     event.preventDefault();
-    wrapSelection("_", "_");
+    toggleSelectionFormatting("*", ["_"]);
+  } else if (formattingModifier && event.shiftKey && key === "x") {
+    event.preventDefault();
+    toggleSelectionFormatting("~~");
+  } else if (event.key === "`" && !commandModifier && element.selectionStart !== element.selectionEnd) {
+    event.preventDefault();
+    wrapSelectionAsInlineCode();
   }
 }
 
@@ -154,17 +164,38 @@ function replaceSelection(value: string): void {
   applyEdit(next, start + value.length);
 }
 
-function wrapSelection(before: string, after: string): void {
+function wrapSelectionAsInlineCode(): void {
   const element = textarea.value;
   if (!element) {
     return;
   }
-  const start = element.selectionStart;
-  const end = element.selectionEnd;
-  const selected = element.value.slice(start, end);
-  const next = `${element.value.slice(0, start)}${before}${selected}${after}${element.value.slice(end)}`;
-  const selectionStart = start + before.length;
-  applyEdit(next, selectionStart, selectionStart + selected.length, element.selectionDirection);
+
+  const edit = wrapInlineCode(
+    element.value,
+    element.selectionStart,
+    element.selectionEnd,
+  );
+  applyEdit(edit.value, edit.selectionStart, edit.selectionEnd, element.selectionDirection);
+}
+
+function toggleSelectionFormatting(marker: string, alternatives: string[] = []): void {
+  const element = textarea.value;
+  if (!element) {
+    return;
+  }
+
+  const edit = toggleInlineFormatting(
+    element.value,
+    element.selectionStart,
+    element.selectionEnd,
+    marker,
+    alternatives,
+  );
+  if (edit.value === element.value) {
+    return;
+  }
+
+  applyEdit(edit.value, edit.selectionStart, edit.selectionEnd, element.selectionDirection);
 }
 
 function updateSuggestions(element: HTMLTextAreaElement): void {
