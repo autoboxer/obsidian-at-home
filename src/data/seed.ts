@@ -202,6 +202,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     templates,
     snippets,
     activeNoteId: "note-getting-started",
+    recentNoteIds: ["note-getting-started"],
     selectedFolderId: "all",
     editorMode: "source",
   };
@@ -215,6 +216,7 @@ export function createEmptyVault(now = Date.now()): VaultData {
     notes: [],
     folders: [],
     activeNoteId: null,
+    recentNoteIds: [],
     selectedFolderId: "all",
   };
 }

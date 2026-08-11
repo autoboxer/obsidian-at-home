@@ -15,6 +15,7 @@ import {
   visibleNotes,
 } from "../stores/vault";
 import AppIcon from "./AppIcon.vue";
+import RecentNotesSection from "./RecentNotesSection.vue";
 import VaultTreeFolder from "./VaultTreeFolder.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
 
@@ -291,6 +292,8 @@ function handleRootKeydown(event: KeyboardEvent): void {
     </Transition>
 
     <div class="explorer-scroll">
+      <RecentNotesSection />
+
       <section class="explorer-section smart-folders">
         <button type="button" :class="{ active: vaultState.selectedFolderId === 'all' }" @click="selectFolder('all')">
           <AppIcon name="notes" :size="15" />

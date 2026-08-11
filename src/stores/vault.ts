@@ -37,6 +37,7 @@ const APP_ZOOM_KEY = "obsidian-at-home.zoom.v1";
 const PERSIST_DELAY = 220;
 const EXTERNAL_CHECK_DELAY = 3_000;
 const NOTE_NAVIGATION_LIMIT = 100;
+const RECENT_NOTE_LIMIT = 10;
 
 export const MIN_ZOOM = 0.7;
 export const MAX_ZOOM = 1.5;
@@ -521,6 +522,16 @@ export const activeNote = computed<Note | undefined>(() =>
   vaultState.notes.find((note) => note.id === vaultState.activeNoteId),
 );
 
+export const recentNotes = computed<Note[]>(() => {
+  const notesById = new Map(vaultState.notes.map((note) => [note.id, note]));
+
+  return vaultState.recentNoteIds.flatMap((id) => {
+    const note = notesById.get(id);
+
+    return note ? [note] : [];
+  });
+});
+
 export const backNavigationNote = computed<Note | undefined>(() =>
   findNoteNavigationTarget(noteNavigationState.back),
 );
@@ -765,6 +776,7 @@ export function deleteNote(id: string): void {
 
   const wasActive = vaultState.activeNoteId === id;
   vaultState.notes.splice(index, 1);
+  removeRecentNote(id);
   removeNoteFromNavigation(id);
   if (wasActive) {
     const fallbackNote = vaultState.notes[Math.min(index, vaultState.notes.length - 1)];
@@ -1068,8 +1080,13 @@ export async function mergeImportedVault(
   vaultState.activeNoteId = firstImportedNoteId ?? (replace ? null : previousActiveNoteId);
   vaultState.selectedFolderId = "all";
   if (replace) {
+    vaultState.recentNoteIds.splice(0);
     resetNoteNavigation();
-  } else if (firstImportedNoteId) {
+  }
+  if (firstImportedNoteId) {
+    touchRecentNote(firstImportedNoteId);
+  }
+  if (!replace && firstImportedNoteId) {
     recordDirectNoteNavigation(previousActiveNoteId, firstImportedNoteId);
   }
   const saved = await flushVault();
@@ -1160,6 +1177,7 @@ export async function clearVault(): Promise<boolean> {
   vaultState.notes.splice(0);
   vaultState.folders.splice(0);
   vaultState.activeNoteId = null;
+  vaultState.recentNoteIds.splice(0);
   resetNoteNavigation();
   vaultState.selectedFolderId = "all";
   uiState.noteFilter = "";
@@ -1186,12 +1204,27 @@ function activateNote(id: string): boolean {
 
   const wasVisible = visibleNotes.value.some((note) => note.id === id);
   vaultState.activeNoteId = id;
+  touchRecentNote(id);
   if (!wasVisible) {
     vaultState.selectedFolderId = "all";
     uiState.noteFilter = "";
   }
 
   return true;
+}
+
+function touchRecentNote(id: string): void {
+  if (vaultState.recentNoteIds[0] === id) {
+    return;
+  }
+
+  const recentNoteIds = [id, ...vaultState.recentNoteIds.filter((noteId) => noteId !== id)]
+    .slice(0, RECENT_NOTE_LIMIT);
+  vaultState.recentNoteIds.splice(0, vaultState.recentNoteIds.length, ...recentNoteIds);
+}
+
+function removeRecentNote(id: string): void {
+  vaultState.recentNoteIds = vaultState.recentNoteIds.filter((noteId) => noteId !== id);
 }
 
 function recordDirectNoteNavigation(previousId: string | null, nextId: string): void {
@@ -1419,7 +1452,8 @@ function readStoredVault(): StoredVault | null {
     return {
       raw,
       vault,
-      needsRewrite: parsed.selectedFolderId !== vault.selectedFolderId,
+      needsRewrite: parsed.selectedFolderId !== vault.selectedFolderId
+        || !stringArraysMatch(parsed.recentNoteIds, vault.recentNoteIds),
     };
   } catch {
     return null;
@@ -1471,6 +1505,7 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     && notes.some((note) => note.pinned)
     ? "favorites"
     : "all";
+  const recentNoteIds = normalizeRecentNoteIds(input.recentNoteIds, notes, activeNoteId);
 
   return {
     name: typeof input.name === "string" && input.name.trim() ? input.name : fallback.name,
@@ -1481,11 +1516,44 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
       : fallback.templates,
     snippets,
     activeNoteId,
+    recentNoteIds,
     selectedFolderId,
     editorMode: ["source", "split", "reading"].includes(input.editorMode ?? "")
       ? input.editorMode as EditorMode
       : "source",
   };
+}
+
+function normalizeRecentNoteIds(
+  value: unknown,
+  notes: Note[],
+  activeNoteId: string | null,
+): string[] {
+  const noteIds = new Set(notes.map((note) => note.id));
+  const recentNoteIds: string[] = [];
+  const addNote = (id: unknown): void => {
+    if (
+      typeof id === "string"
+      && noteIds.has(id)
+      && !recentNoteIds.includes(id)
+      && recentNoteIds.length < RECENT_NOTE_LIMIT
+    ) {
+      recentNoteIds.push(id);
+    }
+  };
+
+  addNote(activeNoteId);
+  if (Array.isArray(value)) {
+    value.forEach(addNote);
+  }
+
+  return recentNoteIds;
+}
+
+function stringArraysMatch(value: unknown, expected: string[]): boolean {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((item, index) => item === expected[index]);
 }
 
 function snapshotVault(): VaultData {
