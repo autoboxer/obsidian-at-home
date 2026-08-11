@@ -1,16 +1,27 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
+import { useLiveCodeFenceLayout } from "../composables/useLiveCodeFenceLayout";
 import {
   activeLiveMarkdownBlocks,
   parseLiveMarkdownBlocks,
   setLiveMarkdownTaskChecked,
 } from "../lib/liveMarkdown";
+import {
+  indexLiveMarkdownCodeFenceLines,
+  parseLiveMarkdownCodeFences,
+  setLiveMarkdownCodeLanguage,
+} from "../lib/liveMarkdownCode";
 import { parseLiveMarkdownInline } from "../lib/liveMarkdownInline";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { LiveMarkdownBlock } from "../lib/liveMarkdown";
+import type {
+  LiveMarkdownCodeFence,
+  LiveMarkdownCodeFenceLine,
+} from "../lib/liveMarkdownCode";
 import type { LiveMarkdownInlineSegment } from "../lib/liveMarkdownInline";
 import AppIcon from "./AppIcon.vue";
+import LiveMarkdownCodeBlock from "./LiveMarkdownCodeBlock.vue";
 import LiveMarkdownInline from "./LiveMarkdownInline.vue";
 
 const props = defineProps<{
@@ -68,17 +79,34 @@ interface TextEdit {
 }
 
 const liveBlocks = computed(() => parseLiveMarkdownBlocks(props.modelValue));
+const codeFences = computed(() => parseLiveMarkdownCodeFences(props.modelValue));
+const codeFenceLines = computed(() => indexLiveMarkdownCodeFenceLines(codeFences.value));
+const { heightForFence: codeFenceHeight } = useLiveCodeFenceLayout({
+  container: visualLayer,
+  fences: codeFences,
+});
 const lineCount = computed(() => liveBlocks.value.length);
 const lineNumbers = computed(() => Array.from({ length: lineCount.value }, (_, index) => index + 1).join("\n"));
-const activeBlockLines = computed(() => new Set(
-  editorFocused.value
-    ? activeLiveMarkdownBlocks(
-      liveBlocks.value,
-      selectionStart.value,
-      selectionEnd.value,
-    ).map((block) => block.lineNumber)
-    : [],
-));
+const activeBlockLines = computed(() => {
+  const lines = new Set(
+    editorFocused.value
+      ? activeLiveMarkdownBlocks(
+        liveBlocks.value,
+        selectionStart.value,
+        selectionEnd.value,
+      ).map((block) => block.lineNumber)
+      : [],
+  );
+
+  for (const lineNumber of [...lines]) {
+    const codeFence = codeFenceLines.value.get(lineNumber)?.fence;
+    for (const codeLine of codeFence?.lineNumbers ?? []) {
+      lines.add(codeLine);
+    }
+  }
+
+  return lines;
+});
 const normalizedNoteTitles = computed(() => new Set(
   props.noteTitles.flatMap((title) => [
     normalizeInlineLinkTarget(title),
@@ -209,7 +237,44 @@ function blockRendersInline(block: LiveMarkdownBlock): boolean {
 }
 
 function blockHasLiveRendering(block: LiveMarkdownBlock): boolean {
-  return blockRendersInline(block) || block.type === "horizontal-rule";
+  return blockRendersInline(block) ||
+    block.type === "horizontal-rule" ||
+    codeFenceLines.value.has(block.lineNumber);
+}
+
+function blockCodeFenceLine(
+  block: LiveMarkdownBlock,
+): LiveMarkdownCodeFenceLine | undefined {
+  return codeFenceLines.value.get(block.lineNumber);
+}
+
+function blockCodeFenceClass(block: LiveMarkdownBlock): string | undefined {
+  const role = blockCodeFenceLine(block)?.role;
+
+  return role ? `is-code-${role}` : undefined;
+}
+
+function openingCodeFence(block: LiveMarkdownBlock): LiveMarkdownCodeFence {
+  const line = blockCodeFenceLine(block);
+  if (!line || line.role !== "opening") {
+    throw new Error("Expected an opening code fence");
+  }
+
+  return line.fence;
+}
+
+function changeCodeFenceLanguage(
+  fence: LiveMarkdownCodeFence,
+  language: string,
+): void {
+  const next = setLiveMarkdownCodeLanguage(
+    props.modelValue,
+    fence,
+    language,
+  );
+  if (next !== props.modelValue) {
+    emit("update:modelValue", next);
+  }
 }
 
 function blockInlineSource(block: LiveMarkdownBlock): string {
@@ -708,11 +773,13 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
         v-for="block in liveBlocks"
         :key="`${block.lineNumber}:${block.from}`"
         class="live-markdown-block"
+        :data-line-number="block.lineNumber"
         :class="[
           `is-${block.type}`,
           block.headingLevel ? `heading-level-${block.headingLevel}` : undefined,
           block.list ? `list-depth-${block.list.depth % 3}` : undefined,
           block.quote ? `quote-depth-${Math.min(block.quote.depth, 3)}` : undefined,
+          blockCodeFenceClass(block),
           { 'is-active': blockIsActive(block), 'is-checked': block.task?.checked },
         ]"
       >
@@ -725,8 +792,18 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
             class="live-markdown-content"
             :class="{ 'is-heading': block.type === 'heading' }"
           >
+            <LiveMarkdownCodeBlock
+              v-if="blockCodeFenceLine(block)?.role === 'opening'"
+              :fence="openingCodeFence(block)"
+              :height="codeFenceHeight(openingCodeFence(block))"
+              @update:language="changeCodeFenceLanguage(openingCodeFence(block), $event)"
+            />
             <span
-              v-if="block.type === 'horizontal-rule'"
+              v-else-if="block.type === 'code'"
+              aria-hidden="true"
+            />
+            <span
+              v-else-if="block.type === 'horizontal-rule'"
               class="live-horizontal-rule"
               aria-hidden="true"
             />
