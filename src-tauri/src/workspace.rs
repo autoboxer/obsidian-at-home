@@ -20,6 +20,7 @@ const TRANSACTION_VERSION: u32 = 2;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
+const MAX_RECENT_NOTES: usize = 10;
 const MAX_WARNINGS: usize = 200;
 const MAX_PATH_COMPONENTS: usize = 120;
 const MAX_TRANSACTION_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
@@ -102,6 +103,8 @@ pub struct VaultData {
     #[serde(default)]
     pub snippets: Vec<CssSnippet>,
     pub active_note_id: Option<String>,
+    #[serde(default)]
+    pub recent_note_ids: Vec<String>,
     pub selected_folder_id: String,
     pub editor_mode: String,
 }
@@ -166,6 +169,8 @@ struct WorkspaceState {
     snippets: Vec<CssSnippet>,
     #[serde(default)]
     active_note_id: Option<String>,
+    #[serde(default)]
+    recent_note_ids: Vec<String>,
     #[serde(default = "default_folder_selection")]
     selected_folder_id: String,
     #[serde(default = "default_editor_mode")]
@@ -185,6 +190,7 @@ impl Default for WorkspaceState {
             templates: Vec::new(),
             snippets: Vec::new(),
             active_note_id: None,
+            recent_note_ids: Vec::new(),
             selected_folder_id: default_folder_selection(),
             editor_mode: default_editor_mode(),
             last_committed_transaction_id: None,
@@ -579,6 +585,11 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         .active_note_id
         .filter(|id| note_ids.contains(id.as_str()))
         .or_else(|| notes.first().map(|note| note.id.clone()));
+    let recent_note_ids = normalize_recent_note_ids(
+        &state.recent_note_ids,
+        active_note_id.as_deref(),
+        &note_ids,
+    );
     let selected_folder_id = if is_virtual_folder_selection(&state.selected_folder_id) {
         state.selected_folder_id.clone()
     } else {
@@ -612,6 +623,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         templates: templates.clone(),
         snippets: snippets.clone(),
         active_note_id: active_note_id.clone(),
+        recent_note_ids: recent_note_ids.clone(),
         selected_folder_id: selected_folder_id.clone(),
         editor_mode: normalize_editor_mode(if state_was_present {
             &state.editor_mode
@@ -641,6 +653,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             templates,
             snippets,
             active_note_id,
+            recent_note_ids,
             selected_folder_id,
             editor_mode: state.editor_mode,
         },
@@ -749,6 +762,12 @@ fn save_workspace_files(
             },
         );
     }
+    let note_ids: HashSet<&str> = vault.notes.iter().map(|note| note.id.as_str()).collect();
+    let recent_note_ids = normalize_recent_note_ids(
+        &vault.recent_note_ids,
+        vault.active_note_id.as_deref(),
+        &note_ids,
+    );
     let mut state = WorkspaceState {
         version: STATE_VERSION,
         name: display_vault_name(&vault.name, &root),
@@ -758,6 +777,7 @@ fn save_workspace_files(
         templates: vault.templates.clone(),
         snippets: vault.snippets.clone(),
         active_note_id: vault.active_note_id.clone(),
+        recent_note_ids,
         selected_folder_id: vault.selected_folder_id.clone(),
         editor_mode: normalize_editor_mode(&vault.editor_mode),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
@@ -3310,6 +3330,29 @@ fn normalize_editor_mode(mode: &str) -> String {
     }
 }
 
+fn normalize_recent_note_ids(
+    recent_note_ids: &[String],
+    active_note_id: Option<&str>,
+    note_ids: &HashSet<&str>,
+) -> Vec<String> {
+    let candidates = active_note_id
+        .into_iter()
+        .chain(recent_note_ids.iter().map(String::as_str));
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for id in candidates {
+        if normalized.len() >= MAX_RECENT_NOTES {
+            break;
+        }
+        if note_ids.contains(id) && seen.insert(id.to_owned()) {
+            normalized.push(id.to_owned());
+        }
+    }
+
+    normalized
+}
+
 fn is_virtual_folder_selection(value: &str) -> bool {
     matches!(value, "all" | "favorites")
 }
@@ -3364,5 +3407,30 @@ impl WarningCollector {
                 .push("Additional warnings were omitted.".to_owned());
         }
         self.warnings
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_recent_notes() {
+        let note_id_values = (1..=12)
+            .map(|index| format!("note-{index}"))
+            .collect::<Vec<_>>();
+        let note_ids = note_id_values.iter().map(String::as_str).collect();
+        let stored = [
+            "note-2", "missing", "note-3", "note-2", "note-4", "note-5", "note-6",
+            "note-7", "note-8", "note-9", "note-10", "note-11", "note-12",
+        ]
+        .map(str::to_owned);
+
+        let normalized = normalize_recent_note_ids(&stored, Some("note-1"), &note_ids);
+        let expected = (1..=10)
+            .map(|index| format!("note-{index}"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(normalized, expected);
     }
 }
