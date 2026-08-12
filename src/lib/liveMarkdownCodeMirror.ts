@@ -6,7 +6,9 @@ import {
   ViewPlugin,
 } from "@codemirror/view";
 import { documentSearchMatches } from "./codeMirrorDocumentSearch";
+import { highlightCodeRanges } from "./highlight";
 import { parseLiveMarkdownBlocks } from "./liveMarkdown";
+import { parseLiveMarkdownCodeFences } from "./liveMarkdownCode";
 import {
   HorizontalRuleWidget,
   ListMarkerWidget,
@@ -15,6 +17,12 @@ import {
   TaskWidget,
   WikiLinkWidget,
 } from "./liveMarkdownCodeMirrorWidgets";
+import {
+  CodeFenceFooterWidget,
+  CodeFenceHeaderWidget,
+  EmptyTableCellWidget,
+  TableDelimiterWidget,
+} from "./liveMarkdownRegionWidgets";
 import { parseLiveMarkdownTables } from "./liveMarkdownTable";
 import { sanitizeLinkUrl } from "./markdown";
 import { parseWikiLinks } from "./wikiLinks";
@@ -22,6 +30,12 @@ import type { EditorState, Extension, SelectionRange } from "@codemirror/state";
 import type { DecorationSet, ViewUpdate, WidgetType } from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
+import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
+import type {
+  LiveMarkdownTable,
+  LiveMarkdownTableAlignment,
+  LiveMarkdownTableRow,
+} from "./liveMarkdownTable";
 
 export interface LiveMarkdownOptions {
   readonly openLink: (href: string) => void;
@@ -35,6 +49,8 @@ interface HiddenSyntax extends LiveMarkdownRange {
 
 interface LiveConstruct {
   from: number;
+  revealAtSyntaxBoundaries: boolean;
+  renderedDecorations: StoredDecoration[];
   to: number;
   syntax: HiddenSyntax[];
 }
@@ -121,6 +137,10 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
           continue;
         }
 
+        for (const { decoration, from, to } of construct.renderedDecorations) {
+          decorations.push(decoration.range(from, to));
+        }
+
         for (const syntax of construct.syntax) {
           decorations.push(
             Decoration.replace({
@@ -194,9 +214,12 @@ function parseLiveMarkdownModel(
 ): LiveMarkdownModel {
   const value = state.doc.toString();
   const blocks = parseLiveMarkdownBlocks(value);
-  const tableLines = new Set(
-    parseLiveMarkdownTables(value, blocks).flatMap((table) => table.lineNumbers),
+  const codeFences = parseLiveMarkdownCodeFences(value);
+  const codeLines = new Set(
+    codeFences.flatMap((fence) => fence.lineNumbers),
   );
+  const tables = parseLiveMarkdownTables(value, blocks);
+  const tableLines = new Set(tables.flatMap((table) => table.lineNumbers));
   const model: LiveMarkdownModel = {
     constructs: [],
     decorations: [],
@@ -205,16 +228,30 @@ function parseLiveMarkdownModel(
 
   for (const block of blocks) {
     if (
-      tableLines.has(block.lineNumber) ||
-      block.type === "code" ||
-      block.type === "frontmatter"
+      codeLines.has(block.lineNumber) ||
+      tableLines.has(block.lineNumber)
     ) {
+      continue;
+    }
+    if (block.type === "frontmatter") {
       excludedRanges.push({ from: block.from, to: block.end });
 
       continue;
     }
 
     addBlockDecorations(model, block, value);
+  }
+
+  for (const fence of codeFences) {
+    excludedRanges.push({ from: fence.from, to: fence.to });
+    addCodeFenceDecorations(model, state, fence);
+  }
+  for (const table of tables) {
+    excludedRanges.push({
+      from: table.delimiter.from,
+      to: table.delimiter.end,
+    });
+    addTableDecorations(model, table);
   }
 
   const markdownLinkRanges = supportedMarkdownLinkRanges(
@@ -320,6 +357,236 @@ function addBlockDecorations(
       ),
     }]);
   }
+}
+
+function addCodeFenceDecorations(
+  model: LiveMarkdownModel,
+  state: EditorState,
+  fence: LiveMarkdownCodeFence,
+): void {
+  const opening = state.doc.line(fence.openingLine);
+  const openingClasses = [
+    "live-markdown-block",
+    "is-code-opening",
+    ...(fence.lineNumbers.length === 1 ? ["is-code-last"] : []),
+  ];
+  addConstruct(
+    model,
+    opening.from,
+    opening.to,
+    [{
+      from: opening.from,
+      to: opening.to,
+      widget: new CodeFenceHeaderWidget(fence, opening.from, opening.to),
+    }],
+    [lineDecoration(opening.from, openingClasses.join(" "))],
+  );
+
+  const finalContentLine = fence.closingLine === undefined
+    ? fence.lineNumbers.at(-1)
+    : fence.closingLine - 1;
+  for (
+    let lineNumber = fence.openingLine + 1;
+    lineNumber <= (finalContentLine ?? fence.openingLine);
+    lineNumber += 1
+  ) {
+    const line = state.doc.line(lineNumber);
+    const classes = ["live-markdown-block", "is-code-content"];
+    if (fence.closingLine === undefined && lineNumber === finalContentLine) {
+      classes.push("is-code-last");
+    }
+    addLineDecoration(model, line.from, classes.join(" "));
+  }
+
+  addCodeHighlightDecorations(model, state, fence);
+
+  if (fence.closingLine !== undefined) {
+    const closing = state.doc.line(fence.closingLine);
+    addConstruct(
+      model,
+      closing.from,
+      closing.to,
+      [{
+        from: closing.from,
+        to: closing.to,
+        widget: new CodeFenceFooterWidget(closing.from, closing.to),
+      }],
+      [lineDecoration(
+        closing.from,
+        "live-markdown-block is-code-closing is-code-last",
+      )],
+    );
+  }
+}
+
+function addCodeHighlightDecorations(
+  model: LiveMarkdownModel,
+  state: EditorState,
+  fence: LiveMarkdownCodeFence,
+): void {
+  if (!fence.code || !fence.language || fence.openingLine >= state.doc.lines) {
+    return;
+  }
+
+  const codeFrom = state.doc.line(fence.openingLine + 1).from;
+  for (const range of highlightCodeRanges(fence.code, fence.language)) {
+    addMultilineMarkDecoration(
+      model,
+      state,
+      codeFrom + range.from,
+      codeFrom + range.to,
+      range.className,
+    );
+  }
+}
+
+function addMultilineMarkDecoration(
+  model: LiveMarkdownModel,
+  state: EditorState,
+  from: number,
+  to: number,
+  className: string,
+): void {
+  let cursor = from;
+  while (cursor < to) {
+    const line = state.doc.lineAt(cursor);
+    const segmentTo = Math.min(to, line.to);
+    if (cursor < segmentTo) {
+      addMarkDecoration(model, { from: cursor, to: segmentTo }, className);
+    }
+    cursor = segmentTo < to ? line.to + 1 : to;
+  }
+}
+
+function addTableDecorations(
+  model: LiveMarkdownModel,
+  table: LiveMarkdownTable,
+): void {
+  addTableRowDecorations(model, table, table.header, "header", false);
+
+  const delimiterLast = table.rows.length === 0;
+  addConstruct(
+    model,
+    table.delimiter.from,
+    table.delimiter.to,
+    [{
+      from: table.delimiter.from,
+      to: table.delimiter.to,
+      widget: new TableDelimiterWidget(
+        table.delimiter.from,
+        table.delimiter.to,
+      ),
+    }],
+    [lineDecoration(
+      table.delimiter.from,
+      [
+        "live-markdown-block",
+        "is-table-delimiter",
+        ...(delimiterLast ? ["is-table-last"] : []),
+      ].join(" "),
+    )],
+  );
+
+  table.rows.forEach((row, index) => {
+    addTableRowDecorations(
+      model,
+      table,
+      row,
+      "body",
+      index === table.rows.length - 1,
+    );
+  });
+}
+
+function addTableRowDecorations(
+  model: LiveMarkdownModel,
+  table: LiveMarkdownTable,
+  row: LiveMarkdownTableRow,
+  role: "body" | "header",
+  last: boolean,
+): void {
+  const cells = row.cells.slice(0, table.columnCount);
+  const syntax = tableRowSyntax(row, cells);
+  const classes = [
+    "live-markdown-block",
+    "is-table-row",
+    `is-table-${role}`,
+    ...(last ? ["is-table-last"] : []),
+  ];
+  const renderedDecorations: StoredDecoration[] = [lineDecoration(
+    row.from,
+    classes.join(" "),
+    { style: `--live-table-columns: ${table.columnCount}` },
+  )];
+
+  for (let index = 0; index < table.columnCount; index += 1) {
+    const cell = cells[index];
+    const cellLast = index === table.columnCount - 1;
+    const className = tableCellClass(
+      table.alignments[index],
+      cellLast,
+    );
+    if (cell && cell.from < cell.to) {
+      renderedDecorations.push({
+        from: cell.from,
+        to: cell.to,
+        decoration: Decoration.mark({
+          attributes: { "data-column-index": String(index) },
+          class: className,
+        }),
+      });
+    } else {
+      const position = cell?.from ?? row.to;
+      renderedDecorations.push({
+        from: position,
+        to: position,
+        decoration: Decoration.widget({
+          side: index + 1,
+          widget: new EmptyTableCellWidget(position, index, cellLast),
+        }),
+      });
+    }
+  }
+
+  addConstruct(
+    model,
+    row.from,
+    row.to,
+    syntax,
+    renderedDecorations,
+    false,
+  );
+}
+
+function tableRowSyntax(
+  row: LiveMarkdownTableRow,
+  cells: readonly LiveMarkdownTableRow["cells"][number][],
+): HiddenSyntax[] {
+  const syntax: HiddenSyntax[] = [];
+  let cursor = row.from;
+
+  for (const cell of cells) {
+    if (cursor < cell.from) {
+      syntax.push({ from: cursor, to: cell.from });
+    }
+    cursor = Math.max(cursor, cell.to);
+  }
+  if (cursor < row.to) {
+    syntax.push({ from: cursor, to: row.to });
+  }
+
+  return syntax;
+}
+
+function tableCellClass(
+  alignment: LiveMarkdownTableAlignment | undefined,
+  last: boolean,
+): string {
+  return [
+    "live-table-cell",
+    ...(alignment ? [`align-${alignment}`] : []),
+    ...(last ? ["is-last"] : []),
+  ].join(" ");
 }
 
 function supportedMarkdownLinkRanges(
@@ -589,6 +856,8 @@ function addConstruct(
   from: number,
   to: number,
   syntax: readonly HiddenSyntax[],
+  renderedDecorations: readonly StoredDecoration[] = [],
+  revealAtSyntaxBoundaries = true,
 ): void {
   const nonemptySyntax = syntax.filter((range) => range.from < range.to);
   if (!nonemptySyntax.length) {
@@ -597,6 +866,8 @@ function addConstruct(
 
   model.constructs.push({
     from,
+    revealAtSyntaxBoundaries,
+    renderedDecorations: [...renderedDecorations],
     to,
     syntax: nonemptySyntax,
   });
@@ -607,11 +878,22 @@ function addLineDecoration(
   from: number,
   className: string,
 ): void {
-  model.decorations.push({
+  model.decorations.push(lineDecoration(from, className));
+}
+
+function lineDecoration(
+  from: number,
+  className: string,
+  attributes?: Record<string, string>,
+): StoredDecoration {
+  return {
     from,
     to: from,
-    decoration: Decoration.line({ class: className }),
-  });
+    decoration: Decoration.line({
+      class: className,
+      ...(attributes ? { attributes } : {}),
+    }),
+  };
 }
 
 function addMarkDecoration(
@@ -652,9 +934,16 @@ function selectionRevealsConstruct(
   construct: LiveConstruct,
 ): boolean {
   if (selection.empty) {
-    return construct.syntax.some((syntax) =>
-      selection.head >= syntax.from && selection.head <= syntax.to
-    );
+    return construct.syntax.some((syntax) => {
+      if (selection.head > syntax.from && selection.head < syntax.to) {
+        return true;
+      }
+      if (construct.revealAtSyntaxBoundaries) {
+        return selection.head === syntax.from || selection.head === syntax.to;
+      }
+
+      return selection.head === construct.from || selection.head === construct.to;
+    });
   }
 
   return construct.syntax.some((syntax) =>
