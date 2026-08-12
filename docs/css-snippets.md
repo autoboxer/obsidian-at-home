@@ -53,13 +53,12 @@ The context panel also exposes `[data-context-view="links"]` and `[data-context-
 | `[data-context-view="links"]` | Links context tab |
 | `[data-context-view="info"]` | Info context tab |
 | `.source-editor` | Live Markdown editor |
-| `.live-markdown-layer` | Formatted Markdown layer |
-| `.source-textarea` | Source input and caret |
+| `.source-textarea` | Unified editable content |
 | `.document-search-bar` | Find-in-note controls |
 | `[data-ui-region="note-title"]` | Note title |
 | `.tag-chip` | Note tags |
 
-The formatted layer and source input make up one interactive editor. Combine the live view selector with an editor element to keep customizations scoped to notes:
+CodeMirror owns the editor's text, formatting, caret, and layout in one surface. Combine the live view selector with an editor element to keep customizations scoped to notes:
 
 ```css
 [data-editor-view="live"] .source-editor {
@@ -100,7 +99,7 @@ The formatted layer and source input make up one interactive editor. Combine the
 
 ## Live Markdown
 
-The live editor renders formatted blocks and inline regions in `.live-markdown-layer` while `.source-textarea` provides the editable Markdown source. Scope styles to the selectors below so they do not affect the rest of the app.
+The live editor applies formatting directly inside `.source-textarea`. Scope styles to the selectors below so they do not affect the rest of the app.
 
 | Selector | Target |
 | --- | --- |
@@ -108,12 +107,12 @@ The live editor renders formatted blocks and inline regions in `.live-markdown-l
 | `.live-inline-segment.is-wiki-link` | Wiki links |
 | `.live-inline-segment.is-wiki-link.is-unresolved` | Unresolved wiki links |
 | `.live-markdown-block.is-blockquote` | Blockquotes |
-| `.live-code-block` | Code blocks |
-| `.live-table-block` | Tables |
+| `.live-markdown-block.is-code-content` | Code block content |
+| `.live-markdown-block.is-table-row` | Table rows |
 | `.live-markdown-block.is-task` | Tasks |
 | `.live-task-checkbox` | Task checkboxes |
 | `.live-code-language-button` | Code language control |
-| `.live-code-body .hljs-keyword` | Highlighted keywords |
+| `.is-code-content .hljs-keyword` | Highlighted keywords |
 
 ## Theme variables
 

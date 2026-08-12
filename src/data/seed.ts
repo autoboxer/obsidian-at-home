@@ -34,7 +34,7 @@ The Notes view always shows the tree from the root of the vault. Notes can live 
 
 ## Write with Markdown
 
-Write directly in the live Markdown editor. Formatting stays visible while you read, and the Markdown source appears when you place the cursor on a line or interactive region. The app supports the Markdown features below; it is not a complete CommonMark implementation.
+Write directly in the live Markdown editor. Formatting stays visible while you read, and Markdown syntax appears when the cursor reaches an editable boundary. The app supports the Markdown features below; it is not a complete CommonMark implementation.
 
 ### 1. Headings and inline text
 
@@ -115,7 +115,7 @@ Open **CSS snippets**, create a snippet, then save and enable it. Use **Selector
   color: #c9b4f3;
 }
 
-.live-markdown-block.heading-level-1 .live-markdown-content {
+.live-markdown-block.heading-level-1 {
   color: #ddd5ff;
 }
 \`\`\`
@@ -175,7 +175,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
       enabled: true,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.source-editor {\n  --source-editor-line-height: calc(var(--note-font-size) * 1.82);\n}\n\n.live-markdown-layer,\n.source-textarea {\n  letter-spacing: -0.006em;\n}`,
+      css: `.source-editor {\n  --source-editor-line-height: calc(var(--note-font-size) * 1.82);\n}\n\n.source-textarea {\n  letter-spacing: -0.006em;\n}`,
     },
     {
       id: "snippet-violet-headings",
@@ -184,7 +184,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.live-markdown-content.is-heading {\n  color: #c9c1ff;\n}`,
+      css: `.live-markdown-block.is-heading {\n  color: #c9c1ff;\n}`,
     },
     {
       id: "snippet-wide-page",
@@ -193,7 +193,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.live-markdown-layer,\n.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`,
+      css: `.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`,
     },
   ];
 

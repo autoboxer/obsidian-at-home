@@ -2395,52 +2395,6 @@ pre {
   line-height: var(--source-editor-line-height);
 }
 
-.live-markdown-block.has-mapped-position {
-  pointer-events: auto;
-}
-
-.live-markdown-layout {
-  display: block;
-  visibility: hidden;
-}
-
-.live-markdown-content {
-  position: absolute;
-  inset: 0;
-}
-
-.live-markdown-block.has-rendered-layout .live-markdown-content {
-  position: relative;
-  display: block;
-  min-height: var(--source-editor-line-height);
-  inset: auto;
-}
-
-.live-markdown-content.is-heading {
-  color: var(--heading-text);
-  font-weight: 650;
-}
-
-.live-markdown-block.is-heading .live-markdown-layout {
-  font-weight: 760;
-}
-
-.live-markdown-block.heading-level-1 .live-markdown-content {
-  font-weight: 760;
-}
-
-.live-markdown-block.heading-level-2 .live-markdown-content {
-  font-weight: 720;
-}
-
-.live-markdown-block.heading-level-3 .live-markdown-content {
-  font-weight: 680;
-}
-
-.live-markdown-block.heading-level-6 .live-markdown-content {
-  color: color-mix(in srgb, var(--heading-text) 80%, var(--text-muted));
-}
-
 .live-inline-segment.is-strong {
   color: var(--strong-text);
   font-weight: 700;
@@ -2507,9 +2461,7 @@ pre {
   text-decoration-color: color-mix(in srgb, var(--red) 45%, transparent);
 }
 
-.live-list-indent,
-.live-list-prefix,
-.live-quote-prefix {
+.live-list-prefix {
   white-space: pre;
 }
 
@@ -2519,8 +2471,7 @@ pre {
   white-space: pre;
 }
 
-.live-list-prefix,
-.live-quote-prefix {
+.live-list-prefix {
   color: transparent;
 }
 
@@ -2558,31 +2509,6 @@ pre {
   right: 0.35em;
   color: color-mix(in srgb, var(--violet) 72%, var(--text-soft));
   font-weight: 650;
-}
-
-.live-markdown-block.is-blockquote .live-markdown-content {
-  color: var(--blockquote-text);
-}
-
-.live-markdown-block.is-blockquote .live-markdown-content::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 2px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--violet) 55%, transparent);
-  content: "";
-}
-
-.live-markdown-block.quote-depth-2 .live-markdown-content::before {
-  box-shadow: 0.62em 0 color-mix(in srgb, var(--violet) 38%, transparent);
-}
-
-.live-markdown-block.quote-depth-3 .live-markdown-content::before {
-  box-shadow:
-    0.62em 0 color-mix(in srgb, var(--violet) 38%, transparent),
-    1.24em 0 color-mix(in srgb, var(--violet) 25%, transparent);
 }
 
 .live-horizontal-rule {
@@ -2719,37 +2645,6 @@ pre {
   height: 1px;
 }
 
-.live-markdown-block.is-code-opening {
-  z-index: 4;
-}
-
-.live-code-block {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: var(
-    --live-code-height,
-    calc(var(--live-code-lines) * var(--source-editor-line-height))
-  );
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface-code);
-  box-shadow: inset 0 1px var(--control-highlight);
-  color: var(--editor-text);
-  font-family: var(--font-mono);
-  pointer-events: none;
-}
-
-.live-code-header {
-  display: flex;
-  height: var(--source-editor-line-height);
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 0.55em;
-}
-
 .live-code-language-button {
   display: inline-flex;
   height: 22px;
@@ -2865,116 +2760,6 @@ pre {
   color: var(--text-muted);
   font-size: 11px;
   text-align: center;
-}
-
-.live-code-body {
-  position: absolute;
-  top: var(--source-editor-line-height);
-  right: 0;
-  bottom: calc(
-    var(--live-code-closing-lines) * var(--source-editor-line-height)
-  );
-  left: 0;
-  margin: 0;
-  padding: 0 0.85em;
-  overflow: hidden;
-  border: 0;
-  background: transparent;
-  color: var(--editor-text);
-  font: inherit;
-  font-size: 0.84em;
-  line-height: var(--source-editor-line-height);
-  tab-size: 2;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-}
-
-.live-code-body code,
-.live-code-body code.hljs {
-  display: block;
-  color: var(--editor-text);
-  font: inherit;
-}
-
-.live-markdown-block.is-table-header {
-  z-index: 3;
-}
-
-.live-table-block {
-  position: absolute;
-  z-index: 1;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: var(
-    --live-table-height,
-    calc(var(--live-table-lines) * var(--source-editor-line-height))
-  );
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--surface-code);
-  box-shadow: inset 0 1px var(--control-highlight);
-  color: var(--editor-text);
-  pointer-events: none;
-}
-
-.live-table-block table {
-  width: 100%;
-  height: 100%;
-  table-layout: fixed;
-  border-spacing: 0;
-  border-collapse: separate;
-}
-
-.live-table-block th,
-.live-table-block td {
-  min-width: 0;
-  padding: 0.2em 0.75em;
-  overflow: hidden;
-  border-right: 1px solid var(--border-faint);
-  color: var(--editor-text);
-  font-size: 0.92em;
-  font-weight: 450;
-  line-height: 1.35;
-  text-align: left;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
-.live-table-block th {
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--violet) 8%, transparent);
-  color: var(--text-soft);
-  font-weight: 680;
-}
-
-.live-table-block tbody tr:not(:last-child) td {
-  border-bottom: 1px solid var(--border-faint);
-}
-
-.live-table-block th:last-child,
-.live-table-block td:last-child {
-  border-right: 0;
-}
-
-.live-table-block :is(th, td).align-center {
-  text-align: center;
-}
-
-.live-table-block :is(th, td).align-right {
-  text-align: right;
-}
-
-.live-table-block .live-markdown-inline {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.live-task-indent {
-  white-space: pre;
 }
 
 .live-task-control {
@@ -7072,89 +6857,89 @@ pre {
   background: var(--surface-control-active);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-comment,
-:is(.live-code-body, .is-code-content) .hljs-quote,
-:is(.live-code-body, .is-code-content) .hljs-code,
-:is(.live-code-body, .is-code-content) .hljs-formula {
+.is-code-content .hljs-comment,
+.is-code-content .hljs-quote,
+.is-code-content .hljs-code,
+.is-code-content .hljs-formula {
   color: var(--syntax-comment);
   font-style: italic;
 }
 
-:is(.live-code-body, .is-code-content) .hljs-keyword,
-:is(.live-code-body, .is-code-content) .hljs-selector-tag,
-:is(.live-code-body, .is-code-content) .hljs-literal,
-:is(.live-code-body, .is-code-content) .hljs-doctag,
-:is(.live-code-body, .is-code-content) .hljs-template-tag,
-:is(.live-code-body, .is-code-content) .hljs-variable.language_ {
+.is-code-content .hljs-keyword,
+.is-code-content .hljs-selector-tag,
+.is-code-content .hljs-literal,
+.is-code-content .hljs-doctag,
+.is-code-content .hljs-template-tag,
+.is-code-content .hljs-variable.language_ {
   color: var(--syntax-keyword);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-title,
-:is(.live-code-body, .is-code-content) .hljs-section,
-:is(.live-code-body, .is-code-content) .hljs-title.function_,
-:is(.live-code-body, .is-code-content) .hljs-link {
+.is-code-content .hljs-title,
+.is-code-content .hljs-section,
+.is-code-content .hljs-title.function_,
+.is-code-content .hljs-link {
   color: var(--syntax-title);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-built_in,
-:is(.live-code-body, .is-code-content) .hljs-type,
-:is(.live-code-body, .is-code-content) .hljs-class .hljs-title {
+.is-code-content .hljs-built_in,
+.is-code-content .hljs-type,
+.is-code-content .hljs-class .hljs-title {
   color: var(--syntax-type);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-string,
-:is(.live-code-body, .is-code-content) .hljs-regexp,
-:is(.live-code-body, .is-code-content) .hljs-addition,
-:is(.live-code-body, .is-code-content) .hljs-attribute {
+.is-code-content .hljs-string,
+.is-code-content .hljs-regexp,
+.is-code-content .hljs-addition,
+.is-code-content .hljs-attribute {
   color: var(--syntax-string);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-number,
-:is(.live-code-body, .is-code-content) .hljs-symbol,
-:is(.live-code-body, .is-code-content) .hljs-bullet,
-:is(.live-code-body, .is-code-content) .hljs-operator,
-:is(.live-code-body, .is-code-content) .hljs-selector-attr,
-:is(.live-code-body, .is-code-content) .hljs-selector-class,
-:is(.live-code-body, .is-code-content) .hljs-selector-id,
-:is(.live-code-body, .is-code-content) .hljs-variable,
-:is(.live-code-body, .is-code-content) .hljs-template-variable {
+.is-code-content .hljs-number,
+.is-code-content .hljs-symbol,
+.is-code-content .hljs-bullet,
+.is-code-content .hljs-operator,
+.is-code-content .hljs-selector-attr,
+.is-code-content .hljs-selector-class,
+.is-code-content .hljs-selector-id,
+.is-code-content .hljs-variable,
+.is-code-content .hljs-template-variable {
   color: var(--syntax-number);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-meta,
-:is(.live-code-body, .is-code-content) .hljs-meta .hljs-keyword,
-:is(.live-code-body, .is-code-content) .hljs-tag {
+.is-code-content .hljs-meta,
+.is-code-content .hljs-meta .hljs-keyword,
+.is-code-content .hljs-tag {
   color: var(--syntax-meta);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-name,
-:is(.live-code-body, .is-code-content) .hljs-attr,
-:is(.live-code-body, .is-code-content) .hljs-selector-pseudo,
-:is(.live-code-body, .is-code-content) .hljs-property {
+.is-code-content .hljs-name,
+.is-code-content .hljs-attr,
+.is-code-content .hljs-selector-pseudo,
+.is-code-content .hljs-property {
   color: var(--syntax-property);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-subst,
-:is(.live-code-body, .is-code-content) .hljs-params,
-:is(.live-code-body, .is-code-content) .hljs-punctuation {
+.is-code-content .hljs-subst,
+.is-code-content .hljs-params,
+.is-code-content .hljs-punctuation {
   color: var(--editor-text);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-deletion {
+.is-code-content .hljs-deletion {
   color: var(--syntax-deletion);
   background: var(--red-wash);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-addition {
+.is-code-content .hljs-addition {
   color: var(--syntax-addition);
   background: var(--mint-wash);
 }
 
-:is(.live-code-body, .is-code-content) .hljs-emphasis {
+.is-code-content .hljs-emphasis {
   font-style: italic;
 }
 
-:is(.live-code-body, .is-code-content) .hljs-strong {
+.is-code-content .hljs-strong {
   font-weight: 700;
 }
 
