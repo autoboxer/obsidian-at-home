@@ -25,11 +25,13 @@ This is not a complete Obsidian replacement: cloud sync, attachments, graph view
 
 - Create, open, and switch between vaults of ordinary `.md` and `.markdown` files.
 - Organize notes in nested folders with drag-and-drop and right-click file actions.
-- Use source, split, or reading view with collapsible sections, interactive task checkboxes, spellcheck, syntax-highlighted code blocks, and app zoom (`Ctrl/Cmd` + `+`, `-`, or `0`).
+- Write in a unified live Markdown editor with inline formatting, interactive task checkboxes, tables, spellcheck, syntax-highlighted fenced code blocks, and find-in-note.
+- Move through note history with back and forward controls, or revisit notes from **Recent notes**.
+- Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
 - Personalize the app with light and dark themes, bundled typefaces, or fonts installed on your computer.
 - Link notes with `[[wiki links]]` and browse outgoing links and backlinks.
 - Search titles, content, folders, and tags, or jump to a note with the quick switcher.
-- Use freeform tags, favorites, and templates.
+- Use freeform tags, favorites, and reusable templates.
 - Modify the UI with [CSS snippets](docs/css-snippets.md).
 - Import from Obsidian or export a portable vault.
 
