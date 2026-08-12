@@ -6,8 +6,11 @@ import {
   shallowRef,
   watch,
 } from "vue";
-import { StateEffect, StateField } from "@codemirror/state";
-import { Decoration, EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
+import {
+  codeMirrorDocumentSearchExtension,
+  setDocumentSearchMatches,
+} from "../lib/codeMirrorDocumentSearch";
 import {
   DOCUMENT_SEARCH_MIN_LENGTH,
   findDocumentTextMatches,
@@ -15,32 +18,11 @@ import {
   stepDocumentSearchIndex,
 } from "../lib/documentSearch";
 import type { Ref } from "vue";
-import type { Extension } from "@codemirror/state";
-import type { DecorationSet } from "@codemirror/view";
 import type { DocumentSearchDirection, DocumentTextMatch } from "../lib/documentSearch";
 
 const SEARCH_DEBOUNCE_MS = 140;
 
-interface SearchDecorationState {
-  activeIndex: number;
-  matches: readonly DocumentTextMatch[];
-}
-
-const setSearchDecorations = StateEffect.define<SearchDecorationState>();
-
-export const codeMirrorDocumentSearchExtension: Extension = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(decorations, transaction) {
-    for (const effect of transaction.effects) {
-      if (effect.is(setSearchDecorations)) {
-        return createSearchDecorations(effect.value);
-      }
-    }
-
-    return transaction.docChanged ? decorations.map(transaction.changes) : decorations;
-  },
-  provide: (field) => EditorView.decorations.from(field),
-});
+export { codeMirrorDocumentSearchExtension };
 
 export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefined>) {
   const isOpen = ref(false);
@@ -236,7 +218,7 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
 
   function updateDecorations(): void {
     editorView.value?.dispatch({
-      effects: setSearchDecorations.of({
+      effects: setDocumentSearchMatches.of({
         activeIndex: activeMatchIndex.value,
         matches: matches.value,
       }),
@@ -265,22 +247,4 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
     searchInput,
     statusText,
   };
-}
-
-function createSearchDecorations(state: SearchDecorationState): DecorationSet {
-  return Decoration.set(
-    state.matches.flatMap((match, index) => {
-      const ranges = [
-        Decoration.mark({ class: "document-search-match" }).range(match.from, match.to),
-      ];
-      if (index === state.activeIndex) {
-        ranges.push(
-          Decoration.mark({ class: "document-search-active" }).range(match.from, match.to),
-        );
-      }
-
-      return ranges;
-    }),
-    true,
-  );
 }

@@ -2205,6 +2205,44 @@ pre {
   overflow-wrap: break-word;
 }
 
+.source-editor .cm-line.live-markdown-block.is-heading {
+  color: var(--heading-text);
+  font-weight: 650;
+}
+
+.source-editor .cm-line.live-markdown-block.heading-level-1 {
+  font-size: 1.55em;
+  font-weight: 760;
+  line-height: calc(var(--source-editor-line-height) * 1.42);
+}
+
+.source-editor .cm-line.live-markdown-block.heading-level-2 {
+  font-size: 1.34em;
+  font-weight: 720;
+  line-height: calc(var(--source-editor-line-height) * 1.28);
+}
+
+.source-editor .cm-line.live-markdown-block.heading-level-3 {
+  font-size: 1.17em;
+  font-weight: 680;
+  line-height: calc(var(--source-editor-line-height) * 1.16);
+}
+
+.source-editor .cm-line.live-markdown-block.heading-level-6 {
+  color: color-mix(in srgb, var(--heading-text) 80%, var(--text-muted));
+}
+
+.source-editor .cm-line.live-markdown-block.is-blockquote {
+  color: var(--blockquote-text);
+}
+
+.live-markdown-syntax {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-decoration: none;
+}
+
 .source-editor .cm-cursor,
 .source-editor .cm-dropCursor {
   border-left-color: var(--editor-text);
@@ -2484,6 +2522,34 @@ pre {
 .live-list-prefix,
 .live-quote-prefix {
   color: transparent;
+}
+
+.live-quote-control {
+  position: relative;
+  display: inline-block;
+  color: transparent;
+  white-space: pre;
+}
+
+.live-quote-control::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--violet) 55%, transparent);
+  content: "";
+}
+
+.live-quote-control[data-depth="2"]::before {
+  box-shadow: 0.62em 0 color-mix(in srgb, var(--violet) 38%, transparent);
+}
+
+.live-quote-control[data-depth="3"]::before {
+  box-shadow:
+    0.62em 0 color-mix(in srgb, var(--violet) 38%, transparent),
+    1.24em 0 color-mix(in srgb, var(--violet) 25%, transparent);
 }
 
 .live-list-marker {

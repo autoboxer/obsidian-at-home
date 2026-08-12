@@ -33,9 +33,14 @@ import {
   codeMirrorDocumentSearchExtension,
   useCodeMirrorDocumentSearch,
 } from "../composables/useCodeMirrorDocumentSearch";
+import {
+  liveMarkdownExtension,
+  refreshLiveMarkdownEffect,
+} from "../lib/liveMarkdownCodeMirror";
 import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
+import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { Command } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
 import AppIcon from "./AppIcon.vue";
@@ -74,6 +79,13 @@ interface TextEdit {
   removed: number;
   added: number;
 }
+
+const normalizedNoteTitles = computed(() => new Set(
+  props.noteTitles.flatMap((title) => [
+    normalizeInlineLinkTarget(title),
+    normalizeInlineLinkTarget(wikiTargetTitle(title)),
+  ]),
+));
 
 const suggestions = computed(() => {
   if (suggestionQuery.value === null) {
@@ -300,6 +312,11 @@ onMounted(() => {
           completeHTMLTags: false,
           pasteURLAsLink: false,
         }),
+        liveMarkdownExtension({
+          openLink: openLiveMarkdownLink,
+          openWiki: openLiveMarkdownWikiLink,
+          wikiLinkIsResolved: inlineWikiLinkIsResolved,
+        }),
         codeMirrorDocumentSearchExtension,
         Prec.high(keymap.of([
           { key: "ArrowDown", run: suggestionDown },
@@ -362,6 +379,42 @@ watch(
     refreshDocumentSearch();
   },
 );
+
+watch(
+  () => props.noteTitles,
+  () => {
+    editorView.value?.dispatch({
+      effects: refreshLiveMarkdownEffect.of(null),
+    });
+  },
+  { deep: true },
+);
+
+function openLiveMarkdownLink(href: string): void {
+  emit("openLink", href);
+}
+
+function openLiveMarkdownWikiLink(target: string): void {
+  emit("openWiki", target);
+}
+
+function normalizeInlineLinkTarget(value: string): string {
+  return normalizeWikiTarget(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inlineWikiLinkIsResolved(target: string): boolean {
+  if (!target) {
+    return true;
+  }
+
+  return normalizedNoteTitles.value.has(normalizeInlineLinkTarget(target)) ||
+    normalizedNoteTitles.value.has(normalizeInlineLinkTarget(wikiTargetTitle(target)));
+}
 
 function updateSuggestions(view: EditorView): void {
   const selection = view.state.selection.main;
