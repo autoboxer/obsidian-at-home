@@ -1,41 +1,44 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
-import { useDocumentSearch } from "../composables/useDocumentSearch";
-import { useLiveMarkdownRegionLayout } from "../composables/useLiveMarkdownRegionLayout";
 import {
-  activeLiveMarkdownBlocks,
-  findLiveMarkdownBlock,
-  parseLiveMarkdownBlocks,
-  setLiveMarkdownTaskChecked,
-} from "../lib/liveMarkdown";
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import {
-  indexLiveMarkdownCodeFenceLines,
-  parseLiveMarkdownCodeFences,
-  setLiveMarkdownCodeLanguage,
-} from "../lib/liveMarkdownCode";
-import { parseLiveMarkdownInline } from "../lib/liveMarkdownInline";
+  defaultKeymap,
+  history,
+  historyKeymap,
+  insertNewline,
+} from "@codemirror/commands";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
-  indexLiveMarkdownTableLines,
-  parseLiveMarkdownTables,
-} from "../lib/liveMarkdownTable";
+  Annotation,
+  EditorSelection,
+  EditorState,
+  Prec,
+  Transaction,
+} from "@codemirror/state";
+import {
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightSpecialChars,
+  keymap,
+  lineNumbers,
+} from "@codemirror/view";
+import {
+  codeMirrorDocumentSearchExtension,
+  useCodeMirrorDocumentSearch,
+} from "../composables/useCodeMirrorDocumentSearch";
+import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
-import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
-import type { LiveMarkdownBlock } from "../lib/liveMarkdown";
-import type {
-  LiveMarkdownCodeFence,
-  LiveMarkdownCodeFenceLine,
-} from "../lib/liveMarkdownCode";
-import type { LiveMarkdownInlineSegment } from "../lib/liveMarkdownInline";
-import type {
-  LiveMarkdownTable as LiveMarkdownTableModel,
-  LiveMarkdownTableLine,
-} from "../lib/liveMarkdownTable";
-import type { LiveMarkdownTableNavigationEdit } from "../lib/liveMarkdownTableNavigation";
+import type { Command } from "@codemirror/view";
+import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
 import AppIcon from "./AppIcon.vue";
-import LiveMarkdownCodeBlock from "./LiveMarkdownCodeBlock.vue";
-import LiveMarkdownInline from "./LiveMarkdownInline.vue";
-import LiveMarkdownTable from "./LiveMarkdownTable.vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -48,58 +51,13 @@ const emit = defineEmits<{
   "update:modelValue": [value: string];
 }>();
 
-const textarea = ref<HTMLTextAreaElement>();
-const gutter = ref<HTMLElement>();
-const visualLayer = ref<HTMLElement>();
-const editorFocused = ref(false);
-const selectionStart = ref(0);
-const selectionEnd = ref(0);
+const editorHost = ref<HTMLElement>();
+const editorView = shallowRef<EditorView>();
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
-let layoutTransition = 0;
-const {
-  closeSearch: closeDocumentSearch,
-  handleEditorSearchKeydown: handleDocumentSearchKeydown,
-  handleSearchInputKeydown: handleDocumentSearchInputKeydown,
-  isOpen: documentSearchOpen,
-  matchCount: documentSearchMatchCount,
-  moveToMatch: moveToDocumentSearchMatch,
-  openSearch: openDocumentSearch,
-  query: documentSearchQuery,
-  searchInput: documentSearchInput,
-  statusText: documentSearchStatus,
-} = useDocumentSearch({
-  content: () => props.modelValue,
-  scrollElement: textarea,
-  visualLayer,
-});
+const externalUpdate = Annotation.define<boolean>();
 const INDENT = "  ";
-const LIVE_CODE_BLOCK_SELECTOR = [
-  ".live-markdown-block.is-code-opening",
-  ".live-markdown-block.is-code-content",
-  ".live-markdown-block.is-code-closing",
-].join(", ");
-const LIVE_TABLE_BLOCK_SELECTOR = [
-  ".live-markdown-block.is-table-header",
-  ".live-markdown-block.is-table-delimiter",
-  ".live-markdown-block.is-table-body",
-].join(", ");
-const UNORDERED_LIST_MARKERS = ["•", "◦", "▪"] as const;
-const ROMAN_NUMERALS: ReadonlyArray<readonly [number, string]> = [
-  [1_000, "m"],
-  [900, "cm"],
-  [500, "d"],
-  [400, "cd"],
-  [100, "c"],
-  [90, "xc"],
-  [50, "l"],
-  [40, "xl"],
-  [10, "x"],
-  [9, "ix"],
-  [5, "v"],
-  [4, "iv"],
-  [1, "i"],
-];
+let outputLineEnding = preferredLineEnding(props.modelValue);
 
 interface ListLine {
   indent: string;
@@ -117,80 +75,6 @@ interface TextEdit {
   added: number;
 }
 
-const liveBlocks = computed(() => parseLiveMarkdownBlocks(props.modelValue));
-const codeFences = computed(() => parseLiveMarkdownCodeFences(props.modelValue));
-const codeFenceLines = computed(() => indexLiveMarkdownCodeFenceLines(codeFences.value));
-const tables = computed(() => parseLiveMarkdownTables(
-  props.modelValue,
-  liveBlocks.value,
-));
-const tableLines = computed(() => indexLiveMarkdownTableLines(tables.value));
-const { heightForRegion: codeFenceHeight } = useLiveMarkdownRegionLayout({
-  blockSelector: LIVE_CODE_BLOCK_SELECTOR,
-  container: visualLayer,
-  regions: codeFences,
-});
-const { heightForRegion: tableHeight } = useLiveMarkdownRegionLayout({
-  blockSelector: LIVE_TABLE_BLOCK_SELECTOR,
-  container: visualLayer,
-  regions: tables,
-});
-const lineCount = computed(() => liveBlocks.value.length);
-const lineNumbers = computed(() => Array.from({ length: lineCount.value }, (_, index) => index + 1).join("\n"));
-const activeBlockLines = computed(() => {
-  const lines = new Set(
-    editorFocused.value
-      ? activeLiveMarkdownBlocks(
-        liveBlocks.value,
-        selectionStart.value,
-        selectionEnd.value,
-      ).map((block) => block.lineNumber)
-      : [],
-  );
-
-  for (const lineNumber of [...lines]) {
-    const regionLines = codeFenceLines.value.get(lineNumber)?.fence.lineNumbers ??
-      tableLines.value.get(lineNumber)?.table.lineNumbers ??
-      [];
-    for (const regionLine of regionLines) {
-      lines.add(regionLine);
-    }
-  }
-
-  return lines;
-});
-const lastActiveBlockLine = computed(() => {
-  let lastLine = 0;
-  for (const lineNumber of activeBlockLines.value) {
-    lastLine = Math.max(lastLine, lineNumber);
-  }
-
-  return lastLine;
-});
-const normalizedNoteTitles = computed(() => new Set(
-  props.noteTitles.flatMap((title) => [
-    normalizeInlineLinkTarget(title),
-    normalizeInlineLinkTarget(wikiTargetTitle(title)),
-  ]),
-));
-const inlineSegmentsByLine = computed(() => {
-  const segments = new Map<number, LiveMarkdownInlineSegment[]>();
-
-  for (const block of liveBlocks.value) {
-    if (!blockRendersInline(block) || tableLines.value.has(block.lineNumber)) {
-      continue;
-    }
-
-    segments.set(
-      block.lineNumber,
-      parseLiveMarkdownInline(blockInlineSource(block), {
-        resolveWikiLink: (target) => inlineWikiLinkIsResolved(target),
-      }),
-    );
-  }
-
-  return segments;
-});
 const suggestions = computed(() => {
   if (suggestionQuery.value === null) {
     return [];
@@ -208,605 +92,439 @@ const suggestions = computed(() => {
     .slice(0, 6);
 });
 
-function onInput(event: Event): void {
-  const element = event.target as HTMLTextAreaElement;
-  updateSelection(element);
-  emit("update:modelValue", element.value);
-  updateSuggestions(element);
-}
+const {
+  closeSearch: closeDocumentSearch,
+  handleEditorSearchKeydown: handleDocumentSearchKeydown,
+  handleSearchInputKeydown: handleDocumentSearchInputKeydown,
+  isOpen: documentSearchOpen,
+  matchCount: documentSearchMatchCount,
+  moveToMatch: moveToDocumentSearchMatch,
+  openSearch: openDocumentSearch,
+  query: documentSearchQuery,
+  refreshSearch: refreshDocumentSearch,
+  searchInput: documentSearchInput,
+  statusText: documentSearchStatus,
+} = useCodeMirrorDocumentSearch(editorView);
 
-function onSelection(): void {
-  const element = textarea.value;
-  if (!element) {
-    return;
+const suggestionDown: Command = (view) => {
+  if (view.composing || !suggestions.value.length) {
+    return false;
+  }
+  suggestionIndex.value = (suggestionIndex.value + 1) % suggestions.value.length;
+
+  return true;
+};
+
+const suggestionUp: Command = (view) => {
+  if (view.composing || !suggestions.value.length) {
+    return false;
+  }
+  suggestionIndex.value = (
+    suggestionIndex.value - 1 + suggestions.value.length
+  ) % suggestions.value.length;
+
+  return true;
+};
+
+const acceptSuggestion: Command = (view) => {
+  if (view.composing || !suggestions.value.length) {
+    return false;
   }
 
-  const blockElement = selectedBlockElement(element);
-  const blockTop = blockElement?.getBoundingClientRect().top;
+  insertSuggestion(suggestions.value[suggestionIndex.value]!);
 
-  updateSelection(element);
-  updateSuggestions(element);
-  preserveBlockPosition(blockElement, blockTop);
-}
+  return true;
+};
 
-function onFocus(): void {
-  onSelection();
-  setEditorFocused(true);
-}
-
-function onBlur(): void {
-  setEditorFocused(false);
-}
-
-function onScroll(): void {
-  if (!textarea.value || !gutter.value) {
-    return;
+const closeSuggestions: Command = (view) => {
+  if (view.composing || suggestionQuery.value === null) {
+    return false;
   }
-  gutter.value.scrollTop = textarea.value.scrollTop;
-  if (visualLayer.value) {
-    visualLayer.value.scrollTop = textarea.value.scrollTop;
-    visualLayer.value.scrollLeft = textarea.value.scrollLeft;
-  }
-}
+  suggestionQuery.value = null;
 
-function onRenderedLinkClick(event: MouseEvent): void {
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return;
+  return true;
+};
+
+const handleEnter: Command = (view) => {
+  if (view.composing) {
+    return false;
   }
 
-  const link = target.closest<HTMLAnchorElement>("a.live-inline-segment");
-  if (!link || !visualLayer.value?.contains(link)) {
-    return;
-  }
-  if (link.classList.contains("is-wiki-link")) {
-    event.preventDefault();
-    const wikiTarget = link.dataset.wikiTarget?.trim();
-    if (wikiTarget) {
-      emit("openWiki", wikiTarget);
-    }
-
-    return;
-  }
-  if (!window.__TAURI__) {
-    return;
-  }
-
-  event.preventDefault();
-  const rawHref = link.getAttribute("href") ?? "";
-  const href = rawHref.startsWith("//") ? `https:${rawHref}` : rawHref;
-  if (/^(?:https?|mailto):/i.test(href)) {
-    emit("openLink", href);
-  }
-}
-
-function onRenderedBlockMousedown(
-  event: MouseEvent,
-  block: LiveMarkdownBlock,
-): void {
-  const element = textarea.value;
-  if (
-    event.button !== 0 ||
-    event.defaultPrevented ||
-    !blockHasMappedPosition(block) ||
-    !element
-  ) {
-    return;
-  }
-
-  event.preventDefault();
-  element.setSelectionRange(block.content.from, block.content.from);
-  onSelection();
-  element.focus({ preventScroll: true });
-}
-
-function onRenderedBlockWheel(
-  event: WheelEvent,
-  block: LiveMarkdownBlock,
-): void {
-  const element = textarea.value;
-  if (!blockHasMappedPosition(block) || !element) {
-    return;
-  }
-
-  event.preventDefault();
-  const lineHeight = Number.parseFloat(window.getComputedStyle(element).lineHeight) || 16;
-  const scale = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-    ? element.clientHeight
-    : event.deltaMode === WheelEvent.DOM_DELTA_LINE ? lineHeight : 1;
-
-  element.scrollBy({
-    left: event.deltaX * scale,
-    top: event.deltaY * scale,
-  });
-  onScroll();
-}
-
-function setEditorFocused(focused: boolean): void {
-  if (editorFocused.value === focused) {
-    return;
-  }
-
-  const element = textarea.value;
-  const blockElement = element ? selectedBlockElement(element) : undefined;
-  const blockTop = blockElement?.getBoundingClientRect().top;
-
-  editorFocused.value = focused;
-  preserveBlockPosition(blockElement, blockTop);
-}
-
-function selectedBlockElement(
-  element: HTMLTextAreaElement,
-): HTMLElement | undefined {
-  const selectionHead = element.selectionDirection === "backward"
-    ? element.selectionStart
-    : element.selectionEnd;
-  const block = findLiveMarkdownBlock(liveBlocks.value, selectionHead);
-
-  return block
-    ? visualLayer.value?.querySelector<HTMLElement>(
-      `.live-markdown-block[data-line-number="${ block.lineNumber }"]`,
-    ) ?? undefined
-    : undefined;
-}
-
-function preserveBlockPosition(
-  blockElement: HTMLElement | undefined,
-  blockTop: number | undefined,
-): void {
-  const element = textarea.value;
-  const transition = ++layoutTransition;
-  if (!element || !blockElement || blockTop === undefined) {
-    return;
-  }
-
-  void nextTick(() => {
-    if (transition !== layoutTransition) {
-      return;
-    }
-
-    const layoutShift = blockElement.getBoundingClientRect().top - blockTop;
-    element.scrollTop = Math.max(0, element.scrollTop + layoutShift);
-    onScroll();
-  });
-}
-
-function updateSelection(element: HTMLTextAreaElement): void {
-  selectionStart.value = element.selectionStart;
-  selectionEnd.value = element.selectionEnd;
-}
-
-function blockIsActive(block: LiveMarkdownBlock): boolean {
-  return activeBlockLines.value.has(block.lineNumber);
-}
-
-function blockSource(block: LiveMarkdownBlock): string {
-  return block.source || "\u00a0";
-}
-
-function blockRendersInline(block: LiveMarkdownBlock): boolean {
-  return block.type === "blockquote" ||
-    block.type === "heading" ||
-    block.type === "list" ||
-    block.type === "task" ||
-    block.type === "text";
-}
-
-function blockHasLiveRendering(block: LiveMarkdownBlock): boolean {
-  return blockRendersInline(block) ||
-    block.type === "horizontal-rule" ||
-    codeFenceLines.value.has(block.lineNumber) ||
-    tableLines.value.has(block.lineNumber);
-}
-
-function blockUsesRenderedLayout(block: LiveMarkdownBlock): boolean {
-  return blockRendersInline(block) || block.type === "horizontal-rule";
-}
-
-function blockHasRenderedLayout(block: LiveMarkdownBlock): boolean {
-  return blockUsesRenderedLayout(block) && blockHasMappedPosition(block);
-}
-
-function blockHasMappedPosition(block: LiveMarkdownBlock): boolean {
-  return !editorFocused.value || block.lineNumber > lastActiveBlockLine.value;
-}
-
-function blockCodeFenceLine(
-  block: LiveMarkdownBlock,
-): LiveMarkdownCodeFenceLine | undefined {
-  return codeFenceLines.value.get(block.lineNumber);
-}
-
-function blockCodeFenceClass(block: LiveMarkdownBlock): string | undefined {
-  const role = blockCodeFenceLine(block)?.role;
-
-  return role ? `is-code-${role}` : undefined;
-}
-
-function blockTableLine(
-  block: LiveMarkdownBlock,
-): LiveMarkdownTableLine | undefined {
-  return tableLines.value.get(block.lineNumber);
-}
-
-function blockTableClass(block: LiveMarkdownBlock): string | undefined {
-  const role = blockTableLine(block)?.role;
-
-  return role ? `is-table-${role}` : undefined;
-}
-
-function openingCodeFence(block: LiveMarkdownBlock): LiveMarkdownCodeFence {
-  const line = blockCodeFenceLine(block);
-  if (!line || line.role !== "opening") {
-    throw new Error("Expected an opening code fence");
-  }
-
-  return line.fence;
-}
-
-function openingTable(block: LiveMarkdownBlock): LiveMarkdownTableModel {
-  const line = blockTableLine(block);
-  if (!line || line.role !== "header") {
-    throw new Error("Expected a table header");
-  }
-
-  return line.table;
-}
-
-function changeCodeFenceLanguage(
-  fence: LiveMarkdownCodeFence,
-  language: string,
-): void {
-  const next = setLiveMarkdownCodeLanguage(
-    props.modelValue,
-    fence,
-    language,
+  const value = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  const tableEdit = navigateLiveMarkdownTable(
+    value,
+    parseLiveMarkdownTables(value),
+    selection.from,
+    selection.to,
+    "next-row",
   );
-  if (next !== props.modelValue) {
-    emit("update:modelValue", next);
+  if (tableEdit) {
+    applyFullDocumentEdit(
+      view,
+      tableEdit.value,
+      tableEdit.selectionStart,
+      tableEdit.selectionEnd,
+      "input.table",
+    );
+
+    return true;
   }
-}
-
-function blockInlineSource(block: LiveMarkdownBlock): string {
-  return props.modelValue.slice(block.content.from, block.content.to);
-}
-
-function blockInlineSegments(block: LiveMarkdownBlock): readonly LiveMarkdownInlineSegment[] {
-  return inlineSegmentsByLine.value.get(block.lineNumber) ?? [];
-}
-
-function blockPrefix(block: LiveMarkdownBlock): string {
-  return props.modelValue.slice(block.from, block.content.from);
-}
-
-function blockListPrefix(block: LiveMarkdownBlock): string {
-  return block.list
-    ? props.modelValue.slice(block.list.marker.from, block.content.from)
-    : "";
-}
-
-function blockListMarker(block: LiveMarkdownBlock): string {
-  if (!block.list) {
-    return "";
-  }
-  if (!block.list.ordered) {
-    return UNORDERED_LIST_MARKERS[block.list.depth % 3]!;
-  }
-
-  const number = block.list.number ?? 1;
-  if (block.list.depth % 3 === 1) {
-    return `${alphabeticListMarker(number)}.`;
-  }
-  if (block.list.depth % 3 === 2) {
-    return `${romanListMarker(number)}.`;
-  }
-
-  return `${number}.`;
-}
-
-function alphabeticListMarker(number: number): string {
-  if (number < 1) {
-    return String(number);
-  }
-
-  let value = number;
-  let marker = "";
-
-  while (value > 0) {
-    value -= 1;
-    marker = String.fromCharCode(97 + (value % 26)) + marker;
-    value = Math.floor(value / 26);
-  }
-
-  return marker;
-}
-
-function romanListMarker(number: number): string {
-  if (number < 1 || number > 3_999) {
-    return String(number);
-  }
-
-  let remaining = number;
-  let marker = "";
-
-  for (const [value, numeral] of ROMAN_NUMERALS) {
-    while (remaining >= value) {
-      marker += numeral;
-      remaining -= value;
-    }
-  }
-
-  return marker;
-}
-
-function normalizeInlineLinkTarget(value: string): string {
-  return normalizeWikiTarget(value)
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function inlineWikiLinkIsResolved(target: string): boolean {
-  if (!target) {
+  if (handleSmartEnter(view)) {
     return true;
   }
 
-  return normalizedNoteTitles.value.has(normalizeInlineLinkTarget(target)) ||
-    normalizedNoteTitles.value.has(normalizeInlineLinkTarget(wikiTargetTitle(target)));
-}
+  return insertNewline(view);
+};
 
-function blockIndent(block: LiveMarkdownBlock): string {
-  const markerFrom = block.task?.marker.from ?? block.list?.marker.from;
-
-  return markerFrom === undefined
-    ? ""
-    : props.modelValue.slice(block.from, markerFrom);
-}
-
-function blockTaskMarker(block: LiveMarkdownBlock): string {
-  return block.task
-    ? props.modelValue.slice(block.task.marker.from, block.task.marker.to)
-    : "";
-}
-
-function toggleLiveTask(block: LiveMarkdownBlock): void {
-  const element = textarea.value;
-  if (!block.task || !element) {
-    return;
+const handleTab: Command = (view) => {
+  if (view.composing) {
+    return false;
   }
 
-  const selectionStart = element.selectionStart;
-  const selectionEnd = element.selectionEnd;
-  const selectionDirection = element.selectionDirection;
-  const next = setLiveMarkdownTaskChecked(
-    props.modelValue,
-    block,
-    !block.task.checked,
+  const value = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  const tableEdit = navigateLiveMarkdownTable(
+    value,
+    parseLiveMarkdownTables(value),
+    selection.from,
+    selection.to,
+    "next-cell",
   );
-  if (next !== props.modelValue) {
-    applyEdit(next, selectionStart, selectionEnd, selectionDirection);
-  }
-}
-
-function onKeydown(event: KeyboardEvent): void {
-  const element = textarea.value;
-  if (!element || event.isComposing) {
-    return;
-  }
-
-  if (suggestions.value.length) {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      suggestionIndex.value = (suggestionIndex.value + 1) % suggestions.value.length;
-
-      return;
-    }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      suggestionIndex.value = (suggestionIndex.value - 1 + suggestions.value.length) % suggestions.value.length;
-
-      return;
-    }
-    if (event.key === "Enter") {
-      event.preventDefault();
-      insertSuggestion(suggestions.value[suggestionIndex.value]!);
-
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      suggestionQuery.value = null;
-
-      return;
-    }
-  }
-
-  const commandModifier = event.metaKey || event.ctrlKey || event.altKey;
-
-  if (event.key === "Enter" && !commandModifier && !event.shiftKey) {
-    const tableEdit = navigateLiveMarkdownTable(
-      element.value,
-      tables.value,
-      element.selectionStart,
-      element.selectionEnd,
-      "next-row",
+  if (tableEdit) {
+    applyFullDocumentEdit(
+      view,
+      tableEdit.value,
+      tableEdit.selectionStart,
+      tableEdit.selectionEnd,
+      "select.table",
     );
-    if (tableEdit) {
-      event.preventDefault();
-      applyTableNavigation(element, tableEdit);
 
-      return;
-    }
-    if (handleSmartEnter(element)) {
-      event.preventDefault();
-
-      return;
-    }
+    return true;
+  }
+  if (adjustSelectedLines(view, false)) {
+    return true;
   }
 
-  if (event.key === "Tab" && !commandModifier) {
-    const tableEdit = navigateLiveMarkdownTable(
-      element.value,
-      tables.value,
-      element.selectionStart,
-      element.selectionEnd,
-      event.shiftKey ? "previous-cell" : "next-cell",
+  view.dispatch({
+    changes: { from: selection.from, to: selection.to, insert: INDENT },
+    selection: EditorSelection.cursor(selection.from + INDENT.length),
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+
+  return true;
+};
+
+const handleShiftTab: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  const value = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  const tableEdit = navigateLiveMarkdownTable(
+    value,
+    parseLiveMarkdownTables(value),
+    selection.from,
+    selection.to,
+    "previous-cell",
+  );
+  if (tableEdit) {
+    applyFullDocumentEdit(
+      view,
+      tableEdit.value,
+      tableEdit.selectionStart,
+      tableEdit.selectionEnd,
+      "select.table",
     );
-    event.preventDefault();
-    if (tableEdit) {
-      applyTableNavigation(element, tableEdit);
 
+    return true;
+  }
+
+  adjustSelectedLines(view, true);
+
+  return true;
+};
+
+const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
+const toggleItalic: Command = (view) => toggleSelectionFormatting(view, "*", ["_"]);
+const toggleStrikethrough: Command = (view) => toggleSelectionFormatting(view, "~~");
+const wrapSelectionAsInlineCode: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+  if (selection.empty) {
+    return false;
+  }
+
+  return applyMarkdownSelectionEdit(
+    view,
+    wrapInlineCode(
+      view.state.doc.toString(),
+      selection.from,
+      selection.to,
+    ),
+  );
+};
+
+onMounted(() => {
+  const host = editorHost.value;
+  if (!host) {
+    return;
+  }
+
+  editorView.value = new EditorView({
+    parent: host,
+    state: EditorState.create({
+      doc: normalizeDocumentText(props.modelValue),
+      extensions: [
+        lineNumbers(),
+        highlightSpecialChars(),
+        history(),
+        drawSelection(),
+        dropCursor(),
+        EditorState.tabSize.of(2),
+        EditorView.lineWrapping,
+        EditorView.contentAttributes.of({
+          "aria-label": "Markdown source",
+          autocapitalize: "sentences",
+          class: "source-textarea",
+          spellcheck: "true",
+        }),
+        markdown({
+          addKeymap: false,
+          base: markdownLanguage,
+          completeHTMLTags: false,
+          pasteURLAsLink: false,
+        }),
+        codeMirrorDocumentSearchExtension,
+        Prec.high(keymap.of([
+          { key: "ArrowDown", run: suggestionDown },
+          { key: "ArrowUp", run: suggestionUp },
+          { key: "Enter", run: acceptSuggestion },
+          { key: "Escape", run: closeSuggestions },
+          { key: "Enter", run: handleEnter },
+          { key: "Tab", run: handleTab },
+          { key: "Shift-Tab", run: handleShiftTab },
+          { key: "Mod-b", run: toggleBold },
+          { key: "Mod-i", run: toggleItalic },
+          { key: "Mod-Shift-x", run: toggleStrikethrough },
+          { key: "`", run: wrapSelectionAsInlineCode },
+        ])),
+        keymap.of([...defaultKeymap, ...historyKeymap]),
+        EditorView.updateListener.of((update) => {
+          const localDocumentChange = update.docChanged && update.transactions.some(
+            (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
+          );
+          if (localDocumentChange) {
+            emit(
+              "update:modelValue",
+              restoreLineEndings(update.state.doc.toString(), outputLineEnding),
+            );
+            refreshDocumentSearch();
+          }
+          if (update.docChanged || update.selectionSet) {
+            updateSuggestions(update.view);
+          }
+        }),
+      ],
+    }),
+  });
+  updateSuggestions(editorView.value);
+});
+
+onBeforeUnmount(() => {
+  editorView.value?.destroy();
+  editorView.value = undefined;
+});
+
+watch(
+  () => props.modelValue,
+  (value) => {
+    const view = editorView.value;
+    outputLineEnding = preferredLineEnding(value);
+    const normalizedValue = normalizeDocumentText(value);
+    if (!view || normalizedValue === view.state.doc.toString()) {
       return;
     }
-    if (!adjustSelectedLines(element, event.shiftKey) && !event.shiftKey) {
-      replaceSelection(INDENT);
-    }
+
+    const change = minimalDocumentChange(view.state.doc.toString(), normalizedValue);
+    view.dispatch({
+      changes: change,
+      annotations: [
+        externalUpdate.of(true),
+        Transaction.addToHistory.of(false),
+      ],
+    });
+    refreshDocumentSearch();
+  },
+);
+
+function updateSuggestions(view: EditorView): void {
+  const selection = view.state.selection.main;
+  if (!selection.empty) {
+    suggestionQuery.value = null;
 
     return;
   }
 
-  const modifier = event.metaKey || event.ctrlKey;
-  const formattingModifier = modifier && !event.altKey;
-  const key = event.key.toLocaleLowerCase();
-
-  if (formattingModifier && !event.shiftKey && key === "b") {
-    event.preventDefault();
-    toggleSelectionFormatting("**", ["__"]);
-  } else if (formattingModifier && !event.shiftKey && key === "i") {
-    event.preventDefault();
-    toggleSelectionFormatting("*", ["_"]);
-  } else if (formattingModifier && event.shiftKey && key === "x") {
-    event.preventDefault();
-    toggleSelectionFormatting("~~");
-  } else if (event.key === "`" && !commandModifier && element.selectionStart !== element.selectionEnd) {
-    event.preventDefault();
-    wrapSelectionAsInlineCode();
-  }
-}
-
-function replaceSelection(value: string): void {
-  const element = textarea.value;
-  if (!element) {
-    return;
-  }
-  const start = element.selectionStart;
-  const end = element.selectionEnd;
-  const next = `${element.value.slice(0, start)}${value}${element.value.slice(end)}`;
-  applyEdit(next, start + value.length);
-}
-
-function wrapSelectionAsInlineCode(): void {
-  const element = textarea.value;
-  if (!element) {
-    return;
-  }
-
-  const edit = wrapInlineCode(
-    element.value,
-    element.selectionStart,
-    element.selectionEnd,
-  );
-  applyEdit(edit.value, edit.selectionStart, edit.selectionEnd, element.selectionDirection);
-}
-
-function toggleSelectionFormatting(marker: string, alternatives: string[] = []): void {
-  const element = textarea.value;
-  if (!element) {
-    return;
-  }
-
-  const edit = toggleInlineFormatting(
-    element.value,
-    element.selectionStart,
-    element.selectionEnd,
-    marker,
-    alternatives,
-  );
-  if (edit.value === element.value) {
-    return;
-  }
-
-  applyEdit(edit.value, edit.selectionStart, edit.selectionEnd, element.selectionDirection);
-}
-
-function updateSuggestions(element: HTMLTextAreaElement): void {
-  const beforeCursor = element.value.slice(0, element.selectionStart);
+  const line = view.state.doc.lineAt(selection.head);
+  const beforeCursor = view.state.doc.sliceString(line.from, selection.head);
   const match = beforeCursor.match(/\[\[([^\]\n|#]*)$/);
   suggestionQuery.value = match ? match[1] ?? "" : null;
   suggestionIndex.value = 0;
 }
 
 function insertSuggestion(title: string): void {
-  const element = textarea.value;
-  if (!element || suggestionQuery.value === null) {
+  const view = editorView.value;
+  if (!view || suggestionQuery.value === null) {
     return;
   }
-  const queryLength = suggestionQuery.value.length;
-  const start = element.selectionStart - queryLength;
+
+  const cursor = view.state.selection.main.head;
+  const start = cursor - suggestionQuery.value.length;
   const replacement = `${title}]]`;
-  const next = `${element.value.slice(0, start)}${replacement}${element.value.slice(element.selectionStart)}`;
   suggestionQuery.value = null;
-  applyEdit(next, start + replacement.length);
-}
-
-function applyEdit(
-  value: string,
-  selectionStart: number,
-  selectionEnd = selectionStart,
-  direction: "forward" | "backward" | "none" | null = "none",
-): void {
-  emit("update:modelValue", value);
-  nextTick(() => {
-    const element = textarea.value;
-    if (!element) {
-      return;
-    }
-    element.focus();
-    element.setSelectionRange(selectionStart, selectionEnd, direction ?? "none");
-    onSelection();
+  view.dispatch({
+    changes: { from: start, to: cursor, insert: replacement },
+    selection: EditorSelection.cursor(start + replacement.length),
+    scrollIntoView: true,
+    userEvent: "input.complete",
   });
+  view.focus();
 }
 
-function applyTableNavigation(
-  element: HTMLTextAreaElement,
-  edit: LiveMarkdownTableNavigationEdit,
-): void {
-  if (edit.value !== element.value) {
-    applyEdit(edit.value, edit.selectionStart, edit.selectionEnd);
-
-    return;
-  }
-
-  element.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-  onSelection();
-}
-
-function handleSmartEnter(element: HTMLTextAreaElement): boolean {
-  if (element.selectionStart !== element.selectionEnd) {
+function toggleSelectionFormatting(
+  view: EditorView,
+  marker: string,
+  alternatives: string[] = [],
+): boolean {
+  if (view.composing) {
     return false;
   }
 
-  const value = element.value;
-  const position = element.selectionStart;
-  const lineStart = value.lastIndexOf("\n", position - 1) + 1;
-  const nextNewline = value.indexOf("\n", position);
-  const lineEnd = nextNewline < 0 ? value.length : nextNewline;
-  const line = value.slice(lineStart, lineEnd);
+  const selection = view.state.selection.main;
 
-  const openingFence = line.match(/^([ \t]*)(`{3,}|~{3,})([^\n]*)$/);
+  return applyMarkdownSelectionEdit(
+    view,
+    toggleInlineFormatting(
+      view.state.doc.toString(),
+      selection.from,
+      selection.to,
+      marker,
+      alternatives,
+    ),
+  );
+}
+
+function applyMarkdownSelectionEdit(
+  view: EditorView,
+  edit: MarkdownSelectionEdit,
+): boolean {
+  const value = view.state.doc.toString();
+  if (edit.value === value) {
+    return true;
+  }
+
+  const change = minimalDocumentChange(value, edit.value);
+  const backward = view.state.selection.main.anchor > view.state.selection.main.head;
+  view.dispatch({
+    changes: change,
+    selection: backward
+      ? EditorSelection.range(edit.selectionEnd, edit.selectionStart)
+      : EditorSelection.range(edit.selectionStart, edit.selectionEnd),
+    scrollIntoView: true,
+    userEvent: "input.format",
+  });
+
+  return true;
+}
+
+function applyFullDocumentEdit(
+  view: EditorView,
+  value: string,
+  selectionStart: number,
+  selectionEnd = selectionStart,
+  userEvent = "input",
+): void {
+  view.dispatch({
+    changes: minimalDocumentChange(view.state.doc.toString(), value),
+    selection: EditorSelection.range(selectionStart, selectionEnd),
+    scrollIntoView: true,
+    userEvent,
+  });
+}
+
+function minimalDocumentChange(
+  current: string,
+  next: string,
+): { from: number; to: number; insert: string } {
+  let from = 0;
+  const sharedLength = Math.min(current.length, next.length);
+  while (from < sharedLength && current[from] === next[from]) {
+    from += 1;
+  }
+
+  let currentTo = current.length;
+  let nextTo = next.length;
+  while (
+    currentTo > from &&
+    nextTo > from &&
+    current[currentTo - 1] === next[nextTo - 1]
+  ) {
+    currentTo -= 1;
+    nextTo -= 1;
+  }
+
+  return {
+    from,
+    to: currentTo,
+    insert: next.slice(from, nextTo),
+  };
+}
+
+function preferredLineEnding(value: string): "\n" | "\r" | "\r\n" {
+  const lineEnding = value.match(/\r\n|\r|\n/)?.[0];
+
+  return lineEnding === "\r\n" || lineEnding === "\r"
+    ? lineEnding
+    : "\n";
+}
+
+function normalizeDocumentText(value: string): string {
+  return value.replace(/\r\n|\r/g, "\n");
+}
+
+function restoreLineEndings(
+  value: string,
+  lineEnding: "\n" | "\r" | "\r\n",
+): string {
+  return lineEnding === "\n" ? value : value.replace(/\n/g, lineEnding);
+}
+
+function handleSmartEnter(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) {
+    return false;
+  }
+
+  const value = view.state.doc.toString();
+  const position = selection.head;
+  const line = view.state.doc.lineAt(position);
+  const source = line.text;
+  const openingFence = source.match(/^([ \t]*)(`{3,}|~{3,})([^\n]*)$/);
   if (
     openingFence &&
-    position === lineEnd &&
-    !activeFenceBefore(value, lineStart)
+    position === line.to &&
+    !activeFenceBefore(value, line.from)
   ) {
     const indent = openingFence[1]!;
     const marker = openingFence[2]!;
-    const followingLineStart = lineEnd < value.length ? lineEnd + 1 : value.length;
-    const followingLineEndIndex = value.indexOf("\n", followingLineStart);
-    const followingLineEnd = followingLineEndIndex < 0 ? value.length : followingLineEndIndex;
-    const followingLine = value.slice(followingLineStart, followingLineEnd);
+    const followingLineStart = line.to < value.length ? line.to + 1 : value.length;
+    const followingLine = view.state.doc.lineAt(followingLineStart).text;
     const existingClosing = followingLine.match(/^([ \t]*)(`+|~+)\s*$/);
     const closesFence = Boolean(existingClosing
       && existingClosing[2]![0] === marker[0]
@@ -814,30 +532,39 @@ function handleSmartEnter(element: HTMLTextAreaElement): boolean {
     const insertion = closesFence
       ? `\n${indent}`
       : `\n${indent}\n${indent}${marker}`;
-    const next = `${value.slice(0, position)}${insertion}${value.slice(position)}`;
-    applyEdit(next, position + 1 + indent.length);
+    view.dispatch({
+      changes: { from: position, insert: insertion },
+      selection: EditorSelection.cursor(position + 1 + indent.length),
+      scrollIntoView: true,
+      userEvent: "input",
+    });
 
     return true;
   }
 
-  if (activeFenceBefore(value, lineStart)) {
+  if (activeFenceBefore(value, line.from)) {
     return false;
   }
 
-  const item = matchEditableListLine(line);
-  if (!item || position < lineStart + item.prefixLength) {
+  const item = matchEditableListLine(source);
+  if (!item || position < line.from + item.prefixLength) {
     return false;
   }
 
-  const bodyStart = lineStart + item.prefixLength;
+  const bodyStart = line.from + item.prefixLength;
   const bodyBefore = value.slice(bodyStart, position);
-  const bodyAfter = value.slice(position, lineEnd);
+  const bodyAfter = value.slice(position, line.to);
   const fullBody = `${bodyBefore}${bodyAfter}`;
   const contentWithoutTask = fullBody.replace(/^\[[ xX]\][ \t]*/, "");
 
-  if (!contentWithoutTask.trim() && position === lineEnd) {
-    const next = `${value.slice(0, lineStart)}${item.indent}${value.slice(lineEnd)}`;
-    applyEdit(next, lineStart + item.indent.length);
+  if (!contentWithoutTask.trim() && position === line.to) {
+    const replacement = item.indent;
+    view.dispatch({
+      changes: { from: line.from, to: line.to, insert: replacement },
+      selection: EditorSelection.cursor(line.from + replacement.length),
+      scrollIntoView: true,
+      userEvent: "input",
+    });
 
     return true;
   }
@@ -847,8 +574,12 @@ function handleSmartEnter(element: HTMLTextAreaElement): boolean {
     : item.bullet;
   const taskPrefix = /^\[[ xX]\][ \t]+/.test(bodyBefore) ? "[ ] " : "";
   const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
-  const next = `${value.slice(0, position)}\n${continuation}${value.slice(position)}`;
-  applyEdit(next, position + 1 + continuation.length);
+  view.dispatch({
+    changes: { from: position, insert: `\n${continuation}` },
+    selection: EditorSelection.cursor(position + 1 + continuation.length),
+    scrollIntoView: true,
+    userEvent: "input",
+  });
 
   return true;
 }
@@ -859,24 +590,25 @@ function matchEditableListLine(line: string): ListLine | undefined {
     return undefined;
   }
   const ordered = Boolean(match[2]);
-  const indent = match[1]!;
   const markerLength = ordered ? match[2]!.length + 1 : 1;
   const spacing = match[5]!;
 
   return {
-    indent,
+    indent: match[1]!,
     ordered,
     number: ordered ? Number.parseInt(match[2]!, 10) : 1,
     delimiter: ordered ? match[3]! as "." | ")" : ".",
     bullet: ordered ? "-" : match[4]! as "-" | "+" | "*",
     spacing,
-    prefixLength: indent.length + markerLength + spacing.length,
+    prefixLength: match[1]!.length + markerLength + spacing.length,
   };
 }
 
-function activeFenceBefore(value: string, position: number): { marker: string; length: number } | undefined {
-  const before = value.slice(0, position);
-  const lines = before.split("\n");
+function activeFenceBefore(
+  value: string,
+  position: number,
+): { marker: string; length: number } | undefined {
+  const lines = value.slice(0, position).split("\n");
   lines.pop();
   let active: { marker: string; length: number } | undefined;
 
@@ -886,6 +618,7 @@ function activeFenceBefore(value: string, position: number): { marker: string; l
       if (opening) {
         active = { marker: opening[1]![0]!, length: opening[1]!.length };
       }
+
       continue;
     }
 
@@ -894,36 +627,37 @@ function activeFenceBefore(value: string, position: number): { marker: string; l
       closing &&
       closing[1]![0] === active.marker &&
       closing[1]!.length >= active.length
-    ) active = undefined;
+    ) {
+      active = undefined;
+    }
   }
 
   return active;
 }
 
-function adjustSelectedLines(element: HTMLTextAreaElement, outdent: boolean): boolean {
-  const value = element.value;
-  const selectionStart = element.selectionStart;
-  const selectionEnd = element.selectionEnd;
-  const hasSelection = selectionStart !== selectionEnd;
-  const firstLineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
-  const firstLineEndIndex = value.indexOf("\n", selectionStart);
-  const firstLineEnd = firstLineEndIndex < 0 ? value.length : firstLineEndIndex;
-  const firstLine = value.slice(firstLineStart, firstLineEnd);
+function adjustSelectedLines(view: EditorView, outdent: boolean): boolean {
+  const value = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  const selectionStart = selection.from;
+  const selectionEnd = selection.to;
+  const hasSelection = !selection.empty;
+  const firstLine = view.state.doc.lineAt(selectionStart);
 
-  if (!hasSelection && !matchEditableListLine(firstLine)) {
-    if (!outdent || !/^[ \t]/.test(firstLine)) {
+  if (!hasSelection && !matchEditableListLine(firstLine.text)) {
+    if (!outdent || !/^[ \t]/.test(firstLine.text)) {
       return false;
     }
   }
 
-  const selectionEndsAtLineStart = hasSelection && selectionEnd > 0 && value[selectionEnd - 1] === "\n";
+  const selectionEndsAtLineStart = hasSelection
+    && selectionEnd > 0
+    && value[selectionEnd - 1] === "\n";
   const effectiveEnd = selectionEndsAtLineStart ? selectionEnd - 1 : selectionEnd;
-  const lastLineEndIndex = value.indexOf("\n", effectiveEnd);
-  const blockEnd = lastLineEndIndex < 0 ? value.length : lastLineEndIndex;
-  const block = value.slice(firstLineStart, blockEnd);
+  const lastLine = view.state.doc.lineAt(effectiveEnd);
+  const block = value.slice(firstLine.from, lastLine.to);
   const lines = block.split("\n");
   const edits: TextEdit[] = [];
-  let sourceOffset = firstLineStart;
+  let sourceOffset = firstLine.from;
 
   const transformed = lines.map((line) => {
     if (!outdent) {
@@ -957,13 +691,18 @@ function adjustSelectedLines(element: HTMLTextAreaElement, outdent: boolean): bo
     return true;
   }
 
-  const next = `${value.slice(0, firstLineStart)}${transformed}${value.slice(blockEnd)}`;
-  applyEdit(
-    next,
-    mapPositionThroughEdits(selectionStart, edits),
-    mapPositionThroughEdits(selectionEnd, edits),
-    element.selectionDirection,
-  );
+  const next = `${value.slice(0, firstLine.from)}${transformed}${value.slice(lastLine.to)}`;
+  const mappedStart = mapPositionThroughEdits(selectionStart, edits);
+  const mappedEnd = mapPositionThroughEdits(selectionEnd, edits);
+  const backward = selection.anchor > selection.head;
+  view.dispatch({
+    changes: minimalDocumentChange(value, next),
+    selection: backward
+      ? EditorSelection.range(mappedEnd, mappedStart)
+      : EditorSelection.range(mappedStart, mappedEnd),
+    scrollIntoView: true,
+    userEvent: "input.indent",
+  });
 
   return true;
 }
@@ -990,129 +729,7 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
     :class="{ 'is-searching': documentSearchOpen }"
     @keydown.capture="handleDocumentSearchKeydown"
   >
-    <div ref="gutter" class="editor-gutter" aria-hidden="true">
-      <pre>{{ lineNumbers }}</pre>
-    </div>
-    <div
-      ref="visualLayer"
-      class="live-markdown-layer"
-      @click="onRenderedLinkClick"
-    >
-      <div
-        v-for="block in liveBlocks"
-        :key="`${block.lineNumber}:${block.from}`"
-        class="live-markdown-block"
-        :data-line-number="block.lineNumber"
-        :class="[
-          `is-${block.type}`,
-          block.headingLevel ? `heading-level-${block.headingLevel}` : undefined,
-          block.list ? `list-depth-${block.list.depth % 3}` : undefined,
-          block.quote ? `quote-depth-${Math.min(block.quote.depth, 3)}` : undefined,
-          blockCodeFenceClass(block),
-          blockTableClass(block),
-          {
-            'has-mapped-position': blockHasMappedPosition(block),
-            'has-rendered-layout': blockHasRenderedLayout(block),
-            'is-active': blockIsActive(block),
-            'is-checked': block.task?.checked,
-          },
-        ]"
-        @mousedown="onRenderedBlockMousedown($event, block)"
-        @wheel="onRenderedBlockWheel($event, block)"
-      >
-        <template v-if="blockIsActive(block) || !blockHasLiveRendering(block)">
-          <span aria-hidden="true">{{ blockSource(block) }}</span>
-        </template>
-        <template v-else>
-          <span
-            v-if="!blockHasRenderedLayout(block)"
-            class="live-markdown-layout"
-            aria-hidden="true"
-          >{{ blockSource(block) }}</span>
-          <span
-            class="live-markdown-content"
-            :class="{ 'is-heading': block.type === 'heading' }"
-          >
-            <LiveMarkdownTable
-              v-if="blockTableLine(block)?.role === 'header'"
-              :table="openingTable(block)"
-              :height="tableHeight(openingTable(block))"
-              :resolve-wiki-link="inlineWikiLinkIsResolved"
-            />
-            <span
-              v-else-if="blockTableLine(block)"
-              aria-hidden="true"
-            />
-            <LiveMarkdownCodeBlock
-              v-else-if="blockCodeFenceLine(block)?.role === 'opening'"
-              :fence="openingCodeFence(block)"
-              :height="codeFenceHeight(openingCodeFence(block))"
-              @update:language="changeCodeFenceLanguage(openingCodeFence(block), $event)"
-            />
-            <span
-              v-else-if="block.type === 'code'"
-              aria-hidden="true"
-            />
-            <span
-              v-else-if="block.type === 'horizontal-rule'"
-              class="live-horizontal-rule"
-              aria-hidden="true"
-            />
-            <template v-else-if="block.type === 'task'">
-              <span class="live-task-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
-              <span class="live-task-control">
-                <span class="live-task-marker" aria-hidden="true">{{ blockTaskMarker(block) }}</span>
-                <button
-                  type="button"
-                  class="live-task-checkbox"
-                  :aria-label="block.task?.checked ? 'Mark task incomplete' : 'Mark task complete'"
-                  :aria-pressed="block.task?.checked"
-                  tabindex="-1"
-                  @mousedown.prevent
-                  @click.stop="toggleLiveTask(block)"
-                >
-                  <AppIcon v-if="block.task?.checked" name="check" :size="9" :stroke-width="2.4" />
-                </button>
-              </span>
-              <LiveMarkdownInline
-                class="live-task-content"
-                :segments="blockInlineSegments(block)"
-              />
-            </template>
-            <template v-else-if="block.type === 'list'">
-              <span class="live-list-indent" aria-hidden="true">{{ blockIndent(block) }}</span>
-              <span class="live-list-control">
-                <span class="live-list-prefix" aria-hidden="true">{{ blockListPrefix(block) }}</span>
-                <span class="live-list-marker" aria-hidden="true">{{ blockListMarker(block) }}</span>
-              </span>
-              <LiveMarkdownInline :segments="blockInlineSegments(block)" />
-            </template>
-            <template v-else-if="block.type === 'blockquote'">
-              <span class="live-quote-prefix" aria-hidden="true">{{ blockPrefix(block) }}</span>
-              <LiveMarkdownInline :segments="blockInlineSegments(block)" />
-            </template>
-            <LiveMarkdownInline
-              v-else
-              :segments="blockInlineSegments(block)"
-            />
-          </span>
-        </template>
-      </div>
-    </div>
-    <textarea
-      ref="textarea"
-      class="source-textarea"
-      :value="modelValue"
-      spellcheck="true"
-      aria-label="Markdown source"
-      @blur="onBlur"
-      @focus="onFocus"
-      @input="onInput"
-      @click="onSelection"
-      @keyup="onSelection"
-      @scroll="onScroll"
-      @keydown="onKeydown"
-    />
+    <div ref="editorHost" class="code-mirror-host" />
 
     <Transition name="popover-fade">
       <form

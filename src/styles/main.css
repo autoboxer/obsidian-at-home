@@ -2137,76 +2137,92 @@ pre {
   --source-editor-line-height: calc(var(--note-font-size) * 1.72);
 
   position: relative;
-  display: grid;
   width: 100%;
   height: 100%;
   min-height: 0;
   flex: 1;
-  grid-template-columns: 48px minmax(0, 1fr);
   overflow: hidden;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 48px, transparent 48px),
-    #0d0c11;
+  background: #0d0c11;
 }
 
-.editor-gutter {
-  min-height: 0;
-  overflow: hidden;
-  border-right: 1px solid rgba(236, 224, 248, 0.035);
-  color: #49434f;
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.72;
-  text-align: right;
-  user-select: none;
-}
-
-.editor-gutter pre {
-  min-height: 100%;
-  margin: 0;
-  padding: 32px 11px 90px 4px;
-  font: inherit;
-}
-
-.live-markdown-layer,
-.source-textarea {
-  grid-row: 1;
-  grid-column: 2;
+.code-mirror-host,
+.source-editor .cm-editor,
+.source-editor .cm-scroller {
   width: 100%;
   height: 100%;
   min-height: 0;
-  padding: 32px clamp(25px, 4vw, 62px) 90px clamp(24px, 3.5vw, 50px);
+}
+
+.source-editor .cm-editor {
+  background: transparent;
   color: #d4cfda;
-  font-family: var(--mono);
-  font-size: 13px;
+  font-family: var(--note-font-family);
+  font-size: var(--note-font-size);
   font-variant-ligatures: contextual;
+}
+
+.source-editor .cm-editor.cm-focused {
+  outline: 0;
+}
+
+.source-editor .cm-scroller {
+  overflow: auto;
+  font-family: inherit;
   line-height: var(--source-editor-line-height);
+}
+
+.source-editor .cm-gutters {
+  min-width: 48px;
+  border-right: 1px solid rgba(236, 224, 248, 0.035);
+  background: rgba(255, 255, 255, 0.014);
+  color: #49434f;
+  font-family: var(--mono);
+  font-size: 11px;
+  user-select: none;
+}
+
+.source-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 47px;
+  padding: 0 11px 0 4px;
+}
+
+.source-editor .cm-gutterElement:first-child {
+  margin-top: 32px;
+}
+
+.source-editor .source-textarea {
+  min-height: 100%;
+  padding: 32px clamp(25px, 4vw, 62px) 90px clamp(24px, 3.5vw, 50px);
+  caret-color: var(--editor-text);
+  color: var(--editor-text);
   tab-size: 2;
+}
+
+.source-editor .cm-line {
+  padding: 0;
   white-space: pre-wrap;
   word-break: normal;
   overflow-wrap: break-word;
 }
 
-.live-markdown-layer {
-  z-index: 2;
-  overflow: hidden;
-  pointer-events: none;
-  scrollbar-width: none;
-  user-select: none;
+.source-editor .cm-cursor,
+.source-editor .cm-dropCursor {
+  border-left-color: var(--editor-text);
 }
 
-.live-markdown-layer::-webkit-scrollbar {
-  display: none;
+.source-editor .cm-selectionBackground,
+.source-editor .cm-content ::selection {
+  background: var(--selection-bg) !important;
 }
 
-::highlight(document-search-match) {
+.document-search-match {
   background-color: color-mix(in srgb, var(--amber) 42%, transparent);
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--amber) 72%, transparent);
   text-underline-offset: 2px;
 }
 
-::highlight(document-search-active) {
+.document-search-active {
   background-color: color-mix(in srgb, var(--amber) 84%, var(--bg-deep));
   color: var(--bg-deep);
   text-decoration-color: var(--bg-deep);
@@ -2327,8 +2343,11 @@ pre {
   border-radius: 0 6px 6px 0;
 }
 
-.source-editor.is-searching .editor-gutter pre,
-.source-editor.is-searching :is(.live-markdown-layer, .source-textarea) {
+.source-editor.is-searching .cm-gutterElement:first-child {
+  margin-top: 62px;
+}
+
+.source-editor.is-searching .source-textarea {
   padding-top: 62px;
 }
 
@@ -2807,26 +2826,6 @@ pre {
 .live-markdown-block.is-checked .live-task-content {
   color: var(--text-muted);
   text-decoration: line-through;
-}
-
-.source-textarea {
-  position: relative;
-  z-index: 1;
-  resize: none;
-  overflow: auto;
-  border: 0;
-  background: transparent;
-  caret-color: var(--editor-text);
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-}
-
-.source-textarea:focus-visible {
-  outline: 0;
-}
-
-.source-textarea::selection {
-  background: rgba(164, 122, 231, 0.32);
 }
 
 .editor-language-pill {
@@ -5859,8 +5858,7 @@ pre {
     font-size: 30px;
   }
 
-  .live-markdown-layer,
-  .source-textarea {
+  .source-editor .source-textarea {
     padding-right: 28px;
     padding-left: 25px;
     font-size: 12px;
@@ -6857,36 +6855,20 @@ pre {
   background: var(--surface-shell);
 }
 
-.source-editor {
-  background-image: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--text) 1.5%, transparent) 48px,
-    transparent 48px
-  );
-}
-
-.editor-gutter {
+.source-editor .cm-gutters {
   border-right-color: var(--border-faint);
+  background: color-mix(in srgb, var(--text) 1.5%, transparent);
   color: var(--text-faint);
   line-height: var(--source-editor-line-height);
 }
 
-.live-markdown-layer,
-.source-textarea {
+.source-editor .cm-editor {
   font-family: var(--note-font-family);
   font-size: var(--note-font-size);
 }
 
-.live-markdown-layer {
+.source-editor .source-textarea {
   color: var(--editor-text);
-}
-
-.source-textarea {
-  color: transparent;
-}
-
-.source-textarea::selection {
-  background: var(--selection-bg);
 }
 
 .editor-language-pill {
