@@ -516,7 +516,6 @@ function addTableRowDecorations(
   const renderedDecorations: StoredDecoration[] = [lineDecoration(
     row.from,
     classes.join(" "),
-    { style: `--live-table-columns: ${table.columnCount}` },
   )];
 
   for (let index = 0; index < table.columnCount; index += 1) {
@@ -884,15 +883,11 @@ function addLineDecoration(
 function lineDecoration(
   from: number,
   className: string,
-  attributes?: Record<string, string>,
 ): StoredDecoration {
   return {
     from,
     to: from,
-    decoration: Decoration.line({
-      class: className,
-      ...(attributes ? { attributes } : {}),
-    }),
+    decoration: Decoration.line({ class: className }),
   };
 }
 
