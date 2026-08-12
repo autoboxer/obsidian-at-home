@@ -43,7 +43,7 @@ export const MAX_ZOOM = 1.5;
 const ZOOM_STEP = 0.1;
 
 type FolderSelection = VaultData["selectedFolderId"];
-type SmartFolderSelection = "all" | "favorites";
+type SmartFolderSelection = "all" | "favorites" | "recent";
 type SaveStatus = "saved" | "saving" | "error";
 type ToastTone = "neutral" | "success" | "warning";
 
@@ -557,7 +557,9 @@ export const folderNameMap = computed(() => {
 });
 
 export const visibleNotes = computed(() => {
-  let notes = [...vaultState.notes];
+  let notes = vaultState.selectedFolderId === "recent"
+    ? [...recentNotes.value]
+    : [...vaultState.notes];
 
   if (vaultState.selectedFolderId === "favorites") {
     notes = notes.filter((note) => note.pinned);
@@ -572,7 +574,9 @@ export const visibleNotes = computed(() => {
     notes = notes.filter((note) => matchingIds.has(note.id));
   }
 
-  return notes.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+  return vaultState.selectedFolderId === "recent"
+    ? notes
+    : notes.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
 });
 
 export const outgoingLinks = computed(() => {
@@ -1315,7 +1319,7 @@ function currentFolderId(): string | null {
 }
 
 function isSmartFolderSelection(selection: unknown): selection is SmartFolderSelection {
-  return selection === "all" || selection === "favorites";
+  return selection === "all" || selection === "favorites" || selection === "recent";
 }
 
 function folderNameKey(name: string): string {
@@ -1489,11 +1493,12 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     && notes.some((note) => note.id === input.activeNoteId)
     ? input.activeNoteId
     : notes[0]?.id ?? null;
-  const selectedFolderId = input.selectedFolderId === "favorites"
-    && notes.some((note) => note.pinned)
-    ? "favorites"
-    : "all";
   const recentNoteIds = normalizeRecentNoteIds(input.recentNoteIds, notes, activeNoteId);
+  const selectedFolderId = normalizeFolderSelection(
+    input.selectedFolderId,
+    notes,
+    recentNoteIds,
+  );
 
   return {
     name: typeof input.name === "string" && input.name.trim() ? input.name : fallback.name,
@@ -1507,6 +1512,21 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     recentNoteIds,
     selectedFolderId,
   };
+}
+
+function normalizeFolderSelection(
+  selection: unknown,
+  notes: Note[],
+  recentNoteIds: string[],
+): SmartFolderSelection {
+  if (selection === "recent" && recentNoteIds.length) {
+    return "recent";
+  }
+  if (selection === "favorites" && notes.some((note) => note.pinned)) {
+    return "favorites";
+  }
+
+  return "all";
 }
 
 function normalizeRecentNoteIds(

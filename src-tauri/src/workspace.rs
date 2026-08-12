@@ -3336,7 +3336,7 @@ fn normalize_recent_note_ids(
 }
 
 fn is_virtual_folder_selection(value: &str) -> bool {
-    matches!(value, "all" | "favorites")
+    matches!(value, "all" | "favorites" | "recent")
 }
 
 fn trim_line_ending(line: &str) -> &str {
@@ -3431,5 +3431,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn recognizes_virtual_folder_selections() {
+        assert!(is_virtual_folder_selection("all"));
+        assert!(is_virtual_folder_selection("favorites"));
+        assert!(is_virtual_folder_selection("recent"));
+        assert!(!is_virtual_folder_selection("folder-id"));
     }
 }

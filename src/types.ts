@@ -49,7 +49,7 @@ export interface VaultData {
   snippets: CssSnippet[];
   activeNoteId: string | null;
   recentNoteIds: string[];
-  selectedFolderId: "all" | "favorites";
+  selectedFolderId: "all" | "favorites" | "recent";
 }
 
 export interface VaultDescriptor {

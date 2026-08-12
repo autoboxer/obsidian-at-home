@@ -8,6 +8,7 @@ import {
   moveNoteToFolder,
   NOTE_DRAG_MIME,
   openSearchWorkspace,
+  recentNotes,
   selectFolder,
   treeDragState,
   uiState,
@@ -15,7 +16,6 @@ import {
   visibleNotes,
 } from "../stores/vault";
 import AppIcon from "./AppIcon.vue";
-import RecentNotesSection from "./RecentNotesSection.vue";
 import VaultTreeFolder from "./VaultTreeFolder.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
 
@@ -84,6 +84,9 @@ const rootNotes = computed(() => [...visibleNotes.value]
   .sort((a, b) => a.title.localeCompare(b.title)));
 
 const emptyTreeMessage = computed(() => {
+  if (vaultState.selectedFolderId === "recent") {
+    return "No recent notes";
+  }
   if (vaultState.selectedFolderId === "favorites") {
     return "No favorite notes";
   }
@@ -95,11 +98,25 @@ const emptyTreeMessage = computed(() => {
 });
 
 const treeAriaLabel = computed(() => {
+  if (vaultState.selectedFolderId === "recent") {
+    return "Recent files";
+  }
   if (vaultState.selectedFolderId === "favorites") {
     return "Favorite files";
   }
 
   return "All files";
+});
+
+const emptyTreeIcon = computed(() => {
+  if (vaultState.selectedFolderId === "recent") {
+    return "clock";
+  }
+  if (vaultState.selectedFolderId === "favorites") {
+    return "star";
+  }
+
+  return vaultState.notes.length ? "search" : "file-plus";
 });
 
 watch(
@@ -292,13 +309,16 @@ function handleRootKeydown(event: KeyboardEvent): void {
     </Transition>
 
     <div class="explorer-scroll">
-      <RecentNotesSection />
-
       <section class="explorer-section smart-folders">
         <button type="button" :class="{ active: vaultState.selectedFolderId === 'all' }" @click="selectFolder('all')">
           <AppIcon name="notes" :size="15" />
           <span>All notes</span>
           <small>{{ vaultState.notes.length }}</small>
+        </button>
+        <button type="button" :class="{ active: vaultState.selectedFolderId === 'recent' }" @click="selectFolder('recent')">
+          <AppIcon name="clock" :size="15" />
+          <span>Recent notes</span>
+          <small>{{ recentNotes.length }}</small>
         </button>
         <button type="button" :class="{ active: vaultState.selectedFolderId === 'favorites' }" @click="selectFolder('favorites')">
           <AppIcon name="star" :size="15" />
@@ -321,50 +341,62 @@ function handleRootKeydown(event: KeyboardEvent): void {
         </div>
 
         <div class="vault-file-tree" :aria-label="treeAriaLabel">
-          <div
-            class="vault-tree-root-row"
-            :class="{ 'drop-active': rootDropActive, 'drop-invalid': rootDropInvalid }"
-            @dragenter="handleRootDragEnter"
-            @dragover="handleRootDragOver"
-            @dragleave="handleRootDragLeave"
-            @drop="handleRootDrop"
-          >
-            <button
-              type="button"
-              class="vault-tree-root-main"
-              :aria-expanded="rootExpanded"
-              title="Vault root · Drop notes or folders here to move them to the root"
-              @click="rootExpanded = !rootExpanded"
-              @keydown="handleRootKeydown"
-            >
-              <AppIcon :name="rootExpanded ? 'chevron-down' : 'chevron'" :size="11" />
-              <AppIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
-              <span>Vault root</span>
-            </button>
-            <small>Drop here</small>
-          </div>
+          <template v-if="vaultState.selectedFolderId === 'recent'">
+            <VaultTreeNote
+              v-for="note in visibleNotes"
+              :key="note.id"
+              :note="note"
+            />
 
-          <Transition name="collapse-fade">
-            <div v-if="rootExpanded" class="vault-tree-root-children">
-              <VaultTreeFolder
-                v-for="folder in rootFolders"
-                :key="folder.id"
-                :folder="folder"
-                :notes="visibleNotes"
-                :depth="1"
-                :show-empty-folders="showEmptyFolders"
-              />
-              <VaultTreeNote v-for="note in rootNotes" :key="note.id" :note="note" :depth="1" />
-
-              <div v-if="!visibleNotes.length" class="vault-tree-empty">
-                <AppIcon
-                  :name="vaultState.selectedFolderId === 'favorites' ? 'star' : vaultState.notes.length ? 'search' : 'file-plus'"
-                  :size="18"
-                />
-                <span>{{ emptyTreeMessage }}</span>
-              </div>
+            <div v-if="!visibleNotes.length" class="vault-tree-empty">
+              <AppIcon :name="emptyTreeIcon" :size="18" />
+              <span>{{ emptyTreeMessage }}</span>
             </div>
-          </Transition>
+          </template>
+
+          <template v-else>
+            <div
+              class="vault-tree-root-row"
+              :class="{ 'drop-active': rootDropActive, 'drop-invalid': rootDropInvalid }"
+              @dragenter="handleRootDragEnter"
+              @dragover="handleRootDragOver"
+              @dragleave="handleRootDragLeave"
+              @drop="handleRootDrop"
+            >
+              <button
+                type="button"
+                class="vault-tree-root-main"
+                :aria-expanded="rootExpanded"
+                title="Vault root · Drop notes or folders here to move them to the root"
+                @click="rootExpanded = !rootExpanded"
+                @keydown="handleRootKeydown"
+              >
+                <AppIcon :name="rootExpanded ? 'chevron-down' : 'chevron'" :size="11" />
+                <AppIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
+                <span>Vault root</span>
+              </button>
+              <small>Drop here</small>
+            </div>
+
+            <Transition name="collapse-fade">
+              <div v-if="rootExpanded" class="vault-tree-root-children">
+                <VaultTreeFolder
+                  v-for="folder in rootFolders"
+                  :key="folder.id"
+                  :folder="folder"
+                  :notes="visibleNotes"
+                  :depth="1"
+                  :show-empty-folders="showEmptyFolders"
+                />
+                <VaultTreeNote v-for="note in rootNotes" :key="note.id" :note="note" :depth="1" />
+
+                <div v-if="!visibleNotes.length" class="vault-tree-empty">
+                  <AppIcon :name="emptyTreeIcon" :size="18" />
+                  <span>{{ emptyTreeMessage }}</span>
+                </div>
+              </div>
+            </Transition>
+          </template>
         </div>
       </section>
 
