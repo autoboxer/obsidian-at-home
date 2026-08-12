@@ -52,6 +52,17 @@ export interface CodeLanguageOption {
   highlightAs?: string;
 }
 
+export interface CodeHighlightRange {
+  className: string;
+  from: number;
+  to: number;
+}
+
+interface OpenHighlightRange {
+  className: string;
+  from: number;
+}
+
 function codeLanguage(
   value: string,
   label: string,
@@ -141,4 +152,68 @@ export function highlightCode(
   } catch {
     return undefined;
   }
+}
+
+export function highlightCodeRanges(
+  code: string,
+  language: string,
+): CodeHighlightRange[] {
+  if (code.length > MAX_HIGHLIGHT_CHARS) {
+    return [];
+  }
+  const normalized = LANGUAGE_ALIASES.get(language.toLowerCase());
+  if (!normalized) {
+    return [];
+  }
+
+  try {
+    const result = hljs.highlight(code, {
+      language: normalized,
+      ignoreIllegals: true,
+    });
+    return parseHighlightRanges(result.value, code);
+  } catch {
+    return [];
+  }
+}
+
+function parseHighlightRanges(
+  highlighted: string,
+  source: string,
+): CodeHighlightRange[] {
+  const ranges: CodeHighlightRange[] = [];
+  const openRanges: OpenHighlightRange[] = [];
+  const markup = /<span class="([^"]+)">|<\/span>|([^<]+)/g;
+  let plainText = "";
+  let match: RegExpExecArray | null;
+
+  while ((match = markup.exec(highlighted))) {
+    if (match[1]) {
+      openRanges.push({ className: match[1], from: plainText.length });
+    } else if (match[0] === "</span>") {
+      const range = openRanges.pop();
+      if (range && range.from < plainText.length) {
+        ranges.push({ ...range, to: plainText.length });
+      }
+    } else {
+      plainText += decodeHighlightText(match[2] ?? "");
+    }
+  }
+
+  return plainText === source && openRanges.length === 0 ? ranges : [];
+}
+
+function decodeHighlightText(value: string): string {
+  const entities: Record<string, string> = {
+    "&amp;": "&",
+    "&gt;": ">",
+    "&lt;": "<",
+    "&quot;": '"',
+    "&#x27;": "'",
+  };
+
+  return value.replace(
+    /&(?:amp|gt|lt|quot|#x27);/g,
+    (entity) => entities[entity] ?? entity,
+  );
 }

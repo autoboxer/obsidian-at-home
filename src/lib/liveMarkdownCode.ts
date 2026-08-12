@@ -1,5 +1,3 @@
-export type LiveMarkdownCodeFenceRole = "closing" | "content" | "opening";
-
 export interface LiveMarkdownCodeFence {
   from: number;
   to: number;
@@ -12,11 +10,6 @@ export interface LiveMarkdownCodeFence {
   language: string;
   languageRange?: LiveMarkdownCodeRange;
   code: string;
-}
-
-export interface LiveMarkdownCodeFenceLine {
-  fence: LiveMarkdownCodeFence;
-  role: LiveMarkdownCodeFenceRole;
 }
 
 export interface LiveMarkdownCodeRange {
@@ -104,23 +97,6 @@ export function parseLiveMarkdownCodeFences(
   return fences;
 }
 
-export function indexLiveMarkdownCodeFenceLines(
-  fences: readonly LiveMarkdownCodeFence[],
-): Map<number, LiveMarkdownCodeFenceLine> {
-  const lines = new Map<number, LiveMarkdownCodeFenceLine>();
-
-  for (const fence of fences) {
-    for (const lineNumber of fence.lineNumbers) {
-      const role = lineNumber === fence.openingLine
-        ? "opening"
-        : lineNumber === fence.closingLine ? "closing" : "content";
-      lines.set(lineNumber, { fence, role });
-    }
-  }
-
-  return lines;
-}
-
 function findFrontmatterEnd(lines: readonly SourceLine[]): number | undefined {
   const opening = lines[0]?.source.replace(/^\u{feff}/u, "").trimEnd();
   if (opening !== "---") {
@@ -135,40 +111,6 @@ function findFrontmatterEnd(lines: readonly SourceLine[]): number | undefined {
   }
 
   return undefined;
-}
-
-export function setLiveMarkdownCodeLanguage(
-  value: string,
-  fence: LiveMarkdownCodeFence,
-  language: string,
-): string {
-  const normalized = language.trim().toLocaleLowerCase();
-  if (normalized && !/^[a-z0-9_+-]{1,40}$/.test(normalized)) {
-    return value;
-  }
-  if (
-    fence.info.from < fence.from ||
-    fence.info.to < fence.info.from ||
-    fence.info.to > value.length
-  ) {
-    return value;
-  }
-
-  if (!normalized) {
-    return `${value.slice(0, fence.info.from)}${value.slice(fence.info.to)}`;
-  }
-
-  const range = fence.languageRange ?? fence.info;
-  if (
-    range.from < fence.info.from ||
-    range.to < range.from ||
-    range.to > fence.info.to
-  ) {
-    return value;
-  }
-  const languageToken = fence.languageRange ? normalized : ` ${normalized}`;
-
-  return `${value.slice(0, range.from)}${languageToken}${value.slice(range.to)}`;
 }
 
 function closesFence(source: string, openingMarker: string): boolean {

@@ -2,7 +2,6 @@ import { parseLiveMarkdownBlocks } from "./liveMarkdown";
 import type { LiveMarkdownBlock } from "./liveMarkdown";
 
 export type LiveMarkdownTableAlignment = "center" | "left" | "right";
-export type LiveMarkdownTableLineRole = "body" | "delimiter" | "header";
 
 export interface LiveMarkdownTableCell {
   from: number;
@@ -27,11 +26,6 @@ export interface LiveMarkdownTable {
   header: LiveMarkdownTableRow;
   delimiter: LiveMarkdownTableRow;
   rows: LiveMarkdownTableRow[];
-}
-
-export interface LiveMarkdownTableLine {
-  table: LiveMarkdownTable;
-  role: LiveMarkdownTableLineRole;
 }
 
 export function parseLiveMarkdownTables(
@@ -88,22 +82,6 @@ export function parseLiveMarkdownTables(
   }
 
   return tables;
-}
-
-export function indexLiveMarkdownTableLines(
-  tables: readonly LiveMarkdownTable[],
-): Map<number, LiveMarkdownTableLine> {
-  const lines = new Map<number, LiveMarkdownTableLine>();
-
-  for (const table of tables) {
-    lines.set(table.header.lineNumber, { table, role: "header" });
-    lines.set(table.delimiter.lineNumber, { table, role: "delimiter" });
-    for (const row of table.rows) {
-      lines.set(row.lineNumber, { table, role: "body" });
-    }
-  }
-
-  return lines;
 }
 
 function lineCanBelongToTable(line: LiveMarkdownBlock): boolean {

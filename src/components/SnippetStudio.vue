@@ -123,7 +123,7 @@ async function closeReference(): Promise<void> {
         </div>
 
         <footer class="snippet-help">
-          <span><AppIcon name="info" :size="15" /> Target the unified note editor with <code>.source-editor</code> and its formatted content with <code>.live-markdown-layer</code>.</span>
+          <span><AppIcon name="info" :size="15" /> Target the unified note editor with <code>.source-editor</code> and its editable content with <code>.source-textarea</code>.</span>
           <button ref="referenceButton" type="button" class="snippet-reference-button" @click="openReference">
             Selector reference
           </button>
@@ -204,8 +204,7 @@ async function closeReference(): Promise<void> {
               <code>[data-context-view="links"]</code><span>Links context tab</span>
               <code>[data-context-view="info"]</code><span>Info context tab</span>
               <code>.source-editor</code><span>Live Markdown editor</span>
-              <code>.live-markdown-layer</code><span>Formatted Markdown layer</span>
-              <code>.source-textarea</code><span>Source input and caret</span>
+              <code>.source-textarea</code><span>Unified editable content</span>
               <code>.document-search-bar</code><span>Find-in-note controls</span>
               <code>[data-ui-region="note-title"]</code><span>Note title</span>
               <code>.tag-chip</code><span>Note tags</span>
@@ -241,12 +240,12 @@ async function closeReference(): Promise<void> {
               <code>.live-inline-segment.is-wiki-link</code><span>Wiki links</span>
               <code>.live-inline-segment.is-wiki-link.is-unresolved</code><span>Unresolved wiki links</span>
               <code>.live-markdown-block.is-blockquote</code><span>Blockquotes</span>
-              <code>.live-code-block</code><span>Code blocks</span>
-              <code>.live-table-block</code><span>Tables</span>
+              <code>.live-markdown-block.is-code-content</code><span>Code block content</span>
+              <code>.live-markdown-block.is-table-row</code><span>Table rows</span>
               <code>.live-markdown-block.is-task</code><span>Tasks</span>
               <code>.live-task-checkbox</code><span>Task checkboxes</span>
               <code>.live-code-language-button</code><span>Code language control</span>
-              <code>.live-code-body .hljs-keyword</code><span>Highlighted keywords</span>
+              <code>.is-code-content .hljs-keyword</code><span>Highlighted keywords</span>
             </div>
           </details>
 
@@ -256,7 +255,7 @@ async function closeReference(): Promise<void> {
   --source-editor-line-height: calc(var(--note-font-size) * 1.85);
 }
 
-.live-markdown-content.is-heading {
+.live-markdown-block.is-heading {
   color: #c9c1ff;
 }
 
