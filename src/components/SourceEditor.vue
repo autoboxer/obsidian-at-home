@@ -4,6 +4,7 @@ import { useDocumentSearch } from "../composables/useDocumentSearch";
 import { useLiveMarkdownRegionLayout } from "../composables/useLiveMarkdownRegionLayout";
 import {
   activeLiveMarkdownBlocks,
+  findLiveMarkdownBlock,
   parseLiveMarkdownBlocks,
   setLiveMarkdownTaskChecked,
 } from "../lib/liveMarkdown";
@@ -55,6 +56,7 @@ const selectionStart = ref(0);
 const selectionEnd = ref(0);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
+let layoutTransition = 0;
 const {
   closeSearch: closeDocumentSearch,
   handleEditorSearchKeydown: handleDocumentSearchKeydown,
@@ -157,6 +159,14 @@ const activeBlockLines = computed(() => {
 
   return lines;
 });
+const lastActiveBlockLine = computed(() => {
+  let lastLine = 0;
+  for (const lineNumber of activeBlockLines.value) {
+    lastLine = Math.max(lastLine, lineNumber);
+  }
+
+  return lastLine;
+});
 const normalizedNoteTitles = computed(() => new Set(
   props.noteTitles.flatMap((title) => [
     normalizeInlineLinkTarget(title),
@@ -206,20 +216,26 @@ function onInput(event: Event): void {
 }
 
 function onSelection(): void {
-  if (!textarea.value) {
+  const element = textarea.value;
+  if (!element) {
     return;
   }
-  updateSelection(textarea.value);
-  updateSuggestions(textarea.value);
+
+  const blockElement = selectedBlockElement(element);
+  const blockTop = blockElement?.getBoundingClientRect().top;
+
+  updateSelection(element);
+  updateSuggestions(element);
+  preserveBlockPosition(blockElement, blockTop);
 }
 
 function onFocus(): void {
-  editorFocused.value = true;
   onSelection();
+  setEditorFocused(true);
 }
 
 function onBlur(): void {
-  editorFocused.value = false;
+  setEditorFocused(false);
 }
 
 function onScroll(): void {
@@ -264,6 +280,97 @@ function onRenderedLinkClick(event: MouseEvent): void {
   }
 }
 
+function onRenderedBlockMousedown(
+  event: MouseEvent,
+  block: LiveMarkdownBlock,
+): void {
+  const element = textarea.value;
+  if (
+    event.button !== 0 ||
+    event.defaultPrevented ||
+    !blockHasMappedPosition(block) ||
+    !element
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  element.setSelectionRange(block.content.from, block.content.from);
+  onSelection();
+  element.focus({ preventScroll: true });
+}
+
+function onRenderedBlockWheel(
+  event: WheelEvent,
+  block: LiveMarkdownBlock,
+): void {
+  const element = textarea.value;
+  if (!blockHasMappedPosition(block) || !element) {
+    return;
+  }
+
+  event.preventDefault();
+  const lineHeight = Number.parseFloat(window.getComputedStyle(element).lineHeight) || 16;
+  const scale = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+    ? element.clientHeight
+    : event.deltaMode === WheelEvent.DOM_DELTA_LINE ? lineHeight : 1;
+
+  element.scrollBy({
+    left: event.deltaX * scale,
+    top: event.deltaY * scale,
+  });
+  onScroll();
+}
+
+function setEditorFocused(focused: boolean): void {
+  if (editorFocused.value === focused) {
+    return;
+  }
+
+  const element = textarea.value;
+  const blockElement = element ? selectedBlockElement(element) : undefined;
+  const blockTop = blockElement?.getBoundingClientRect().top;
+
+  editorFocused.value = focused;
+  preserveBlockPosition(blockElement, blockTop);
+}
+
+function selectedBlockElement(
+  element: HTMLTextAreaElement,
+): HTMLElement | undefined {
+  const selectionHead = element.selectionDirection === "backward"
+    ? element.selectionStart
+    : element.selectionEnd;
+  const block = findLiveMarkdownBlock(liveBlocks.value, selectionHead);
+
+  return block
+    ? visualLayer.value?.querySelector<HTMLElement>(
+      `.live-markdown-block[data-line-number="${ block.lineNumber }"]`,
+    ) ?? undefined
+    : undefined;
+}
+
+function preserveBlockPosition(
+  blockElement: HTMLElement | undefined,
+  blockTop: number | undefined,
+): void {
+  const element = textarea.value;
+  const transition = ++layoutTransition;
+  if (!element || !blockElement || blockTop === undefined) {
+    return;
+  }
+
+  void nextTick(() => {
+    if (transition !== layoutTransition) {
+      return;
+    }
+
+    const layoutShift = blockElement.getBoundingClientRect().top - blockTop;
+    element.scrollTop = Math.max(0, element.scrollTop + layoutShift);
+    onScroll();
+  });
+}
+
 function updateSelection(element: HTMLTextAreaElement): void {
   selectionStart.value = element.selectionStart;
   selectionEnd.value = element.selectionEnd;
@@ -290,6 +397,18 @@ function blockHasLiveRendering(block: LiveMarkdownBlock): boolean {
     block.type === "horizontal-rule" ||
     codeFenceLines.value.has(block.lineNumber) ||
     tableLines.value.has(block.lineNumber);
+}
+
+function blockUsesRenderedLayout(block: LiveMarkdownBlock): boolean {
+  return blockRendersInline(block) || block.type === "horizontal-rule";
+}
+
+function blockHasRenderedLayout(block: LiveMarkdownBlock): boolean {
+  return blockUsesRenderedLayout(block) && blockHasMappedPosition(block);
+}
+
+function blockHasMappedPosition(block: LiveMarkdownBlock): boolean {
+  return !editorFocused.value || block.lineNumber > lastActiveBlockLine.value;
 }
 
 function blockCodeFenceLine(
@@ -891,14 +1010,25 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
           block.quote ? `quote-depth-${Math.min(block.quote.depth, 3)}` : undefined,
           blockCodeFenceClass(block),
           blockTableClass(block),
-          { 'is-active': blockIsActive(block), 'is-checked': block.task?.checked },
+          {
+            'has-mapped-position': blockHasMappedPosition(block),
+            'has-rendered-layout': blockHasRenderedLayout(block),
+            'is-active': blockIsActive(block),
+            'is-checked': block.task?.checked,
+          },
         ]"
+        @mousedown="onRenderedBlockMousedown($event, block)"
+        @wheel="onRenderedBlockWheel($event, block)"
       >
         <template v-if="blockIsActive(block) || !blockHasLiveRendering(block)">
           <span aria-hidden="true">{{ blockSource(block) }}</span>
         </template>
         <template v-else>
-          <span class="live-markdown-layout" aria-hidden="true">{{ blockSource(block) }}</span>
+          <span
+            v-if="!blockHasRenderedLayout(block)"
+            class="live-markdown-layout"
+            aria-hidden="true"
+          >{{ blockSource(block) }}</span>
           <span
             class="live-markdown-content"
             :class="{ 'is-heading': block.type === 'heading' }"

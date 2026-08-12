@@ -2415,6 +2415,10 @@ pre {
   line-height: var(--source-editor-line-height);
 }
 
+.live-markdown-block.has-mapped-position {
+  pointer-events: auto;
+}
+
 .live-markdown-layout {
   display: block;
   visibility: hidden;
@@ -2423,6 +2427,13 @@ pre {
 .live-markdown-content {
   position: absolute;
   inset: 0;
+}
+
+.live-markdown-block.has-rendered-layout .live-markdown-content {
+  position: relative;
+  display: block;
+  min-height: var(--source-editor-line-height);
+  inset: auto;
 }
 
 .live-markdown-content.is-heading {
