@@ -27,6 +27,7 @@ Use a view selector when a style should apply only while that screen is open.
 | `[data-ui-region="vault-panel"]` | Vault and files panel |
 | `[data-ui-region="editor"]` | Note editor |
 | `[data-ui-region="note-title"]` | Note title field |
+| `[data-ui-region="document-search"]` | Find-in-note bar |
 | `[data-ui-region="context-panel"]` | Links and note details |
 | `[data-ui-region="search"]` | Search page |
 | `[data-ui-region="templates"]` | Templates page |
@@ -37,42 +38,32 @@ Use a view selector when a style should apply only while that screen is open.
 | `[data-ui-region="quick-switcher"]` | Quick switcher |
 | `[data-ui-region="vault-chooser"]` | Vault chooser |
 | `[data-ui-region="template-dialog"]` | Template editor |
+| `[data-ui-region="keyboard-shortcuts"]` | Keyboard shortcut reference |
 | `[data-ui-region="selector-reference"]` | In-app selector reference |
 | `[data-ui-region="notification"]` | Notifications |
 
 The context panel also exposes `[data-context-view="links"]` and `[data-context-view="info"]`.
 
-## Editor views and panes
+## Editor and context
 
 | Selector | Target |
 | --- | --- |
-| `[data-editor-view="source"]` | Source view |
-| `[data-editor-view="split"]` | Split view |
-| `[data-editor-view="reading"]` | Reading view |
-| `[data-editor-pane="source"]` | Source pane |
-| `[data-editor-pane="preview"]` | Rendered pane |
-| `.source-textarea` | Markdown source text |
-| `.markdown-preview` | Rendered note |
+| `[data-editor-view="live"]` | Unified editor view |
+| `[data-editor-pane="live"]` | Unified note pane |
+| `[data-context-view="links"]` | Links context tab |
+| `[data-context-view="info"]` | Info context tab |
+| `.source-editor` | Live Markdown editor |
+| `.live-markdown-layer` | Formatted Markdown layer |
+| `.source-textarea` | Source input and caret |
+| `.document-search-bar` | Find-in-note controls |
 | `[data-ui-region="note-title"]` | Note title |
 | `.tag-chip` | Note tags |
 
-Source and preview panes stay mounted while hidden. Combine view and pane selectors to limit a style to one mode:
+The formatted layer and source input make up one interactive editor. Combine the live view selector with an editor element to keep customizations scoped to notes:
 
 ```css
-/* Reading view only */
-[data-editor-view="reading"] .markdown-preview {
-  --page-width: 900px;
-  font-size: 18px;
-}
-
-/* Preview half of Split view only */
-[data-editor-view="split"] [data-editor-pane="preview"] {
-  background: #111;
-}
-
-/* Source text in both Source and Split views */
-.source-textarea {
-  line-height: 1.85;
+[data-editor-view="live"] .source-editor {
+  --source-editor-line-height: calc(var(--note-font-size) * 1.85);
 }
 ```
 
@@ -92,6 +83,7 @@ Source and preview panes stay mounted while hidden. Combine view and pane select
 | `.popover-menu` | Context menus |
 | `.command-palette` | Quick switcher dialog |
 | `.vault-chooser-dialog` | Vault chooser dialog |
+| `.shortcut-reference-modal` | Keyboard shortcut dialog |
 | `.editor-modal` | Editor dialogs |
 | `.primary-action-button` | Primary buttons |
 | `.app-toast` | Notifications |
@@ -106,22 +98,22 @@ Source and preview panes stay mounted while hidden. Combine view and pane select
 }
 ```
 
-## Rendered Markdown
+## Live Markdown
 
-Rendered notes use normal HTML elements inside `.markdown-preview`. Scope styles to that class so they do not affect the rest of the app.
+The live editor renders formatted blocks and inline regions in `.live-markdown-layer` while `.source-textarea` provides the editable Markdown source. Scope styles to the selectors below so they do not affect the rest of the app.
 
 | Selector | Target |
 | --- | --- |
-| `.markdown-preview h1` through `h6` | Headings |
-| `.markdown-preview p` | Paragraphs |
-| `.markdown-preview a` | Web links |
-| `.markdown-preview .wiki-link` | Wiki links |
-| `.wiki-link.is-unresolved` | Unresolved wiki links |
-| `.markdown-preview blockquote` | Blockquotes |
-| `.markdown-preview pre code` | Code blocks |
-| `.markdown-preview table` | Tables |
-| `.markdown-preview .task-list-item` | Tasks |
-| `.markdown-preview .language-js` | A specific fenced language |
+| `.live-markdown-block.heading-level-1` | Level-one headings |
+| `.live-inline-segment.is-wiki-link` | Wiki links |
+| `.live-inline-segment.is-wiki-link.is-unresolved` | Unresolved wiki links |
+| `.live-markdown-block.is-blockquote` | Blockquotes |
+| `.live-code-block` | Code blocks |
+| `.live-table-block` | Tables |
+| `.live-markdown-block.is-task` | Tasks |
+| `.live-task-checkbox` | Task checkboxes |
+| `.live-code-language-button` | Code language control |
+| `.live-code-body .hljs-keyword` | Highlighted keywords |
 
 ## Theme variables
 
