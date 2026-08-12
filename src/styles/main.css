@@ -2530,6 +2530,36 @@ pre {
   font-family: var(--font-mono);
 }
 
+.source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget) {
+  position: relative;
+  min-height: 1px;
+  height: 1px;
+  padding: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface-code);
+  line-height: 1px;
+}
+
+.source-editor .cm-line.live-markdown-block.is-code-opening.is-code-last:has(.live-code-header-widget) {
+  min-height: 28px;
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget)
+  + .cm-line.live-markdown-block.is-code-closing {
+  min-height: 28px;
+  line-height: 28px;
+}
+
+.source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget)
+  + .cm-line.live-markdown-block.is-code-closing
+  .live-code-footer-widget {
+  height: 28px;
+}
+
 .source-editor .cm-line.live-markdown-block.is-code-content {
   padding: 0 0.85em;
   border-right: 1px solid var(--border);
@@ -2558,12 +2588,14 @@ pre {
 }
 
 .live-code-header-widget {
-  position: relative;
+  position: absolute;
+  z-index: 6;
+  top: 3px;
+  right: 0.55em;
   display: flex;
-  width: 100%;
+  width: min(300px, calc(100% - 1.1em));
   min-width: 0;
-  height: var(--source-editor-line-height);
-  align-items: center;
+  height: 0;
   justify-content: flex-end;
 }
 
@@ -2653,6 +2685,7 @@ pre {
   padding: 0 7px;
   border: 1px solid transparent;
   border-radius: 5px;
+  background: var(--surface-code);
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 9px;
@@ -2676,10 +2709,10 @@ pre {
 .live-code-language-picker {
   position: absolute;
   z-index: 12;
-  top: calc(var(--source-editor-line-height) - 2px);
-  right: 0.55em;
+  top: 28px;
+  right: 0;
   display: grid;
-  width: min(300px, calc(100% - 1.1em));
+  width: 100%;
   gap: 5px;
   padding: 6px;
   border: 1px solid var(--border-strong);
