@@ -2135,6 +2135,7 @@ pre {
 
 .source-editor {
   --source-editor-line-height: calc(var(--note-font-size) * 1.72);
+  --code-fence-spacing: calc(var(--source-editor-line-height) / 2);
 
   position: relative;
   width: 100%;
@@ -2532,32 +2533,20 @@ pre {
 
 .source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget) {
   position: relative;
-  min-height: 1px;
-  height: 1px;
+  min-height: var(--code-fence-spacing);
+  height: var(--code-fence-spacing);
   padding: 0;
   border-right: 1px solid var(--border);
   border-bottom: 0;
   border-left: 1px solid var(--border);
   background: var(--surface-code);
-  line-height: 1px;
+  line-height: var(--code-fence-spacing);
 }
 
 .source-editor .cm-line.live-markdown-block.is-code-opening.is-code-last:has(.live-code-header-widget) {
-  min-height: 28px;
-  height: 28px;
+  min-height: var(--source-editor-line-height);
+  height: var(--source-editor-line-height);
   border-bottom: 1px solid var(--border);
-}
-
-.source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget)
-  + .cm-line.live-markdown-block.is-code-closing {
-  min-height: 28px;
-  line-height: 28px;
-}
-
-.source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget)
-  + .cm-line.live-markdown-block.is-code-closing
-  .live-code-footer-widget {
-  height: 28px;
 }
 
 .source-editor .cm-line.live-markdown-block.is-code-content {
@@ -2572,13 +2561,14 @@ pre {
 }
 
 .source-editor .cm-line.live-markdown-block.is-code-closing {
-  min-height: 9px;
+  min-height: var(--code-fence-spacing);
+  height: var(--code-fence-spacing);
   padding: 0;
   border: 1px solid var(--border);
   border-top: 0;
   border-radius: 0 0 9px 9px;
   background: var(--surface-code);
-  line-height: 9px;
+  line-height: var(--code-fence-spacing);
 }
 
 .source-editor .cm-line.live-markdown-block.is-code-opening.is-code-last,
@@ -2587,10 +2577,14 @@ pre {
   border-radius: 9px;
 }
 
+.source-editor .cm-line.live-markdown-block.is-code-content.is-code-last {
+  padding-bottom: var(--code-fence-spacing);
+}
+
 .live-code-header-widget {
   position: absolute;
   z-index: 6;
-  top: 3px;
+  top: -4px;
   right: 0.55em;
   display: flex;
   width: min(300px, calc(100% - 1.1em));
@@ -2602,7 +2596,7 @@ pre {
 .live-code-footer-widget {
   display: block;
   width: 100%;
-  height: 9px;
+  height: 100%;
 }
 
 .live-code-language-picker[hidden] {
@@ -2678,7 +2672,7 @@ pre {
 
 .live-code-language-button {
   display: inline-flex;
-  height: 22px;
+  height: 18px;
   align-items: center;
   gap: 4px;
   padding: 0 7px;
@@ -2708,7 +2702,7 @@ pre {
 .live-code-language-picker {
   position: absolute;
   z-index: 12;
-  top: 28px;
+  top: 24px;
   right: 0;
   display: grid;
   width: 100%;
