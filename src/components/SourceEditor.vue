@@ -263,6 +263,21 @@ const handleShiftTab: Command = (view) => {
 const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
 const toggleItalic: Command = (view) => toggleSelectionFormatting(view, "*", ["_"]);
 const toggleStrikethrough: Command = (view) => toggleSelectionFormatting(view, "~~");
+const insertLiteralApostrophe: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  view.dispatch(
+    view.state.replaceSelection("'"),
+    {
+      scrollIntoView: true,
+      userEvent: "input.type",
+    },
+  );
+
+  return true;
+};
 const wrapSelectionAsInlineCode: Command = (view) => {
   if (view.composing) {
     return false;
@@ -360,6 +375,7 @@ onMounted(() => {
           { key: "Mod-b", run: toggleBold },
           { key: "Mod-i", run: toggleItalic },
           { key: "Mod-Shift-x", run: toggleStrikethrough },
+          { key: "'", run: insertLiteralApostrophe },
           { key: "`", run: wrapSelectionAsInlineCode },
           { key: "Home", shift: selectRenderedListTextStart },
           { mac: "Cmd-ArrowLeft", shift: selectRenderedListTextStart },
