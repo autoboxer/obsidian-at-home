@@ -122,7 +122,6 @@ export class CodeFenceHeaderWidget extends WidgetType {
       options.replaceChildren(...filteredOptions.map((option, index) => {
         const optionButton = document.createElement("button");
         const optionLabel = document.createElement("span");
-        const code = document.createElement("code");
         optionButton.id = `${listboxId}-option-${index}`;
         optionButton.type = "button";
         optionButton.setAttribute("role", "option");
@@ -130,8 +129,7 @@ export class CodeFenceHeaderWidget extends WidgetType {
         optionButton.tabIndex = -1;
         optionButton.classList.toggle("active", index === activeIndex);
         optionLabel.textContent = option.label;
-        code.textContent = option.value || "text";
-        optionButton.append(optionLabel, code);
+        optionButton.append(optionLabel);
         if (findCodeLanguageOption(this.fence.language)?.value === option.value) {
           optionButton.append(createCheckIcon(document));
         }
