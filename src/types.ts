@@ -13,6 +13,18 @@ export interface Note {
   updatedAt: number;
 }
 
+export interface NoteEditorPosition {
+  selection: {
+    anchor: number;
+    head: number;
+  };
+  viewport: {
+    anchor: number;
+    offset: number;
+    left: number;
+  };
+}
+
 export interface Folder {
   id: string;
   name: string;
@@ -61,6 +73,9 @@ export interface VaultDescriptor {
 export interface WorkspaceLoad {
   vault: VaultData;
   descriptor: VaultDescriptor;
+  editorPositions: Record<string, NoteEditorPosition>;
+  editorPositionsRevision: string | null;
+  editorPositionsWritable: boolean;
   revision: number;
   warnings: string[];
 }

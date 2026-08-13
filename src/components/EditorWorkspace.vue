@@ -2,6 +2,11 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, nextTick, ref, watch } from "vue";
 import {
+  editorPositionVaultId,
+  getNoteEditorPosition,
+  setNoteEditorPosition,
+} from "../stores/editorPositions";
+import {
   activeNote,
   backNavigationNote,
   canNavigateBack,
@@ -18,8 +23,10 @@ import {
   togglePinned,
   uiState,
   updateNote,
+  vaultSession,
   vaultState,
 } from "../stores/vault";
+import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
 import SourceEditor from "./SourceEditor.vue";
 
@@ -34,6 +41,11 @@ const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
+const positionVaultId = computed(() => editorPositionVaultId(vaultSession.backend, vaultSession.path));
+const editorKey = computed(() => JSON.stringify([
+  positionVaultId.value,
+  activeNote.value?.id ?? null,
+]));
 const sortedFolders = computed(() => [...vaultState.folders].sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
 const tagSuggestions = computed(() => {
   const query = normalizeTag(tagInput.value).toLocaleLowerCase();
@@ -83,6 +95,25 @@ function setContent(content: string): void {
   if (activeNote.value) {
     updateNote(activeNote.value.id, { content });
   }
+}
+
+function savedEditorPosition(noteId: string, content: string): NoteEditorPosition | undefined {
+  return getNoteEditorPosition(positionVaultId.value, noteId, content);
+}
+
+function rememberEditorPosition(
+  vaultId: string,
+  noteId: string,
+  position: NoteEditorPosition,
+): void {
+  if (
+    vaultId === positionVaultId.value
+    && !vaultState.notes.some((note) => note.id === noteId)
+  ) {
+    return;
+  }
+
+  setNoteEditorPosition(vaultId, noteId, position);
 }
 
 async function openRenderedLink(href: string): Promise<void> {
@@ -424,9 +455,13 @@ watch(tagInput, () => {
 
         <div class="editor-canvas" data-editor-pane="live">
           <SourceEditor
-            :key="activeNote.id"
+            :key="editorKey"
+            :initial-position="savedEditorPosition(activeNote.id, activeNote.content)"
             :model-value="activeNote.content"
+            :note-id="activeNote.id"
             :note-titles="noteTitles"
+            :vault-id="positionVaultId"
+            @editor-position="rememberEditorPosition"
             @open-link="openRenderedLink"
             @open-wiki="createLinkedNote"
             @update:model-value="setContent"

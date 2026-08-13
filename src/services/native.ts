@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   ExportResult,
   ImportResult,
+  NoteEditorPosition,
   VaultData,
   VaultDescriptor,
   WorkspaceBootstrap,
@@ -70,6 +71,18 @@ export async function saveWorkspace(
   expectedRevision: number,
 ): Promise<WorkspaceSaveResult> {
   return invoke<WorkspaceSaveResult>("workspace_save", { path, vault, expectedRevision });
+}
+
+export async function saveWorkspaceEditorPositions(
+  path: string,
+  positions: Record<string, NoteEditorPosition>,
+  expectedRevision: string | null,
+): Promise<string> {
+  return invoke<string>("workspace_save_editor_positions", {
+    path,
+    positions,
+    expectedRevision,
+  });
 }
 
 export async function forgetWorkspace(path: string): Promise<VaultDescriptor[]> {
