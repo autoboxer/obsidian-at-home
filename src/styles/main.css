@@ -2620,6 +2620,11 @@ pre {
   font-weight: 680;
 }
 
+.source-editor .cm-line.live-markdown-block.is-table-body
+  + .cm-line.live-markdown-block.is-table-body {
+  border-top: 1px solid var(--border-faint);
+}
+
 .source-editor .cm-line.live-markdown-block.is-table-delimiter {
   display: flex;
   min-height: 1px;
