@@ -13,6 +13,18 @@ export interface Note {
   updatedAt: number;
 }
 
+export interface NoteEditorPosition {
+  selection: {
+    anchor: number;
+    head: number;
+  };
+  viewport: {
+    anchor: number;
+    offset: number;
+    left: number;
+  };
+}
+
 export interface Folder {
   id: string;
   name: string;

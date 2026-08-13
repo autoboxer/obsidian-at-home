@@ -44,14 +44,19 @@ import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { SelectionRange } from "@codemirror/state";
 import type { Command } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
+import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
+  initialPosition?: NoteEditorPosition;
   modelValue: string;
+  noteId: string;
   noteTitles: string[];
+  vaultId: string;
 }>();
 
 const emit = defineEmits<{
+  editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
   openLink: [href: string];
   openWiki: [target: string];
   "update:modelValue": [value: string];
@@ -63,7 +68,14 @@ const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const externalUpdate = Annotation.define<boolean>();
 const INDENT = "  ";
+const VIEWPORT_ANCHOR_MARGIN = 8;
+const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 let outputLineEnding = preferredLineEnding(props.modelValue);
+let positionCaptureEnabled = false;
+let viewportRestoreFrame: number | undefined;
+
+const positionCaptureKey = {};
+const viewportRestoreKey = {};
 
 interface ListLine {
   indent: string;
@@ -334,10 +346,15 @@ onMounted(() => {
     return;
   }
 
-  editorView.value = new EditorView({
+  const documentText = normalizeDocumentText(props.modelValue);
+  const initialPosition = normalizeInitialPosition(props.initialPosition, documentText.length);
+  const view = new EditorView({
     parent: host,
     state: EditorState.create({
-      doc: normalizeDocumentText(props.modelValue),
+      doc: documentText,
+      selection: initialPosition
+        ? EditorSelection.range(initialPosition.selection.anchor, initialPosition.selection.head)
+        : undefined,
       extensions: [
         lineNumbers(),
         highlightSpecialChars(),
@@ -394,16 +411,40 @@ onMounted(() => {
           }
           if (update.docChanged || update.selectionSet) {
             updateSuggestions(update.view);
+            schedulePositionCapture(update.view);
           }
         }),
       ],
     }),
+    scrollTo: initialPosition
+      ? EditorView.scrollIntoView(initialPosition.viewport.anchor, { x: "start", y: "start" })
+      : undefined,
   });
-  updateSuggestions(editorView.value);
+  editorView.value = view;
+  view.scrollDOM.addEventListener("scroll", handleEditorScroll, { passive: true });
+  updateSuggestions(view);
+
+  if (initialPosition) {
+    scheduleViewportRestore(view, initialPosition);
+  } else {
+    positionCaptureEnabled = true;
+    schedulePositionCapture(view);
+  }
 });
 
 onBeforeUnmount(() => {
-  editorView.value?.destroy();
+  const view = editorView.value;
+  if (viewportRestoreFrame !== undefined) {
+    window.cancelAnimationFrame(viewportRestoreFrame);
+    viewportRestoreFrame = undefined;
+  }
+  if (view) {
+    view.scrollDOM.removeEventListener("scroll", handleEditorScroll);
+    if (positionCaptureEnabled) {
+      emitEditorPosition(captureEditorPosition(view));
+    }
+    view.destroy();
+  }
   editorView.value = undefined;
 });
 
@@ -598,6 +639,120 @@ function preferredLineEnding(value: string): "\n" | "\r" | "\r\n" {
 
 function normalizeDocumentText(value: string): string {
   return value.replace(/\r\n|\r/g, "\n");
+}
+
+function normalizeInitialPosition(
+  position: NoteEditorPosition | undefined,
+  documentLength: number,
+): NoteEditorPosition | undefined {
+  if (!position) {
+    return undefined;
+  }
+
+  const clamp = (value: number): number => Math.min(
+    documentLength,
+    Math.max(0, Math.trunc(value)),
+  );
+
+  return {
+    selection: {
+      anchor: clamp(position.selection.anchor),
+      head: clamp(position.selection.head),
+    },
+    viewport: {
+      anchor: clamp(position.viewport.anchor),
+      offset: position.viewport.offset,
+      left: Math.max(0, position.viewport.left),
+    },
+  };
+}
+
+function handleEditorScroll(): void {
+  const view = editorView.value;
+  if (view) {
+    schedulePositionCapture(view);
+  }
+}
+
+function schedulePositionCapture(view: EditorView): void {
+  if (!positionCaptureEnabled) {
+    return;
+  }
+
+  view.requestMeasure({
+    key: positionCaptureKey,
+    read: captureEditorPosition,
+    write: emitEditorPosition,
+  });
+}
+
+function captureEditorPosition(view: EditorView): NoteEditorPosition {
+  const selection = view.state.selection.main;
+  const scrollTop = view.scrollDOM.scrollTop;
+  const candidate = view.lineBlockAtHeight(scrollTop + VIEWPORT_ANCHOR_MARGIN);
+  const firstVisibleBlock = view.viewportLineBlocks[0];
+  const viewportBlock = candidate.from >= view.viewport.from
+    || !firstVisibleBlock
+    || firstVisibleBlock.top - scrollTop > VIRTUALIZED_VIEWPORT_THRESHOLD
+    ? candidate
+    : firstVisibleBlock;
+
+  return {
+    selection: {
+      anchor: selection.anchor,
+      head: selection.head,
+    },
+    viewport: {
+      anchor: viewportBlock.from,
+      offset: viewportBlock.top - scrollTop,
+      left: view.scrollDOM.scrollLeft,
+    },
+  };
+}
+
+function emitEditorPosition(position: NoteEditorPosition): void {
+  emit("editorPosition", props.vaultId, props.noteId, position);
+}
+
+function scheduleViewportRestore(
+  view: EditorView,
+  position: NoteEditorPosition,
+): void {
+  viewportRestoreFrame = window.requestAnimationFrame(() => {
+    viewportRestoreFrame = undefined;
+    if (editorView.value !== view) {
+      return;
+    }
+
+    view.requestMeasure({
+      key: viewportRestoreKey,
+      read: (measuredView) => {
+        const viewportBlock = measuredView.lineBlockAt(position.viewport.anchor);
+        const maximumTop = Math.max(
+          0,
+          measuredView.scrollDOM.scrollHeight - measuredView.scrollDOM.clientHeight,
+        );
+        const maximumLeft = Math.max(
+          0,
+          measuredView.scrollDOM.scrollWidth - measuredView.scrollDOM.clientWidth,
+        );
+
+        return {
+          left: Math.min(maximumLeft, position.viewport.left),
+          top: Math.min(
+            maximumTop,
+            Math.max(0, viewportBlock.top - position.viewport.offset),
+          ),
+        };
+      },
+      write: ({ left, top }, measuredView) => {
+        measuredView.scrollDOM.scrollLeft = left;
+        measuredView.scrollDOM.scrollTop = top;
+        positionCaptureEnabled = true;
+        schedulePositionCapture(measuredView);
+      },
+    });
+  });
 }
 
 function restoreLineEndings(
