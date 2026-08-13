@@ -2187,10 +2187,6 @@ pre {
   padding: 0 11px 0 4px;
 }
 
-.source-editor .cm-gutterElement:first-child {
-  margin-top: 32px;
-}
-
 .source-editor .source-textarea {
   min-height: 100%;
   padding: 32px clamp(25px, 4vw, 62px) 90px clamp(24px, 3.5vw, 50px);
@@ -2380,10 +2376,6 @@ pre {
   margin-left: 1px;
   border-left: 1px solid var(--border-faint);
   border-radius: 0 6px 6px 0;
-}
-
-.source-editor.is-searching .cm-gutterElement:first-child {
-  margin-top: 62px;
 }
 
 .source-editor.is-searching .source-textarea {
@@ -2618,6 +2610,11 @@ pre {
   background: color-mix(in srgb, var(--violet) 8%, var(--surface-code));
   color: var(--text-soft);
   font-weight: 680;
+}
+
+.source-editor .cm-line.live-markdown-block.is-table-body
+  + .cm-line.live-markdown-block.is-table-body {
+  border-top: 1px solid var(--border-faint);
 }
 
 .source-editor .cm-line.live-markdown-block.is-table-delimiter {
