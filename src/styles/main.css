@@ -2753,7 +2753,7 @@ pre {
   display: grid;
   width: 100%;
   min-height: 31px;
-  grid-template-columns: minmax(0, 1fr) auto 14px;
+  grid-template-columns: minmax(0, 1fr) 14px;
   align-items: center;
   gap: 8px;
   padding: 0 8px;
@@ -2773,12 +2773,6 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.live-code-language-options button > code {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 9px;
 }
 
 .live-code-language-empty {
