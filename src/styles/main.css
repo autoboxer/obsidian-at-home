@@ -2413,6 +2413,14 @@ pre {
   white-space: pre-wrap;
 }
 
+.live-markdown-syntax + .live-inline-segment.is-code {
+  padding-left: 0;
+}
+
+.live-inline-segment.is-code:has(+ .live-markdown-syntax) {
+  padding-right: 0;
+}
+
 .live-inline-segment.is-link {
   color: var(--link-text);
   text-decoration: underline;
