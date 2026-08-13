@@ -41,6 +41,7 @@ import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
+import type { SelectionRange } from "@codemirror/state";
 import type { Command } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
 import AppIcon from "./AppIcon.vue";
@@ -282,6 +283,36 @@ const wrapSelectionAsInlineCode: Command = (view) => {
   );
 };
 
+const selectRenderedListTextStart: Command = (view) => {
+  if (view.composing || view.state.selection.ranges.length !== 1) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+  const line = view.state.doc.lineAt(selection.head);
+  const textOffset = renderedListTextOffset(line.text);
+  if (textOffset === undefined) {
+    return false;
+  }
+
+  const textStart = line.from + textOffset;
+  if (
+    selection.head <= textStart ||
+    selection.from < textStart ||
+    previousLineBoundary(view, selection) >= textStart
+  ) {
+    return false;
+  }
+
+  view.dispatch({
+    selection: EditorSelection.range(selection.anchor, textStart),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+
+  return true;
+};
+
 onMounted(() => {
   const host = editorHost.value;
   if (!host) {
@@ -330,6 +361,8 @@ onMounted(() => {
           { key: "Mod-i", run: toggleItalic },
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "`", run: wrapSelectionAsInlineCode },
+          { key: "Home", shift: selectRenderedListTextStart },
+          { mac: "Cmd-ArrowLeft", shift: selectRenderedListTextStart },
         ])),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
@@ -655,6 +688,32 @@ function matchEditableListLine(line: string): ListLine | undefined {
     spacing,
     prefixLength: match[1]!.length + markerLength + spacing.length,
   };
+}
+
+function renderedListTextOffset(line: string): number | undefined {
+  const item = matchEditableListLine(line);
+  if (!item) {
+    return undefined;
+  }
+
+  const taskPrefix = line
+    .slice(item.prefixLength)
+    .match(/^\[[ xX]\][ \t]+/)?.[0];
+
+  return item.prefixLength + (taskPrefix?.length ?? 0);
+}
+
+function previousLineBoundary(
+  view: EditorView,
+  selection: SelectionRange,
+): number {
+  const line = view.lineBlockAt(selection.head);
+  let boundary = view.moveToLineBoundary(selection, false);
+  if (boundary.head === selection.head && boundary.head !== line.from) {
+    boundary = view.moveToLineBoundary(selection, false, false);
+  }
+
+  return boundary.head;
 }
 
 function activeFenceBefore(
