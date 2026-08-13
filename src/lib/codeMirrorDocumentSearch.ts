@@ -10,6 +10,11 @@ interface DocumentSearchState {
   matches: readonly DocumentTextMatch[];
 }
 
+interface MappedDocumentSearchState {
+  activeIndex: number;
+  matches: DocumentTextMatch[];
+}
+
 export interface DocumentSearchUpdate {
   activeIndex: number;
   matches: readonly DocumentTextMatch[];
@@ -21,9 +26,17 @@ const documentSearchState = StateField.define<DocumentSearchState>({
   create: () => createDocumentSearchState([], -1),
   update(value, transaction) {
     let activeIndex = value.activeIndex;
-    let matches = transaction.docChanged
-      ? mapDocumentSearchMatches(value.matches, transaction.changes)
-      : value.matches;
+    let matches = value.matches;
+
+    if (transaction.docChanged) {
+      const mappedState = mapDocumentSearchState(
+        value.matches,
+        value.activeIndex,
+        transaction.changes,
+      );
+      activeIndex = mappedState.activeIndex;
+      matches = mappedState.matches;
+    }
 
     for (const effect of transaction.effects) {
       if (effect.is(setDocumentSearchMatches)) {
@@ -52,6 +65,14 @@ export function documentSearchMatches(
   return state.field(documentSearchState, false)?.matches ?? [];
 }
 
+export function activeDocumentSearchMatch(
+  state: EditorState,
+): DocumentTextMatch | undefined {
+  const searchState = state.field(documentSearchState, false);
+
+  return searchState?.matches[searchState.activeIndex];
+}
+
 function createDocumentSearchState(
   matches: readonly DocumentTextMatch[],
   activeIndex: number,
@@ -70,14 +91,29 @@ function createDocumentSearchState(
   };
 }
 
-function mapDocumentSearchMatches(
+function mapDocumentSearchState(
   matches: readonly DocumentTextMatch[],
+  activeIndex: number,
   changes: ChangeDesc,
-): DocumentTextMatch[] {
-  return matches.flatMap((match) => {
+): MappedDocumentSearchState {
+  const mappedMatches: DocumentTextMatch[] = [];
+  let mappedActiveIndex = -1;
+
+  matches.forEach((match, index) => {
     const from = changes.mapPos(match.from, 1);
     const to = changes.mapPos(match.to, -1);
+    if (from >= to) {
+      return;
+    }
 
-    return from < to ? [{ from, to }] : [];
+    if (index === activeIndex) {
+      mappedActiveIndex = mappedMatches.length;
+    }
+    mappedMatches.push({ from, to });
   });
+
+  return {
+    activeIndex: mappedActiveIndex,
+    matches: mappedMatches,
+  };
 }

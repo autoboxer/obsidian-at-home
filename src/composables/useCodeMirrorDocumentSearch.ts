@@ -6,8 +6,10 @@ import {
   shallowRef,
   watch,
 } from "vue";
+import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  activeDocumentSearchMatch,
   codeMirrorDocumentSearchExtension,
   setDocumentSearchMatches,
 } from "../lib/codeMirrorDocumentSearch";
@@ -81,10 +83,29 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
   async function closeSearch(): Promise<void> {
     isOpen.value = false;
     cancelScheduledSearch();
-    clearResults();
+    resetResults();
     await nextTick();
-    editorView.value?.requestMeasure();
-    editorView.value?.focus();
+    const view = editorView.value;
+    if (!view) {
+      return;
+    }
+
+    const activeMatch = activeDocumentSearchMatch(view.state);
+    view.requestMeasure();
+    view.dispatch({
+      effects: setDocumentSearchMatches.of({
+        activeIndex: activeMatchIndex.value,
+        matches: matches.value,
+      }),
+      ...(activeMatch && activeMatch.to <= view.state.doc.length
+        ? {
+            selection: EditorSelection.range(activeMatch.from, activeMatch.to),
+            scrollIntoView: true,
+            userEvent: "select.search",
+          }
+        : {}),
+    });
+    view.focus();
   }
 
   function handleEditorSearchKeydown(event: KeyboardEvent): void {
@@ -210,10 +231,14 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
   }
 
   function clearResults(): void {
+    resetResults();
+    updateDecorations();
+  }
+
+  function resetResults(): void {
     matches.value = [];
     activeMatchIndex.value = -1;
     isPending.value = false;
-    updateDecorations();
   }
 
   function updateDecorations(): void {
