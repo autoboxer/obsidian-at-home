@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,10 +11,13 @@ use walkdir::{DirEntry, WalkDir};
 
 const STATE_DIRECTORY: &str = ".obsidian-at-home";
 const STATE_FILE: &str = "state.json";
+const EDITOR_POSITIONS_FILE: &str = "editor-positions.json";
+const EDITOR_POSITIONS_LOCK_FILE: &str = "editor-positions.lock";
 const REGISTRY_FILE: &str = "workspaces.json";
 const TRANSACTIONS_DIRECTORY: &str = "transactions";
 const TRANSACTION_MANIFEST_FILE: &str = "manifest.json";
 const STATE_VERSION: u32 = 1;
+const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
 const TRANSACTION_VERSION: u32 = 2;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
@@ -24,6 +27,7 @@ const MAX_RECENT_NOTES: usize = 10;
 const MAX_WARNINGS: usize = 200;
 const MAX_PATH_COMPONENTS: usize = 120;
 const MAX_TRANSACTION_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_EDITOR_POSITIONS_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
@@ -116,16 +120,41 @@ pub struct VaultDescriptor {
     pub last_opened_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteEditorSelection {
+    pub anchor: u64,
+    pub head: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteEditorViewport {
+    pub anchor: u64,
+    pub offset: f64,
+    pub left: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteEditorPosition {
+    pub selection: NoteEditorSelection,
+    pub viewport: NoteEditorViewport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLoad {
     pub vault: VaultData,
     pub descriptor: VaultDescriptor,
+    pub editor_positions: BTreeMap<String, NoteEditorPosition>,
+    pub editor_positions_revision: Option<String>,
+    pub editor_positions_writable: bool,
     pub warnings: Vec<String>,
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapResult {
     pub workspace: Option<WorkspaceLoad>,
@@ -203,6 +232,48 @@ struct WorkspaceRegistry {
     active_path: Option<String>,
     #[serde(default)]
     recent_vaults: Vec<VaultDescriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawEditorPositions {
+    #[serde(default = "editor_positions_version")]
+    version: u32,
+    #[serde(default)]
+    positions: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredEditorPositions<'a> {
+    version: u32,
+    positions: &'a BTreeMap<String, NoteEditorPosition>,
+}
+
+#[derive(Debug)]
+enum EditorPositionsRead {
+    Missing,
+    Loaded(RawEditorPositions, FileFingerprint),
+    Invalid(String, FileFingerprint),
+    Newer(u32, FileFingerprint),
+}
+
+impl EditorPositionsRead {
+    fn fingerprint(&self) -> Option<&FileFingerprint> {
+        match self {
+            Self::Missing => None,
+            Self::Loaded(_, fingerprint)
+            | Self::Invalid(_, fingerprint)
+            | Self::Newer(_, fingerprint) => Some(fingerprint),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DecodedEditorPositions {
+    positions: BTreeMap<String, NoteEditorPosition>,
+    invalid_count: usize,
+    unknown_count: usize,
 }
 
 impl Default for WorkspaceRegistry {
@@ -452,6 +523,19 @@ pub fn workspace_revision(app: AppHandle, path: String) -> Result<u64, String> {
     revision_for_root(&root)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_save_editor_positions(
+    app: AppHandle,
+    path: String,
+    positions: BTreeMap<String, NoteEditorPosition>,
+    expected_revision: Option<String>,
+) -> Result<String, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    save_editor_positions(&root, positions, expected_revision)
+}
+
 fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, String> {
     let root = validate_workspace_root_path(root)?;
     let mut warnings = WarningCollector::default();
@@ -577,6 +661,13 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
     });
 
     let note_ids: HashSet<&str> = notes.iter().map(|note| note.id.as_str()).collect();
+    let state_ids_are_trustworthy = state_was_present || !state_file_was_present;
+    let (editor_positions, editor_positions_writable, editor_positions_revision) =
+        if state_ids_are_trustworthy {
+            load_editor_positions(&root, &note_ids, &mut warnings)
+        } else {
+            (BTreeMap::new(), false, None)
+        };
     let active_note_id = state
         .active_note_id
         .filter(|id| note_ids.contains(id.as_str()))
@@ -652,6 +743,9 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             path: path_string(&root)?,
             last_opened_at: opened_at,
         },
+        editor_positions,
+        editor_positions_revision,
+        editor_positions_writable,
         warnings: warnings.finish(),
         revision,
     })
@@ -1153,7 +1247,7 @@ fn read_workspace_state(
         Err(error) => {
             warnings.push(format!("Could not inspect workspace metadata: {error}"));
 
-            return (None, false);
+            return (None, true);
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -1195,6 +1289,337 @@ fn write_workspace_state(root: &Path, state: &WorkspaceState) -> Result<(), Stri
     bytes.push(b'\n');
     atomic_write(&directory.join(STATE_FILE), &bytes)
         .map_err(|error| format!("Could not write workspace metadata: {error}"))
+}
+
+fn load_editor_positions(
+    root: &Path,
+    note_ids: &HashSet<&str>,
+    warnings: &mut WarningCollector,
+) -> (BTreeMap<String, NoteEditorPosition>, bool, Option<String>) {
+    let raw = match read_editor_positions(root) {
+        Ok(EditorPositionsRead::Missing) => return (BTreeMap::new(), true, None),
+        Ok(EditorPositionsRead::Invalid(error, fingerprint)) => {
+            warnings.push(format!("Ignored saved editor positions: {error}"));
+            let positions = BTreeMap::new();
+            let revision = rewrite_editor_positions_if_unchanged(
+                root,
+                &positions,
+                &fingerprint,
+                warnings,
+                "replace invalid saved editor positions",
+            );
+
+            return (positions, revision.is_some(), revision);
+        }
+        Ok(EditorPositionsRead::Newer(version, _)) => {
+            warnings.push(format!(
+                "Saved editor positions use version {version}, but this app supports up to version {EDITOR_POSITIONS_VERSION}. They were ignored and not changed."
+            ));
+
+            return (BTreeMap::new(), false, None);
+        }
+        Ok(EditorPositionsRead::Loaded(raw, fingerprint)) => (raw, fingerprint),
+        Err(error) => {
+            warnings.push(format!("Ignored saved editor positions: {error}"));
+
+            return (BTreeMap::new(), false, None);
+        }
+    };
+    let (raw, fingerprint) = raw;
+    let decoded = decode_editor_positions(raw.positions, note_ids);
+    if decoded.invalid_count > 0 {
+        warnings.push(format!(
+            "Ignored {} invalid saved editor position{}.",
+            decoded.invalid_count,
+            if decoded.invalid_count == 1 { "" } else { "s" },
+        ));
+    }
+    if decoded.unknown_count > 0 {
+        warnings.push(format!(
+            "Ignored {} saved editor position{} for notes that no longer exist.",
+            decoded.unknown_count,
+            if decoded.unknown_count == 1 { "" } else { "s" },
+        ));
+    }
+    let revision = if decoded.invalid_count > 0 || decoded.unknown_count > 0 {
+        rewrite_editor_positions_if_unchanged(
+            root,
+            &decoded.positions,
+            &fingerprint,
+            warnings,
+            "prune saved editor positions",
+        )
+    } else {
+        Some(editor_positions_revision(&fingerprint))
+    };
+
+    (decoded.positions, revision.is_some(), revision)
+}
+
+fn rewrite_editor_positions_if_unchanged(
+    root: &Path,
+    positions: &BTreeMap<String, NoteEditorPosition>,
+    fingerprint: &FileFingerprint,
+    warnings: &mut WarningCollector,
+    action: &str,
+) -> Option<String> {
+    let _lock = match lock_editor_positions(root) {
+        Ok(lock) => lock,
+        Err(error) => {
+            warnings.push(format!("Could not {action}: {error}"));
+
+            return None;
+        }
+    };
+    let unchanged = fingerprint_regular_file(&editor_positions_path(root))
+        .is_ok_and(|current| current.as_ref() == Some(fingerprint));
+    if !unchanged {
+        warnings.push(format!(
+            "Saved editor positions changed while the app tried to {action} and were left untouched."
+        ));
+
+        return None;
+    }
+    if let Err(error) = write_editor_positions(root, positions) {
+        warnings.push(format!("Could not {action}: {error}"));
+
+        return None;
+    }
+
+    fingerprint_regular_file(&editor_positions_path(root))
+        .ok()
+        .flatten()
+        .as_ref()
+        .map(editor_positions_revision)
+}
+
+fn save_editor_positions(
+    root: &Path,
+    positions: BTreeMap<String, NoteEditorPosition>,
+    expected_revision: Option<String>,
+) -> Result<String, String> {
+    let _lock = lock_editor_positions(root)?;
+    validate_editor_positions(&positions)?;
+    let state_path = workspace_state_path(root);
+    let expected_state_fingerprint = fingerprint_regular_file(&state_path)?.ok_or_else(|| {
+        "Workspace metadata is missing. Reopen the vault before saving editor positions."
+            .to_owned()
+    })?;
+    let mut state_warnings = WarningCollector::default();
+    let (state, state_file_was_present) = read_workspace_state(root, &mut state_warnings);
+    let state = state.ok_or_else(|| {
+        if state_file_was_present {
+            "Workspace metadata is unreadable or newer than this app. Editor positions were not changed."
+        } else {
+            "Workspace metadata is missing. Reopen the vault before saving editor positions."
+        }
+        .to_owned()
+    })?;
+    if positions
+        .keys()
+        .any(|note_id| !state.note_paths.contains_key(note_id))
+    {
+        return Err(
+            "Editor positions refer to notes that have not been saved yet. Try again.".to_owned(),
+        );
+    }
+    let existing_positions = read_editor_positions(root)?;
+    let expected_positions_fingerprint = existing_positions.fingerprint().cloned();
+    match existing_positions {
+        EditorPositionsRead::Missing => {}
+        EditorPositionsRead::Newer(version, _) => {
+            return Err(format!(
+                "The existing editor positions use version {version}, but this app supports up to version {EDITOR_POSITIONS_VERSION}. Update the app before changing them."
+            ));
+        }
+        EditorPositionsRead::Loaded(_, _) | EditorPositionsRead::Invalid(_, _) => {}
+    }
+    let current_revision = expected_positions_fingerprint
+        .as_ref()
+        .map(editor_positions_revision);
+    if current_revision != expected_revision {
+        return Err(
+            "Editor positions changed in another app window. Reopen the vault before saving them."
+                .to_owned(),
+        );
+    }
+    if fingerprint_regular_file(&state_path)? != Some(expected_state_fingerprint) {
+        return Err(
+            "Workspace metadata changed while editor positions were being saved. Try again."
+                .to_owned(),
+        );
+    }
+    if fingerprint_regular_file(&editor_positions_path(root))? != expected_positions_fingerprint {
+        return Err(
+            "Editor positions changed while they were being saved. Try again.".to_owned(),
+        );
+    }
+    write_editor_positions(root, &positions)?;
+    fingerprint_regular_file(&editor_positions_path(root))?
+        .as_ref()
+        .map(editor_positions_revision)
+        .ok_or_else(|| "Editor positions disappeared after they were saved.".to_owned())
+}
+
+fn read_editor_positions(root: &Path) -> Result<EditorPositionsRead, String> {
+    let directory = root.join(STATE_DIRECTORY);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("the .obsidian-at-home folder is a symbolic link".to_owned());
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(".obsidian-at-home is not a folder".to_owned());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(EditorPositionsRead::Missing);
+        }
+        Err(error) => {
+            return Err(format!("the .obsidian-at-home folder could not be inspected: {error}"));
+        }
+    }
+
+    let path = editor_positions_path(root);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(EditorPositionsRead::Missing);
+        }
+        Err(error) => return Err(format!("editor-positions.json could not be inspected: {error}")),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("editor-positions.json is not a regular file".to_owned());
+    }
+    if metadata.len() > MAX_EDITOR_POSITIONS_BYTES {
+        return Err("editor-positions.json is unexpectedly large".to_owned());
+    }
+
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("editor-positions.json could not be read: {error}"))?;
+    let fingerprint = fingerprint_bytes(&bytes);
+    let raw = match serde_json::from_slice::<RawEditorPositions>(&bytes) {
+        Ok(raw) => raw,
+        Err(error) => {
+            return Ok(EditorPositionsRead::Invalid(
+                format!("editor-positions.json is invalid: {error}"),
+                fingerprint,
+            ));
+        }
+    };
+    if raw.version == 0 {
+        return Ok(EditorPositionsRead::Invalid(
+            "editor-positions.json has an invalid version".to_owned(),
+            fingerprint,
+        ));
+    }
+    if raw.version > EDITOR_POSITIONS_VERSION {
+        return Ok(EditorPositionsRead::Newer(raw.version, fingerprint));
+    }
+    Ok(EditorPositionsRead::Loaded(raw, fingerprint))
+}
+
+fn decode_editor_positions(
+    positions: BTreeMap<String, serde_json::Value>,
+    note_ids: &HashSet<&str>,
+) -> DecodedEditorPositions {
+    let mut decoded = BTreeMap::new();
+    let mut invalid_count = 0;
+    let mut unknown_count = 0;
+
+    for (note_id, value) in positions {
+        if !note_ids.contains(note_id.as_str()) {
+            unknown_count += 1;
+            continue;
+        }
+        match serde_json::from_value::<NoteEditorPosition>(value) {
+            Ok(position) if is_valid_editor_position(&position) => {
+                decoded.insert(note_id, position);
+            }
+            _ => invalid_count += 1,
+        }
+    }
+
+    DecodedEditorPositions {
+        positions: decoded,
+        invalid_count,
+        unknown_count,
+    }
+}
+
+fn validate_editor_positions(
+    positions: &BTreeMap<String, NoteEditorPosition>,
+) -> Result<(), String> {
+    if positions.len() > MAX_NOTES {
+        return Err(format!(
+            "A vault can store positions for at most {MAX_NOTES} notes."
+        ));
+    }
+    if positions
+        .iter()
+        .any(|(note_id, position)| note_id.trim().is_empty() || !is_valid_editor_position(position))
+    {
+        return Err("Editor positions contain an invalid entry.".to_owned());
+    }
+
+    Ok(())
+}
+
+fn is_valid_editor_position(position: &NoteEditorPosition) -> bool {
+    let maximum = MAX_SAFE_JAVASCRIPT_INTEGER as f64;
+
+    position.selection.anchor <= MAX_SAFE_JAVASCRIPT_INTEGER
+        && position.selection.head <= MAX_SAFE_JAVASCRIPT_INTEGER
+        && position.viewport.anchor <= MAX_SAFE_JAVASCRIPT_INTEGER
+        && position.viewport.offset.is_finite()
+        && position.viewport.offset.abs() <= maximum
+        && position.viewport.left.is_finite()
+        && (0.0..=maximum).contains(&position.viewport.left)
+}
+
+fn write_editor_positions(
+    root: &Path,
+    positions: &BTreeMap<String, NoteEditorPosition>,
+) -> Result<(), String> {
+    let directory = root.join(STATE_DIRECTORY);
+    ensure_state_directory(root, &directory)?;
+    let stored = StoredEditorPositions {
+        version: EDITOR_POSITIONS_VERSION,
+        positions,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&stored)
+        .map_err(|error| format!("Could not encode editor positions: {error}"))?;
+    bytes.push(b'\n');
+    if bytes.len() as u64 > MAX_EDITOR_POSITIONS_BYTES {
+        return Err("There are too many editor positions to save safely.".to_owned());
+    }
+    atomic_write(&editor_positions_path(root), &bytes)
+        .map_err(|error| format!("Could not write editor positions: {error}"))
+}
+
+fn lock_editor_positions(root: &Path) -> Result<File, String> {
+    let directory = root.join(STATE_DIRECTORY);
+    ensure_state_directory(root, &directory)?;
+    let path = directory.join(EDITOR_POSITIONS_LOCK_FILE);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("The editor-position lock is not a regular file.".to_owned());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!("Could not inspect the editor-position lock: {error}"));
+        }
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .map_err(|error| format!("Could not open the editor-position lock: {error}"))?;
+    file.lock()
+        .map_err(|error| format!("Could not lock editor positions: {error}"))?;
+
+    Ok(file)
 }
 
 fn read_registry(app: &AppHandle) -> Result<WorkspaceRegistry, String> {
@@ -2601,6 +3026,10 @@ fn fingerprint_bytes(bytes: &[u8]) -> FileFingerprint {
     }
 }
 
+fn editor_positions_revision(fingerprint: &FileFingerprint) -> String {
+    format!("{}:{:016x}", fingerprint.length, fingerprint.hash)
+}
+
 fn portable_path_key(path: &str) -> String {
     path.to_lowercase()
 }
@@ -3240,6 +3669,10 @@ fn workspace_state_path(root: &Path) -> PathBuf {
     root.join(STATE_DIRECTORY).join(STATE_FILE)
 }
 
+fn editor_positions_path(root: &Path) -> PathBuf {
+    root.join(STATE_DIRECTORY).join(EDITOR_POSITIONS_FILE)
+}
+
 fn path_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(str::to_owned)
@@ -3350,6 +3783,10 @@ fn state_version() -> u32 {
     STATE_VERSION
 }
 
+fn editor_positions_version() -> u32 {
+    EDITOR_POSITIONS_VERSION
+}
+
 fn registry_version() -> u32 {
     REGISTRY_VERSION
 }
@@ -3392,6 +3829,42 @@ impl WarningCollector {
 mod tests {
     use super::*;
 
+    struct TestWorkspace {
+        root: PathBuf,
+    }
+
+    impl TestWorkspace {
+        fn new(label: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "obsidian-at-home-{label}-{}-{}",
+                std::process::id(),
+                TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed),
+            ));
+            fs::create_dir(&root).expect("test vault should be created");
+            Self { root }
+        }
+    }
+
+    impl Drop for TestWorkspace {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn editor_position(anchor: u64) -> NoteEditorPosition {
+        NoteEditorPosition {
+            selection: NoteEditorSelection {
+                anchor,
+                head: anchor + 2,
+            },
+            viewport: NoteEditorViewport {
+                anchor,
+                offset: -4.5,
+                left: 12.25,
+            },
+        }
+    }
+
     #[test]
     fn vault_data_matches_frontend_contract_without_editor_mode() {
         let value = serde_json::json!({
@@ -3431,6 +3904,377 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn editor_positions_match_frontend_schema_and_filter_invalid_entries() {
+        let position = editor_position(7);
+        let serialized = serde_json::to_value(&position).expect("position should serialize");
+
+        assert_eq!(serialized["selection"]["anchor"], 7);
+        assert_eq!(serialized["selection"]["head"], 9);
+        assert_eq!(serialized["viewport"]["anchor"], 7);
+        assert_eq!(serialized["viewport"]["offset"], -4.5);
+        assert_eq!(serialized["viewport"]["left"], 12.25);
+
+        let mut raw = BTreeMap::new();
+        raw.insert("known".to_owned(), serialized);
+        raw.insert(
+            "invalid".to_owned(),
+            serde_json::json!({
+                "selection": { "anchor": -1, "head": 2 },
+                "viewport": { "anchor": 0, "offset": 0, "left": 0 }
+            }),
+        );
+        raw.insert(
+            "missing".to_owned(),
+            serde_json::to_value(editor_position(1)).expect("position should serialize"),
+        );
+        let note_ids = ["known", "invalid"].into_iter().collect();
+
+        let decoded = decode_editor_positions(raw, &note_ids);
+
+        assert_eq!(
+            decoded.positions,
+            BTreeMap::from([("known".to_owned(), position)])
+        );
+        assert_eq!(decoded.invalid_count, 1);
+        assert_eq!(decoded.unknown_count, 1);
+    }
+
+    #[test]
+    fn malformed_and_newer_editor_positions_only_produce_warnings() {
+        let workspace = TestWorkspace::new("position-warnings");
+        let directory = workspace.root.join(STATE_DIRECTORY);
+        fs::create_dir(&directory).expect("state directory should be created");
+        let path = directory.join(EDITOR_POSITIONS_FILE);
+        let note_ids = HashSet::new();
+
+        fs::write(&path, b"not json").expect("malformed positions should be written");
+        let mut warnings = WarningCollector::default();
+        let (positions, writable, revision) =
+            load_editor_positions(&workspace.root, &note_ids, &mut warnings);
+
+        assert!(positions.is_empty());
+        assert!(writable);
+        assert!(revision.is_some());
+        assert!(warnings
+            .finish()
+            .iter()
+            .any(|warning| warning.contains("invalid")));
+
+        fs::write(
+            &path,
+            format!(
+                "{{\"version\":{},\"positions\":{{}}}}",
+                EDITOR_POSITIONS_VERSION + 1,
+            ),
+        )
+        .expect("newer positions should be written");
+        let mut warnings = WarningCollector::default();
+        let (positions, writable, revision) =
+            load_editor_positions(&workspace.root, &note_ids, &mut warnings);
+
+        assert!(positions.is_empty());
+        assert!(!writable);
+        assert!(revision.is_none());
+        assert!(warnings
+            .finish()
+            .iter()
+            .any(|warning| warning.contains("not changed")));
+    }
+
+    #[test]
+    fn loading_prunes_invalid_and_unknown_editor_positions() {
+        let workspace = TestWorkspace::new("position-pruning");
+        let directory = workspace.root.join(STATE_DIRECTORY);
+        fs::create_dir(&directory).expect("state directory should be created");
+        let path = directory.join(EDITOR_POSITIONS_FILE);
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": EDITOR_POSITIONS_VERSION,
+                "positions": {
+                    "known": editor_position(3),
+                    "invalid": {
+                        "selection": { "anchor": -1, "head": 2 },
+                        "viewport": { "anchor": 0, "offset": 0, "left": 0 }
+                    },
+                    "missing": editor_position(7)
+                }
+            }))
+            .expect("positions should serialize"),
+        )
+        .expect("positions should be written");
+        let note_ids = ["known", "invalid"].into_iter().collect();
+        let mut warnings = WarningCollector::default();
+
+        let (positions, writable, revision) =
+            load_editor_positions(&workspace.root, &note_ids, &mut warnings);
+
+        assert_eq!(
+            positions,
+            BTreeMap::from([("known".to_owned(), editor_position(3))])
+        );
+        assert!(writable);
+        assert!(revision.is_some());
+        let EditorPositionsRead::Loaded(raw, _) =
+            read_editor_positions(&workspace.root).expect("positions should be readable")
+        else {
+            panic!("positions should use the supported schema");
+        };
+        assert_eq!(raw.positions.len(), 1);
+        assert!(raw.positions.contains_key("known"));
+        assert_eq!(warnings.finish().len(), 2);
+    }
+
+    #[test]
+    fn saving_replaces_malformed_editor_positions() {
+        let workspace = TestWorkspace::new("malformed-position-save");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("known".to_owned(), "Known.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let path = editor_positions_path(&workspace.root);
+        fs::write(&path, b"not json").expect("malformed positions should be written");
+
+        let (_, _, revision) = load_editor_positions(
+            &workspace.root,
+            &HashSet::new(),
+            &mut WarningCollector::default(),
+        );
+        save_editor_positions(
+            &workspace.root,
+            BTreeMap::from([("known".to_owned(), editor_position(2))]),
+            revision,
+        )
+        .expect("malformed positions should be replaced");
+
+        let EditorPositionsRead::Loaded(raw, _) =
+            read_editor_positions(&workspace.root).expect("positions should be readable")
+        else {
+            panic!("positions should use the supported schema");
+        };
+        assert_eq!(raw.positions.len(), 1);
+        assert!(raw.positions.contains_key("known"));
+    }
+
+    #[test]
+    fn saving_editor_positions_does_not_change_the_vault_revision() {
+        let workspace = TestWorkspace::new("position-revision");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("known".to_owned(), "Known.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let revision_before = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let positions = BTreeMap::from([("known".to_owned(), editor_position(4))]);
+
+        save_editor_positions(&workspace.root, positions, None)
+            .expect("editor positions should be saved");
+
+        let revision_after = revision_for_root(&workspace.root)
+            .expect("updated revision should be calculated");
+        assert_eq!(revision_after, revision_before);
+
+        let EditorPositionsRead::Loaded(raw, _) =
+            read_editor_positions(&workspace.root).expect("positions should be readable")
+        else {
+            panic!("positions should use the supported schema");
+        };
+        assert_eq!(raw.positions.len(), 1);
+        let note_ids = ["known"].into_iter().collect();
+        let decoded = decode_editor_positions(raw.positions, &note_ids);
+        assert_eq!(decoded.positions.len(), 1);
+        assert_eq!(decoded.positions["known"], editor_position(4));
+    }
+
+    #[test]
+    fn saving_rejects_a_stale_editor_position_revision() {
+        let workspace = TestWorkspace::new("stale-position-revision");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("first".to_owned(), "First.md".to_owned());
+        state
+            .note_paths
+            .insert("second".to_owned(), "Second.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let initial = BTreeMap::from([
+            ("first".to_owned(), editor_position(1)),
+            ("second".to_owned(), editor_position(2)),
+        ]);
+        save_editor_positions(&workspace.root, initial, None)
+            .expect("initial positions should be saved");
+        let note_ids = ["first", "second"].into_iter().collect();
+        let (mut first_instance, _, first_revision) = load_editor_positions(
+            &workspace.root,
+            &note_ids,
+            &mut WarningCollector::default(),
+        );
+        let (mut second_instance, _, second_revision) = load_editor_positions(
+            &workspace.root,
+            &note_ids,
+            &mut WarningCollector::default(),
+        );
+        first_instance.insert("first".to_owned(), editor_position(11));
+        let current_revision = save_editor_positions(
+            &workspace.root,
+            first_instance,
+            first_revision,
+        )
+        .expect("the first instance should save");
+        let positions_path = editor_positions_path(&workspace.root);
+        let current_bytes = fs::read(&positions_path)
+            .expect("current positions should be readable");
+        second_instance.insert("second".to_owned(), editor_position(22));
+
+        let error = save_editor_positions(
+            &workspace.root,
+            second_instance.clone(),
+            second_revision,
+        )
+        .expect_err("a stale position snapshot should be rejected");
+
+        assert!(error.contains("another app window"));
+        assert_eq!(
+            fs::read(&positions_path).expect("current positions should remain readable"),
+            current_bytes,
+        );
+        save_editor_positions(
+            &workspace.root,
+            second_instance,
+            Some(current_revision),
+        )
+        .expect("a snapshot with the current revision should save");
+    }
+
+    #[test]
+    fn saving_rejects_a_file_created_after_positions_were_loaded() {
+        let workspace = TestWorkspace::new("created-position-revision");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("known".to_owned(), "Known.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let note_ids = ["known"].into_iter().collect();
+        let (_, _, revision) = load_editor_positions(
+            &workspace.root,
+            &note_ids,
+            &mut WarningCollector::default(),
+        );
+        assert!(revision.is_none());
+        write_editor_positions(
+            &workspace.root,
+            &BTreeMap::from([("known".to_owned(), editor_position(3))]),
+        )
+        .expect("external positions should be written");
+
+        let error = save_editor_positions(
+            &workspace.root,
+            BTreeMap::from([("known".to_owned(), editor_position(9))]),
+            revision,
+        )
+        .expect_err("a newly created position file should not be overwritten");
+
+        assert!(error.contains("another app window"));
+    }
+
+    #[test]
+    fn saving_rejects_positions_for_unsaved_notes() {
+        let workspace = TestWorkspace::new("unsaved-position");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("known".to_owned(), "Known.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+
+        let error = save_editor_positions(
+            &workspace.root,
+            BTreeMap::from([("missing".to_owned(), editor_position(8))]),
+            None,
+        )
+        .expect_err("positions for unsaved notes should be rejected");
+
+        assert!(error.contains("have not been saved"));
+        assert!(!editor_positions_path(&workspace.root).exists());
+    }
+
+    #[test]
+    fn unreadable_workspace_metadata_preserves_editor_positions() {
+        let workspace = TestWorkspace::new("unsafe-position-load");
+        let directory = workspace.root.join(STATE_DIRECTORY);
+        fs::create_dir(&directory).expect("state directory should be created");
+        fs::write(workspace.root.join("Known.md"), "Known note")
+            .expect("note should be written");
+        fs::write(workspace_state_path(&workspace.root), b"not json")
+            .expect("malformed state should be written");
+        let positions_path = editor_positions_path(&workspace.root);
+        let positions_before = serde_json::to_vec(&serde_json::json!({
+            "version": EDITOR_POSITIONS_VERSION,
+            "positions": { "preserved": editor_position(3) }
+        }))
+        .expect("positions should serialize");
+        fs::write(&positions_path, &positions_before)
+            .expect("positions should be written");
+        let defaults: VaultData = serde_json::from_value(serde_json::json!({
+            "name": "Test vault",
+            "notes": [],
+            "folders": [],
+            "templates": [],
+            "snippets": [],
+            "activeNoteId": null,
+            "recentNoteIds": [],
+            "selectedFolderId": "all"
+        }))
+        .expect("defaults should deserialize");
+
+        let loaded = load_workspace(&workspace.root, &defaults)
+            .expect("workspace should open with warnings");
+
+        assert!(loaded.editor_positions.is_empty());
+        assert!(!loaded.editor_positions_writable);
+        assert_eq!(
+            fs::read(&positions_path).expect("positions should remain readable"),
+            positions_before,
+        );
+    }
+
+    #[test]
+    fn saving_refuses_to_replace_newer_editor_positions() {
+        let workspace = TestWorkspace::new("newer-position-save");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("known".to_owned(), "Known.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let path = editor_positions_path(&workspace.root);
+        let newer = format!(
+            "{{\"version\":{},\"positions\":{{}}}}",
+            EDITOR_POSITIONS_VERSION + 1,
+        );
+        fs::write(&path, &newer).expect("newer positions should be written");
+
+        let error = save_editor_positions(
+            &workspace.root,
+            BTreeMap::from([("known".to_owned(), editor_position(2))]),
+            None,
+        )
+        .expect_err("newer positions should not be overwritten");
+
+        assert!(error.contains("Update the app"));
+        assert_eq!(
+            fs::read_to_string(&path).expect("newer positions should remain readable"),
+            newer,
+        );
     }
 
     #[test]

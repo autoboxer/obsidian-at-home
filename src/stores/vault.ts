@@ -4,6 +4,14 @@ import { computed, reactive, watch } from "vue";
 import { createEmptyVault, createSeedVault } from "../data/seed";
 import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from "../lib";
 import {
+  deleteNoteEditorPosition,
+  editorPositionVaultId,
+  flushNoteEditorPositions,
+  hasPendingNoteEditorPositions,
+  initializeNoteEditorPositions,
+  pruneNoteEditorPositions,
+} from "./editorPositions";
+import {
   bootstrapWorkspace,
   createWorkspace,
   forgetWorkspace,
@@ -146,7 +154,7 @@ watch(
     dirtyVersion += 1;
     uiState.saveStatus = "saving";
     clearTimeout(persistTimer);
-    persistTimer = setTimeout(() => void flushVault(), PERSIST_DELAY);
+    persistTimer = setTimeout(() => void flushApplicationState(), PERSIST_DELAY);
   },
   { deep: true, flush: "sync" },
 );
@@ -180,6 +188,7 @@ async function initializeVaultStorage(): Promise<void> {
     const storedVault = readStoredVault();
     const browserVault = storedVault?.vault ?? createSeedVault();
     hydrateVault(browserVault);
+    initializeNoteEditorPositions("browser", null, vaultState.notes);
     resetNoteNavigation();
     if (storedVault?.needsRewrite) {
       safeStorageSet(STORAGE_KEY, JSON.stringify(browserVault));
@@ -386,6 +395,7 @@ export async function reloadFilesystemVault(): Promise<boolean> {
   if (vaultSession.backend !== "native" || !path || vaultSession.busy) {
     return false;
   }
+  await flushNoteEditorPositions(currentEditorPositionVaultId());
   vaultSession.busy = true;
   try {
     const workspace = await openWorkspace(path, createEmptyVault());
@@ -775,6 +785,7 @@ export function deleteNote(id: string): void {
 
   const wasActive = vaultState.activeNoteId === id;
   vaultState.notes.splice(index, 1);
+  deleteNoteEditorPosition(currentEditorPositionVaultId(), id);
   removeRecentNote(id);
   removeNoteFromNavigation(id);
   if (wasActive) {
@@ -1095,6 +1106,7 @@ export async function mergeImportedVault(
     dirtyVersion = previousSavedVersion;
     savedVersion = previousSavedVersion;
   }
+  pruneNoteEditorPositions(currentEditorPositionVaultId(), vaultState.notes);
   notify(
     saved
       ? `Imported ${result.notes.length} Markdown ${result.notes.length === 1 ? "note" : "notes"}`
@@ -1191,6 +1203,7 @@ export async function clearVault(): Promise<boolean> {
     dirtyVersion = previousSavedVersion;
     savedVersion = previousSavedVersion;
   }
+  pruneNoteEditorPositions(currentEditorPositionVaultId(), vaultState.notes);
   notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
 
   return saved;
@@ -1578,6 +1591,14 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
   const previousPath = vaultSession.path;
   sessionGeneration += 1;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
+  initializeNoteEditorPositions(
+    "native",
+    workspace.descriptor.path,
+    vaultState.notes,
+    workspace.editorPositions,
+    workspace.editorPositionsWritable,
+    workspace.editorPositionsRevision,
+  );
   if (previousPath === workspace.descriptor.path) {
     pruneNoteNavigation();
   } else {
@@ -1620,21 +1641,29 @@ function mergeRecentVaults(
   return merged.slice(0, 12);
 }
 
+function currentEditorPositionVaultId(): string {
+  return editorPositionVaultId(vaultSession.backend, vaultSession.path);
+}
+
 async function flushBeforeVaultChange(): Promise<boolean> {
-  if (savedVersion >= dirtyVersion) {
-    return true;
-  }
-  if (vaultSession.phase !== "ready") {
-    vaultSession.error = "Choose a vault before saving changes.";
+  if (savedVersion < dirtyVersion) {
+    if (vaultSession.phase !== "ready") {
+      vaultSession.error = "Choose a vault before saving changes.";
 
-    return false;
+      return false;
+    }
+    if (!(await flushVault())) {
+      vaultSession.error = "Save the current changes before switching vaults.";
+
+      return false;
+    }
   }
-  const saved = await flushVault();
-  if (!saved) {
-    vaultSession.error = "Save the current changes before switching vaults.";
+  const positionsSaved = await flushNoteEditorPositions(currentEditorPositionVaultId());
+  if (!positionsSaved) {
+    vaultSession.error = "Save the current document position before switching vaults.";
   }
 
-  return saved;
+  return positionsSaved;
 }
 
 function persistBrowserVault(vault: VaultData): boolean {
@@ -1656,12 +1685,15 @@ function installVaultLifecycleHandlers(): void {
     return;
   }
 
-  window.addEventListener("blur", () => void flushVault());
+  window.addEventListener("blur", () => void flushApplicationState());
   window.addEventListener("focus", () => void refreshWorkspaceFromDisk());
-  window.addEventListener("beforeunload", () => void flushVault());
+  window.addEventListener("beforeunload", () => {
+    void flushVault();
+    void flushNoteEditorPositions();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
-      void flushVault();
+      void flushApplicationState();
     } else {
       void refreshWorkspaceFromDisk();
     }
@@ -1675,6 +1707,11 @@ function installVaultLifecycleHandlers(): void {
     () => void refreshWorkspaceFromDisk(),
     EXTERNAL_CHECK_DELAY,
   );
+}
+
+async function flushApplicationState(): Promise<void> {
+  await flushVault();
+  await flushNoteEditorPositions();
 }
 
 async function installNativeCloseHandler(): Promise<void> {
@@ -1694,7 +1731,11 @@ async function installNativeCloseHandler(): Promise<void> {
 
         return;
       }
-      if (savedVersion >= dirtyVersion && !saveInFlight) {
+      if (
+        savedVersion >= dirtyVersion
+        && !saveInFlight
+        && !hasPendingNoteEditorPositions()
+      ) {
         return;
       }
       event.preventDefault();
@@ -1703,6 +1744,10 @@ async function installNativeCloseHandler(): Promise<void> {
         notify(vaultSession.error || "Save the current changes before closing", "warning");
 
         return;
+      }
+      const positionsSaved = await flushNoteEditorPositions();
+      if (!positionsSaved) {
+        notify("Notes are saved, but document positions could not be saved", "warning");
       }
       closingAfterSave = true;
       await appWindow.destroy();
@@ -1734,6 +1779,7 @@ async function refreshWorkspaceFromDisk(): Promise<void> {
     if (revision === vaultSession.revision) {
       return;
     }
+    await flushNoteEditorPositions(currentEditorPositionVaultId());
     const workspace = await openWorkspace(path, createEmptyVault());
     if (
       generation !== sessionGeneration

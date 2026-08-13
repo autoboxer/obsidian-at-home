@@ -73,6 +73,9 @@ export interface VaultDescriptor {
 export interface WorkspaceLoad {
   vault: VaultData;
   descriptor: VaultDescriptor;
+  editorPositions: Record<string, NoteEditorPosition>;
+  editorPositionsRevision: string | null;
+  editorPositionsWritable: boolean;
   revision: number;
   warnings: string[];
 }

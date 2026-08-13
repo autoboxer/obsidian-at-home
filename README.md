@@ -27,6 +27,7 @@ This is not a complete Obsidian replacement: cloud sync, attachments, graph view
 - Organize notes in nested folders with drag-and-drop and right-click file actions.
 - Write in a unified live Markdown editor with inline formatting, interactive task checkboxes, tables, spellcheck, syntax-highlighted fenced code blocks, and find-in-note.
 - Move through note history with back and forward controls, or revisit notes from **Recent notes**.
+- Return to each note's cursor and scroll position, even after restarting the app.
 - Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
 - Personalize the app with light and dark themes, bundled typefaces, or fonts installed on your computer.
 - Link notes with `[[wiki links]]` and browse outgoing links and backlinks.
@@ -37,7 +38,7 @@ This is not a complete Obsidian replacement: cloud sync, attachments, graph view
 
 ## Storage and Obsidian compatibility
 
-Each vault is a folder on your computer. Notes are ordinary Markdown files you can edit with other tools. Only app metadata is stored in `.obsidian-at-home/state.json`.
+Each vault is a folder on your computer. Notes are ordinary Markdown files you can edit with other tools. App-only metadata, including cursor and viewport positions, stays in the vault's `.obsidian-at-home` folder.
 
 Open an existing Markdown or Obsidian vault directly, or use Settings to:
 

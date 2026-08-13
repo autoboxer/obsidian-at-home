@@ -37,6 +37,7 @@ import {
   liveMarkdownExtension,
   refreshLiveMarkdownEffect,
 } from "../lib/liveMarkdownCodeMirror";
+import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
 import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
@@ -72,6 +73,7 @@ const VIEWPORT_ANCHOR_MARGIN = 8;
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 let outputLineEnding = preferredLineEnding(props.modelValue);
 let positionCaptureEnabled = false;
+let removePositionCapture: (() => boolean) | undefined;
 let viewportRestoreFrame: number | undefined;
 
 const positionCaptureKey = {};
@@ -421,6 +423,11 @@ onMounted(() => {
       : undefined,
   });
   editorView.value = view;
+  removePositionCapture = registerNoteEditorPositionCapture(
+    props.vaultId,
+    props.noteId,
+    () => positionCaptureEnabled ? captureEditorPosition(view) : undefined,
+  );
   view.scrollDOM.addEventListener("scroll", handleEditorScroll, { passive: true });
   updateSuggestions(view);
 
@@ -434,13 +441,15 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   const view = editorView.value;
+  const captureWasActive = removePositionCapture?.() ?? false;
+  removePositionCapture = undefined;
   if (viewportRestoreFrame !== undefined) {
     window.cancelAnimationFrame(viewportRestoreFrame);
     viewportRestoreFrame = undefined;
   }
   if (view) {
     view.scrollDOM.removeEventListener("scroll", handleEditorScroll);
-    if (positionCaptureEnabled) {
+    if (positionCaptureEnabled && captureWasActive) {
       emitEditorPosition(captureEditorPosition(view));
     }
     view.destroy();
