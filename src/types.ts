@@ -25,6 +25,15 @@ export interface NoteEditorPosition {
   };
 }
 
+export interface RecentlyDeletedNote {
+  id: string;
+  note: Note;
+  originalFolderPath: string;
+  deletedAt: number;
+  expiresAt: number;
+  editorPosition?: NoteEditorPosition;
+}
+
 export interface Folder {
   id: string;
   name: string;
@@ -73,6 +82,7 @@ export interface VaultDescriptor {
 export interface WorkspaceLoad {
   vault: VaultData;
   descriptor: VaultDescriptor;
+  recentlyDeletedNotes: RecentlyDeletedNote[];
   editorPositions: Record<string, NoteEditorPosition>;
   editorPositionsRevision: string | null;
   editorPositionsWritable: boolean;
@@ -89,6 +99,10 @@ export interface WorkspaceSaveResult {
   revision: number;
   savedAt: number;
   warnings: string[];
+}
+
+export interface WorkspaceArchiveResult extends WorkspaceSaveResult {
+  deletedNote: RecentlyDeletedNote;
 }
 
 export interface VaultSessionState {

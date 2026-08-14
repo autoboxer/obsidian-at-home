@@ -482,7 +482,8 @@ fn should_visit_note_entry(entry: &DirEntry) -> bool {
         let name = entry.file_name().to_string_lossy();
 
         return !name.eq_ignore_ascii_case(".obsidian")
-            && !name.eq_ignore_ascii_case(".trash");
+            && !name.eq_ignore_ascii_case(".trash")
+            && !name.eq_ignore_ascii_case(".obsidian-at-home");
     }
     true
 }
@@ -830,8 +831,11 @@ fn checked_relative_folder(folder: &str) -> Result<PathBuf, String> {
         }
         if component.eq_ignore_ascii_case(".obsidian")
             || component.eq_ignore_ascii_case(".trash")
+            || component.eq_ignore_ascii_case(".obsidian-at-home")
         {
-            return Err("Obsidian settings and trash folders are reserved".to_owned());
+            return Err(
+                "App settings, Obsidian settings, and trash folders are reserved".to_owned(),
+            );
         }
         if component.len() > 255 || component.chars().any(char::is_control) {
             return Err("a folder name is too long or contains control characters".to_owned());
@@ -1136,6 +1140,7 @@ mod tests {
         assert!(checked_relative_folder("../outside").is_err());
         assert!(checked_relative_folder("Notes/.obsidian").is_err());
         assert!(checked_relative_folder("C:/Users/person").is_err());
+        assert!(checked_relative_folder(".obsidian-at-home/recently-deleted").is_err());
         assert!(checked_relative_folder("Projects/Ideas").is_ok());
         assert!(validate_vault_name("../vault").is_err());
         assert!(validate_vault_name("Obsidian At Home export").is_ok());
@@ -1158,6 +1163,12 @@ mod tests {
         let vault = TempDirectory::new("import");
         fs::create_dir_all(vault.path().join("Projects/Alpha")).unwrap();
         fs::create_dir_all(vault.path().join(".trash")).unwrap();
+        fs::create_dir_all(
+            vault
+                .path()
+                .join(".obsidian-at-home/recently-deleted"),
+        )
+        .unwrap();
         fs::create_dir_all(vault.path().join(".obsidian/snippets")).unwrap();
         fs::write(
             vault.path().join("Projects/Alpha/Plan.md"),
@@ -1165,6 +1176,13 @@ mod tests {
         )
         .unwrap();
         fs::write(vault.path().join(".trash/Deleted.md"), "deleted").unwrap();
+        fs::write(
+            vault
+                .path()
+                .join(".obsidian-at-home/recently-deleted/Private.md"),
+            "private recovery data",
+        )
+        .unwrap();
         fs::write(
             vault.path().join(".obsidian/snippets/pretty.css"),
             ".note { color: plum; }",
