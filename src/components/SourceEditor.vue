@@ -99,7 +99,8 @@ interface ListLine {
   delimiter: "." | ")";
   bullet: "-" | "+" | "*";
   spacing: string;
-  prefixLength: number;
+  contentOffset: number;
+  task: boolean;
 }
 
 interface TextEdit {
@@ -974,17 +975,17 @@ function handleSmartEnter(view: EditorView): boolean {
   }
 
   const item = matchEditableListLine(source);
-  if (!item || position < line.from + item.prefixLength) {
+  if (!item) {
     return false;
   }
 
-  const bodyStart = line.from + item.prefixLength;
-  const bodyBefore = value.slice(bodyStart, position);
-  const bodyAfter = value.slice(position, line.to);
+  const contentStart = line.from + item.contentOffset;
+  const insertionPosition = Math.max(position, contentStart);
+  const bodyBefore = value.slice(contentStart, insertionPosition);
+  const bodyAfter = value.slice(insertionPosition, line.to);
   const fullBody = `${bodyBefore}${bodyAfter}`;
-  const contentWithoutTask = fullBody.replace(/^\[[ xX]\][ \t]*/, "");
 
-  if (!contentWithoutTask.trim() && position === line.to) {
+  if (!fullBody.trim() && insertionPosition === line.to) {
     const replacement = item.indent;
     view.dispatch({
       changes: { from: line.from, to: line.to, insert: replacement },
@@ -999,11 +1000,16 @@ function handleSmartEnter(view: EditorView): boolean {
   const marker = item.ordered
     ? `${item.number >= 999_999_999 ? 1 : item.number + 1}${item.delimiter}`
     : item.bullet;
-  const taskPrefix = /^\[[ xX]\][ \t]+/.test(bodyBefore) ? "[ ] " : "";
+  const taskPrefix = item.task ? "[ ] " : "";
   const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
+  const separatorLength = bodyAfter.match(/^[ \t]+/)?.[0].length ?? 0;
   view.dispatch({
-    changes: { from: position, insert: `\n${continuation}` },
-    selection: EditorSelection.cursor(position + 1 + continuation.length),
+    changes: {
+      from: insertionPosition,
+      to: insertionPosition + separatorLength,
+      insert: `\n${continuation}`,
+    },
+    selection: EditorSelection.cursor(insertionPosition + 1 + continuation.length),
     scrollIntoView: true,
     userEvent: "input",
   });
@@ -1019,6 +1025,8 @@ function matchEditableListLine(line: string): ListLine | undefined {
   const ordered = Boolean(match[2]);
   const markerLength = ordered ? match[2]!.length + 1 : 1;
   const spacing = match[5]!;
+  const listPrefixLength = match[1]!.length + markerLength + spacing.length;
+  const taskPrefix = match[6]!.match(/^\[[ xX]\][ \t]+/)?.[0];
 
   return {
     indent: match[1]!,
@@ -1027,7 +1035,8 @@ function matchEditableListLine(line: string): ListLine | undefined {
     delimiter: ordered ? match[3]! as "." | ")" : ".",
     bullet: ordered ? "-" : match[4]! as "-" | "+" | "*",
     spacing,
-    prefixLength: match[1]!.length + markerLength + spacing.length,
+    contentOffset: listPrefixLength + (taskPrefix?.length ?? 0),
+    task: Boolean(taskPrefix),
   };
 }
 
@@ -1037,11 +1046,7 @@ function renderedListTextOffset(line: string): number | undefined {
     return undefined;
   }
 
-  const taskPrefix = line
-    .slice(item.prefixLength)
-    .match(/^\[[ xX]\][ \t]+/)?.[0];
-
-  return item.prefixLength + (taskPrefix?.length ?? 0);
+  return item.contentOffset;
 }
 
 function previousLineBoundary(
