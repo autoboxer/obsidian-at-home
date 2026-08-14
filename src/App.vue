@@ -35,7 +35,9 @@ const vaultChooserVisible = computed(
     && (vaultSession.phase !== "ready" || uiState.vaultChooserOpen),
 );
 const appInteractionBlocked = computed(
-  () => vaultSession.phase !== "ready" || uiState.vaultChooserOpen,
+  () => vaultSession.phase !== "ready"
+    || uiState.vaultChooserOpen
+    || vaultSession.busy,
 );
 
 watch(
@@ -86,7 +88,11 @@ function handleKeyboard(event: KeyboardEvent): void {
     return;
   }
 
-  if (vaultSession.phase !== "ready" || uiState.vaultChooserOpen) {
+  if (
+    vaultSession.phase !== "ready"
+    || uiState.vaultChooserOpen
+    || vaultSession.busy
+  ) {
     if (appShortcut) {
       event.preventDefault();
     }

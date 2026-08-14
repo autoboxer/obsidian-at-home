@@ -74,8 +74,8 @@ function handleMenuKeydown(event: KeyboardEvent): void {
 function requestDelete(): void {
   closeMenu();
   const title = props.note.title || "Untitled note";
-  if (window.confirm(`Delete “${title}”? This cannot be undone.`)) {
-    deleteNote(props.note.id);
+  if (window.confirm(`Delete “${title}”? It will remain in Recently Deleted for seven days.`)) {
+    void deleteNote(props.note.id);
   }
 }
 </script>

@@ -105,6 +105,15 @@ export interface WorkspaceArchiveResult extends WorkspaceSaveResult {
   deletedNote: RecentlyDeletedNote;
 }
 
+export interface WorkspaceRestoreResult extends WorkspaceSaveResult {
+  restoredNote: Note;
+  editorPosition?: NoteEditorPosition;
+}
+
+export interface WorkspaceRecoveryMutationResult extends WorkspaceSaveResult {
+  removedIds: string[];
+}
+
 export interface VaultSessionState {
   phase: "loading" | "needs-vault" | "ready" | "error";
   backend: "native" | "browser";

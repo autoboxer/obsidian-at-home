@@ -9,6 +9,8 @@ import type {
   WorkspaceArchiveResult,
   WorkspaceBootstrap,
   WorkspaceLoad,
+  WorkspaceRecoveryMutationResult,
+  WorkspaceRestoreResult,
   WorkspaceSaveResult,
 } from "../types";
 
@@ -89,6 +91,42 @@ export async function archiveWorkspaceNote(
     note,
     originalFolderPath,
     editorPosition,
+    expectedRevision,
+  });
+}
+
+export async function restoreRecentlyDeletedNote(
+  path: string,
+  deletedNoteId: string,
+  vault: VaultData,
+  expectedRevision: number,
+): Promise<WorkspaceRestoreResult> {
+  return invoke<WorkspaceRestoreResult>("workspace_restore_recently_deleted_note", {
+    path,
+    deletedNoteId,
+    vault,
+    expectedRevision,
+  });
+}
+
+export async function deleteRecentlyDeletedNotes(
+  path: string,
+  deletedNoteIds: string[],
+  expectedRevision: number,
+): Promise<WorkspaceRecoveryMutationResult> {
+  return invoke<WorkspaceRecoveryMutationResult>("workspace_delete_recently_deleted_notes", {
+    path,
+    deletedNoteIds,
+    expectedRevision,
+  });
+}
+
+export async function pruneRecentlyDeletedNotes(
+  path: string,
+  expectedRevision: number,
+): Promise<WorkspaceRecoveryMutationResult> {
+  return invoke<WorkspaceRecoveryMutationResult>("workspace_prune_recently_deleted_notes", {
+    path,
     expectedRevision,
   });
 }
