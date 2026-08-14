@@ -5914,7 +5914,7 @@ pre {
     width: 258px;
   }
 
-  .editor-toolbar-actions > .icon-button:not(.active):not(.context-toggle),
+  .editor-toolbar-actions > .icon-button:not(.active):not(.context-toggle):not(.frontmatter-toggle),
   .crumb-note {
     display: none;
   }

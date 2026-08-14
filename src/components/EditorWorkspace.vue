@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, nextTick, ref, watch } from "vue";
+import { leadingFrontmatterEnd } from "../lib/frontmatter";
 import {
   editorPositionVaultId,
   getNoteEditorPosition,
@@ -77,6 +78,11 @@ const wordCount = computed(() => {
   return content.trim() ? content.trim().split(/\s+/).length : 0;
 });
 const characterCount = computed(() => activeNote.value?.content.length ?? 0);
+const hasFrontmatter = computed(() => (
+  activeNote.value
+    ? leadingFrontmatterEnd(activeNote.value.content) !== undefined
+    : false
+));
 const backNavigationLabel = computed(() => backNavigationNote.value
   ? `Back to “${backNavigationNote.value.title.trim() || "Untitled note"}”`
   : "No previous note");
@@ -205,6 +211,10 @@ function requestDelete(): void {
   }
 }
 
+function toggleFrontmatter(): void {
+  uiState.frontmatterVisible = !uiState.frontmatterVisible;
+}
+
 function openQuickFolder(): void {
   quickFolderOpen.value = true;
   nextTick(() => quickFolderField.value?.focus());
@@ -240,6 +250,13 @@ watch(
     if (open) {
       closeQuickFolder();
     }
+  },
+);
+
+watch(
+  () => activeNote.value?.id,
+  () => {
+    noteMenuOpen.value = false;
   },
 );
 
@@ -358,6 +375,18 @@ watch(tagInput, () => {
           <AppIcon name="star" :size="16" />
         </button>
         <button
+          v-if="hasFrontmatter || uiState.frontmatterVisible"
+          class="icon-button frontmatter-toggle"
+          type="button"
+          :class="{ active: uiState.frontmatterVisible }"
+          :aria-label="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
+          :title="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
+          :aria-pressed="uiState.frontmatterVisible"
+          @click="toggleFrontmatter"
+        >
+          <AppIcon name="code" :size="16" />
+        </button>
+        <button
           class="icon-button context-toggle"
           type="button"
           :class="{ active: uiState.contextOpen }"
@@ -460,6 +489,7 @@ watch(tagInput, () => {
             :model-value="activeNote.content"
             :note-id="activeNote.id"
             :note-titles="noteTitles"
+            :show-frontmatter="uiState.frontmatterVisible"
             :vault-id="positionVaultId"
             @editor-position="rememberEditorPosition"
             @open-link="openRenderedLink"

@@ -1,4 +1,5 @@
 import type { Note } from "../types";
+import { leadingFrontmatterEnd } from "./frontmatter";
 import { highlightCode } from "./highlight";
 import { parseWikiLinkAt } from "./wikiLinks";
 
@@ -90,36 +91,9 @@ export function renderMarkdown(
 function stripLeadingFrontmatterForPreview(markdown: string): string {
   const frontmatterEnd = leadingFrontmatterEnd(markdown);
 
-  return frontmatterEnd ? markdown.slice(frontmatterEnd) : markdown;
-}
-
-function leadingFrontmatterEnd(markdown: string): number {
-  const start = markdown.startsWith("\u{feff}") ? 1 : 0;
-  const openingEnd = markdown.indexOf("\n", start);
-  if (openingEnd < 0) {
-    return 0;
-  }
-
-  const opening = markdown.slice(start, openingEnd).replace(/\r$/, "").trimEnd();
-  if (opening !== "---") {
-    return 0;
-  }
-
-  let lineStart = openingEnd + 1;
-  while (lineStart <= markdown.length) {
-    const newline = markdown.indexOf("\n", lineStart);
-    const lineEnd = newline < 0 ? markdown.length : newline;
-    const line = markdown.slice(lineStart, lineEnd).replace(/\r$/, "").trimEnd();
-    if (line === "---" || line === "...") {
-      return newline < 0 ? markdown.length : newline + 1;
-    }
-    if (newline < 0) {
-      break;
-    }
-    lineStart = newline + 1;
-  }
-
-  return 0;
+  return frontmatterEnd === undefined
+    ? markdown
+    : markdown.slice(frontmatterEnd);
 }
 
 /** Toggle a rendered task checkbox while preserving the rest of the Markdown. */
@@ -132,7 +106,7 @@ export function toggleMarkdownTask(
     return markdown;
   }
 
-  const bodyStart = leadingFrontmatterEnd(markdown);
+  const bodyStart = leadingFrontmatterEnd(markdown) ?? 0;
   let currentTask = 0;
   let cursor = bodyStart;
   let fence: { marker: string; size: number; quoteDepth: number } | undefined;

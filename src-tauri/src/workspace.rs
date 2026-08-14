@@ -1789,8 +1789,14 @@ fn content_with_requested_tags(note: &Note, old_content: Option<&str>) -> Result
     let action = if old_content.is_some() { "update" } else { "write" };
     update_frontmatter_tags_conservatively(&note.content, &requested_tags).map_err(|error| {
         format!(
-            "Could not {action} tags for {:?}: {error} Edit the tags in Markdown source instead.",
+            concat!(
+                "Could not {} tags for {:?}: {} ",
+                "Edit the tags in Markdown source instead. ",
+                "If the frontmatter is hidden, reveal it from the note toolbar."
+            ),
+            action,
             note.title,
+            error,
         )
     })
 }

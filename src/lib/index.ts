@@ -1,4 +1,5 @@
 export * from "./documentSearch";
+export * from "./frontmatter";
 export * from "./liveMarkdown";
 export * from "./liveMarkdownCode";
 export * from "./liveMarkdownTable";
