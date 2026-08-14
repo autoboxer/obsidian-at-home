@@ -82,6 +82,7 @@ export const treeDragState = reactive<{ noteId: string | null; folderId: string 
 
 interface UiState {
   tool: ToolView;
+  notesView: "editor" | "recently-deleted";
   noteFilter: string;
   commandOpen: boolean;
   contextOpen: boolean;
@@ -110,6 +111,7 @@ interface NoteNavigationState {
 
 interface WorkspaceUiSnapshot {
   tool: ToolView;
+  notesView: UiState["notesView"];
   noteFilter: string;
 }
 
@@ -142,6 +144,7 @@ export const vaultSession = reactive<VaultSessionState>({
 
 export const uiState = reactive<UiState>({
   tool: "notes",
+  notesView: "editor",
   noteFilter: "",
   commandOpen: false,
   contextOpen: true,
@@ -704,20 +707,47 @@ export function selectNote(id: string): void {
     recordDirectNoteNavigation(vaultState.activeNoteId, id);
   }
   activateNote(id);
+  uiState.tool = "notes";
+  uiState.notesView = "editor";
 }
 
 export function navigateBack(): boolean {
-  return traverseNoteNavigation(noteNavigationState.back, noteNavigationState.forward);
+  const navigated = traverseNoteNavigation(noteNavigationState.back, noteNavigationState.forward);
+  if (navigated) {
+    uiState.tool = "notes";
+    uiState.notesView = "editor";
+  }
+
+  return navigated;
 }
 
 export function navigateForward(): boolean {
-  return traverseNoteNavigation(noteNavigationState.forward, noteNavigationState.back);
+  const navigated = traverseNoteNavigation(noteNavigationState.forward, noteNavigationState.back);
+  if (navigated) {
+    uiState.tool = "notes";
+    uiState.notesView = "editor";
+  }
+
+  return navigated;
 }
 
 export function selectFolder(selection: FolderSelection): void {
   vaultState.selectedFolderId = isSmartFolderSelection(selection) ? selection : "all";
   uiState.tool = "notes";
+  uiState.notesView = "editor";
   uiState.noteFilter = "";
+}
+
+export function openRecentlyDeletedWorkspace(): boolean {
+  if (!recentlyDeletedState.notes.length) {
+    return false;
+  }
+
+  uiState.commandOpen = false;
+  uiState.tool = "notes";
+  uiState.notesView = "recently-deleted";
+
+  return true;
 }
 
 export function openSearchWorkspace(
@@ -781,6 +811,7 @@ export function createNote(folderId?: string | null, title = "Untitled note", co
   selectNote(note.id);
   vaultState.selectedFolderId = "all";
   uiState.tool = "notes";
+  uiState.notesView = "editor";
   uiState.noteFilter = "";
   notify("New note created", "success");
 
@@ -1896,6 +1927,7 @@ function applyRestoredNote(note: Note, previousActiveNoteId: string | null): voi
   activateNote(note.id);
   vaultState.selectedFolderId = "all";
   uiState.tool = "notes";
+  uiState.notesView = "editor";
   uiState.noteFilter = "";
 }
 
@@ -1976,12 +2008,14 @@ function removeRecentlyDeletedEntries(ids: string[]): void {
 function snapshotWorkspaceUi(): WorkspaceUiSnapshot {
   return {
     tool: uiState.tool,
+    notesView: uiState.notesView,
     noteFilter: uiState.noteFilter,
   };
 }
 
 function restoreWorkspaceUi(snapshot: WorkspaceUiSnapshot): void {
   uiState.tool = snapshot.tool;
+  uiState.notesView = snapshot.notesView;
   uiState.noteFilter = snapshot.noteFilter;
 }
 
@@ -2390,6 +2424,7 @@ function hydrateRecentlyDeletedNotes(notes: RecentlyDeletedNote[]): void {
   if (!notes.length) {
     clearTimeout(recentlyDeletedTimer);
     recentlyDeletedTimer = undefined;
+    uiState.notesView = "editor";
   }
 }
 
@@ -2414,6 +2449,7 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
     pruneNoteNavigation();
   } else {
     resetNoteNavigation();
+    uiState.notesView = "editor";
   }
   vaultSession.phase = "ready";
   vaultSession.path = workspace.descriptor.path;

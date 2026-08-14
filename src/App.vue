@@ -6,6 +6,7 @@ import CommandPalette from "./components/CommandPalette.vue";
 import EditorWorkspace from "./components/EditorWorkspace.vue";
 import ExplorerSidebar from "./components/ExplorerSidebar.vue";
 import LinkInspector from "./components/LinkInspector.vue";
+import RecentlyDeletedWorkspace from "./components/RecentlyDeletedWorkspace.vue";
 import SearchWorkspace from "./components/SearchWorkspace.vue";
 import SettingsView from "./components/SettingsView.vue";
 import SnippetStudio from "./components/SnippetStudio.vue";
@@ -48,6 +49,10 @@ watch(
 
 const titlebarContext = computed(() => {
   if (uiState.tool === "notes") {
+    if (uiState.notesView === "recently-deleted") {
+      return "Recently Deleted";
+    }
+
     return activeNote.value?.title || vaultState.name;
   }
   if (uiState.tool === "search") {
@@ -126,6 +131,7 @@ function handleKeyboard(event: KeyboardEvent): void {
     event.preventDefault();
     if (uiState.tool !== "notes") {
       uiState.tool = "notes";
+      uiState.notesView = "editor";
       uiState.explorerOpen = true;
     } else {
       uiState.explorerOpen = !uiState.explorerOpen;
@@ -167,14 +173,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
       <ActivityRail />
 
       <Transition name="workspace-switch" mode="out-in">
-        <div v-if="uiState.tool === 'notes'" key="notes" class="notes-workspace">
+        <div v-if="uiState.tool === 'notes'" key="notes" class="notes-workspace" :data-note-view="uiState.notesView">
           <Transition name="panel-left">
             <ExplorerSidebar v-if="uiState.explorerOpen" />
           </Transition>
-          <EditorWorkspace />
-          <Transition name="panel-right">
-            <LinkInspector v-if="uiState.contextOpen" />
-          </Transition>
+          <RecentlyDeletedWorkspace v-if="uiState.notesView === 'recently-deleted'" />
+          <template v-else>
+            <EditorWorkspace />
+            <Transition name="panel-right">
+              <LinkInspector v-if="uiState.contextOpen" />
+            </Transition>
+          </template>
         </div>
         <SearchWorkspace v-else-if="uiState.tool === 'search'" key="search" />
         <TemplateGallery v-else-if="uiState.tool === 'templates'" key="templates" />

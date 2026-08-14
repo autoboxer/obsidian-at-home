@@ -178,6 +178,11 @@ async function closeReference(): Promise<void> {
               <code>[data-ui-region="activity-rail"]</code><span>Left navigation</span>
               <code>[data-ui-region="vault-panel"]</code><span>Vault and files panel</span>
               <code>[data-ui-region="editor"]</code><span>Note editor</span>
+              <code>[data-ui-region="recently-deleted"]</code><span>Recently Deleted workspace</span>
+              <code>[data-ui-region="recently-deleted-header"]</code><span>Recently Deleted header</span>
+              <code>[data-ui-region="recently-deleted-list"]</code><span>Recently Deleted list</span>
+              <code>[data-ui-region="recently-deleted-note"]</code><span>Deleted note card</span>
+              <code>[data-ui-region="recently-deleted-actions"]</code><span>Deleted note actions</span>
               <code>[data-ui-region="note-title"]</code><span>Note title field</span>
               <code>[data-ui-region="document-search"]</code><span>Find-in-note bar</span>
               <code>[data-ui-region="context-panel"]</code><span>Links and note details</span>
@@ -200,6 +205,7 @@ async function closeReference(): Promise<void> {
             <summary>Editor and context</summary>
             <div class="snippet-reference-grid">
               <code>[data-editor-view="live"]</code><span>Unified editor view</span>
+              <code>[data-note-view="recently-deleted"]</code><span>Recently Deleted note view</span>
               <code>[data-editor-pane="live"]</code><span>Unified note pane</span>
               <code>[data-context-view="links"]</code><span>Links context tab</span>
               <code>[data-context-view="info"]</code><span>Info context tab</span>
