@@ -464,6 +464,7 @@ onMounted(() => {
   );
   view.scrollDOM.addEventListener("scroll", handleEditorScroll, { passive: true });
   updateSuggestions(view);
+  view.focus();
 
   if (initialPosition) {
     scheduleViewportRestore(view, initialPosition);
