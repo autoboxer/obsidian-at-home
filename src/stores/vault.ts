@@ -68,6 +68,7 @@ interface UiState {
   commandOpen: boolean;
   contextOpen: boolean;
   explorerOpen: boolean;
+  frontmatterVisible: boolean;
   vaultChooserOpen: boolean;
   inspectorTab: "links" | "info";
   saveStatus: SaveStatus;
@@ -110,6 +111,7 @@ export const uiState = reactive<UiState>({
   commandOpen: false,
   contextOpen: true,
   explorerOpen: true,
+  frontmatterVisible: false,
   vaultChooserOpen: false,
   inspectorTab: "links",
   saveStatus: "saved",

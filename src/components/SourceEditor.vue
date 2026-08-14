@@ -16,6 +16,7 @@ import {
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   Annotation,
+  Compartment,
   EditorSelection,
   EditorState,
   Prec,
@@ -37,13 +38,19 @@ import {
   liveMarkdownExtension,
   refreshLiveMarkdownEffect,
 } from "../lib/liveMarkdownCodeMirror";
+import {
+  joinLeadingFrontmatter,
+  leadingFrontmatterEnd,
+  markdownBodyStart,
+  splitLeadingFrontmatter,
+} from "../lib/frontmatter";
 import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
 import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
-import type { SelectionRange } from "@codemirror/state";
-import type { Command } from "@codemirror/view";
+import type { Extension, SelectionRange } from "@codemirror/state";
+import type { Command, ViewUpdate } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
 import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
@@ -53,6 +60,7 @@ const props = defineProps<{
   modelValue: string;
   noteId: string;
   noteTitles: string[];
+  showFrontmatter: boolean;
   vaultId: string;
 }>();
 
@@ -68,10 +76,15 @@ const editorView = shallowRef<EditorView>();
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const externalUpdate = Annotation.define<boolean>();
+const historyCompartment = new Compartment();
+const lineNumbersCompartment = new Compartment();
 const INDENT = "  ";
 const VIEWPORT_ANCHOR_MARGIN = 8;
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 let outputLineEnding = preferredLineEnding(props.modelValue);
+let frontmatterHistoryChanged = false;
+let frontmatterLineOffset = 0;
+let frontmatterPrefix = "";
 let positionCaptureEnabled = false;
 let removePositionCapture: (() => boolean) | undefined;
 let viewportRestoreFrame: number | undefined;
@@ -348,19 +361,28 @@ onMounted(() => {
     return;
   }
 
-  const documentText = normalizeDocumentText(props.modelValue);
-  const initialPosition = normalizeInitialPosition(props.initialPosition, documentText.length);
+  const editableDocument = projectEditableDocument(
+    normalizeDocumentText(props.modelValue),
+    props.showFrontmatter,
+  );
+  frontmatterLineOffset = editableDocument.lineNumberOffset;
+  frontmatterPrefix = editableDocument.prefix;
+  const initialPosition = normalizeInitialPosition(
+    props.initialPosition,
+    editableDocument.body.length,
+    editableDocument.bodyStart,
+  );
   const view = new EditorView({
     parent: host,
     state: EditorState.create({
-      doc: documentText,
+      doc: editableDocument.body,
       selection: initialPosition
         ? EditorSelection.range(initialPosition.selection.anchor, initialPosition.selection.head)
         : undefined,
       extensions: [
-        lineNumbers(),
+        lineNumbersCompartment.of(editorLineNumbers(frontmatterLineOffset)),
         highlightSpecialChars(),
-        history(),
+        historyCompartment.of(history()),
         drawSelection(),
         dropCursor(),
         EditorState.tabSize.of(2),
@@ -405,9 +427,21 @@ onMounted(() => {
             (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
           );
           if (localDocumentChange) {
+            if (
+              props.showFrontmatter
+              && changeTouchesLeadingFrontmatter(update)
+            ) {
+              frontmatterHistoryChanged = true;
+            }
             emit(
               "update:modelValue",
-              restoreLineEndings(update.state.doc.toString(), outputLineEnding),
+              restoreLineEndings(
+                joinLeadingFrontmatter(
+                  frontmatterPrefix,
+                  update.state.doc.toString(),
+                ),
+                outputLineEnding,
+              ),
             );
             refreshDocumentSearch();
           }
@@ -458,24 +492,94 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => props.modelValue,
-  (value) => {
+  [() => props.modelValue, () => props.showFrontmatter],
+  ([value, showFrontmatter], [, previouslyShowingFrontmatter]) => {
     const view = editorView.value;
     outputLineEnding = preferredLineEnding(value);
-    const normalizedValue = normalizeDocumentText(value);
-    if (!view || normalizedValue === view.state.doc.toString()) {
+    const visibilityChanged = showFrontmatter !== previouslyShowingFrontmatter;
+    const normalizedValue = visibilityChanged && view
+      ? joinLeadingFrontmatter(
+          frontmatterPrefix,
+          view.state.doc.toString(),
+        )
+      : normalizeDocumentText(value);
+
+    const editableDocument = projectEditableDocument(
+      normalizedValue,
+      showFrontmatter,
+    );
+    const prefixChanged = editableDocument.prefix !== frontmatterPrefix;
+    const lineOffsetChanged = (
+      editableDocument.lineNumberOffset !== frontmatterLineOffset
+    );
+    if (!view) {
+      frontmatterPrefix = editableDocument.prefix;
+      frontmatterLineOffset = editableDocument.lineNumberOffset;
+
       return;
     }
 
-    const change = minimalDocumentChange(view.state.doc.toString(), normalizedValue);
-    view.dispatch({
-      changes: change,
-      annotations: [
-        externalUpdate.of(true),
-        Transaction.addToHistory.of(false),
-      ],
-    });
-    refreshDocumentSearch();
+    const currentBody = view.state.doc.toString();
+    const currentBodyStart = markdownBodyStart(frontmatterPrefix, currentBody);
+    const bodyChanged = editableDocument.body !== currentBody;
+    const coordinateSpaceChanged = bodyChanged
+      && editableDocument.bodyStart !== currentBodyStart;
+    const resetHistory = coordinateSpaceChanged && (
+      !visibilityChanged
+      || (previouslyShowingFrontmatter && frontmatterHistoryChanged)
+    );
+    const selection = visibilityChanged
+      ? frontmatterVisibilitySelection(
+          view.state.selection.main,
+          currentBodyStart,
+          editableDocument,
+        )
+      : undefined;
+    frontmatterPrefix = editableDocument.prefix;
+    frontmatterLineOffset = editableDocument.lineNumberOffset;
+    if (resetHistory) {
+      // Projection changes invalidate history entries that target the hidden prefix
+      view.dispatch({
+        effects: historyCompartment.reconfigure([]),
+      });
+    }
+    if (bodyChanged || lineOffsetChanged) {
+      view.dispatch({
+        ...(bodyChanged
+          ? {
+              changes: minimalDocumentChange(currentBody, editableDocument.body),
+              annotations: [
+                externalUpdate.of(true),
+                Transaction.addToHistory.of(false),
+              ],
+            }
+          : {}),
+        ...(lineOffsetChanged
+          ? {
+              effects: lineNumbersCompartment.reconfigure(
+                editorLineNumbers(frontmatterLineOffset),
+              ),
+            }
+          : {}),
+        ...(selection ? { selection } : {}),
+        scrollIntoView: visibilityChanged,
+      });
+    }
+    if (bodyChanged) {
+      refreshDocumentSearch();
+    }
+    if (prefixChanged) {
+      schedulePositionCapture(view);
+    }
+    if (resetHistory) {
+      view.dispatch({
+        effects: historyCompartment.reconfigure(history()),
+      });
+    }
+    if (visibilityChanged) {
+      frontmatterHistoryChanged = false;
+      view.focus();
+    }
   },
 );
 
@@ -650,9 +754,55 @@ function normalizeDocumentText(value: string): string {
   return value.replace(/\r\n|\r/g, "\n");
 }
 
+function projectEditableDocument(
+  normalizedMarkdown: string,
+  showFrontmatter: boolean,
+) {
+  if (!showFrontmatter) {
+    return splitLeadingFrontmatter(normalizedMarkdown);
+  }
+
+  return {
+    body: normalizedMarkdown,
+    bodyStart: 0,
+    lineNumberOffset: 0,
+    prefix: "",
+  };
+}
+
+function frontmatterVisibilitySelection(
+  selection: SelectionRange,
+  currentBodyStart: number,
+  editableDocument: ReturnType<typeof projectEditableDocument>,
+): SelectionRange {
+  const clamp = (position: number): number => Math.min(
+    editableDocument.body.length,
+    Math.max(0, position + currentBodyStart - editableDocument.bodyStart),
+  );
+
+  return EditorSelection.range(
+    clamp(selection.anchor),
+    clamp(selection.head),
+  );
+}
+
+function changeTouchesLeadingFrontmatter(update: ViewUpdate): boolean {
+  const previousEnd = leadingFrontmatterEnd(update.startState.doc.toString()) ?? 0;
+  const nextEnd = leadingFrontmatterEnd(update.state.doc.toString()) ?? 0;
+  let touchesFrontmatter = previousEnd !== nextEnd;
+  update.changes.iterChangedRanges((fromA, _toA, fromB) => {
+    if (fromA < previousEnd || fromB < nextEnd) {
+      touchesFrontmatter = true;
+    }
+  });
+
+  return touchesFrontmatter;
+}
+
 function normalizeInitialPosition(
   position: NoteEditorPosition | undefined,
   documentLength: number,
+  bodyStart: number,
 ): NoteEditorPosition | undefined {
   if (!position) {
     return undefined;
@@ -660,7 +810,7 @@ function normalizeInitialPosition(
 
   const clamp = (value: number): number => Math.min(
     documentLength,
-    Math.max(0, Math.trunc(value)),
+    Math.max(0, Math.trunc(value) - bodyStart),
   );
 
   return {
@@ -697,6 +847,10 @@ function schedulePositionCapture(view: EditorView): void {
 
 function captureEditorPosition(view: EditorView): NoteEditorPosition {
   const selection = view.state.selection.main;
+  const bodyStart = markdownBodyStart(
+    frontmatterPrefix,
+    view.state.doc.toString(),
+  );
   const scrollTop = view.scrollDOM.scrollTop;
   const candidate = view.lineBlockAtHeight(scrollTop + VIEWPORT_ANCHOR_MARGIN);
   const firstVisibleBlock = view.viewportLineBlocks[0];
@@ -708,15 +862,21 @@ function captureEditorPosition(view: EditorView): NoteEditorPosition {
 
   return {
     selection: {
-      anchor: selection.anchor,
-      head: selection.head,
+      anchor: selection.anchor + bodyStart,
+      head: selection.head + bodyStart,
     },
     viewport: {
-      anchor: viewportBlock.from,
+      anchor: viewportBlock.from + bodyStart,
       offset: viewportBlock.top - scrollTop,
       left: view.scrollDOM.scrollLeft,
     },
   };
+}
+
+function editorLineNumbers(offset: number): Extension {
+  return lineNumbers({
+    formatNumber: (lineNumber) => String(lineNumber + offset),
+  });
 }
 
 function emitEditorPosition(position: NoteEditorPosition): void {
