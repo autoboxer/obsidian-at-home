@@ -48,7 +48,7 @@ export class ListMarkerWidget extends WidgetType {
     marker.textContent = this.marker;
     control.append(prefix, marker);
     control.addEventListener("mousedown", (event) =>
-      revealWidgetSource(view, control, event, this.from, this.to)
+      revealWidgetSource(view, marker, event, this.from, this.to)
     );
 
     return control;

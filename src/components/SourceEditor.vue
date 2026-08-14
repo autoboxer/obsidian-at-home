@@ -326,7 +326,13 @@ const wrapSelectionAsInlineCode: Command = (view) => {
   );
 };
 
-const selectRenderedListTextStart: Command = (view) => {
+const moveToRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, false);
+const selectRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, true);
+
+function setRenderedListTextStart(
+  view: EditorView,
+  extendSelection: boolean,
+): boolean {
   if (view.composing || view.state.selection.ranges.length !== 1) {
     return false;
   }
@@ -339,22 +345,32 @@ const selectRenderedListTextStart: Command = (view) => {
   }
 
   const textStart = line.from + textOffset;
+  if (selection.head < textStart) {
+    return false;
+  }
   if (
-    selection.head <= textStart ||
-    selection.from < textStart ||
-    previousLineBoundary(view, selection) >= textStart
+    selection.head > textStart
+    && previousLineBoundary(view, selection) > textStart
   ) {
     return false;
   }
+  if (
+    selection.head === textStart
+    && (extendSelection || selection.empty)
+  ) {
+    return true;
+  }
 
   view.dispatch({
-    selection: EditorSelection.range(selection.anchor, textStart),
+    selection: extendSelection
+      ? EditorSelection.range(selection.anchor, textStart)
+      : EditorSelection.cursor(textStart),
     scrollIntoView: true,
     userEvent: "select",
   });
 
   return true;
-};
+}
 
 onMounted(() => {
   const host = editorHost.value;
@@ -419,8 +435,16 @@ onMounted(() => {
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "'", run: insertLiteralApostrophe },
           { key: "`", run: wrapSelectionAsInlineCode },
-          { key: "Home", shift: selectRenderedListTextStart },
-          { mac: "Cmd-ArrowLeft", shift: selectRenderedListTextStart },
+          {
+            key: "Home",
+            run: moveToRenderedListTextStart,
+            shift: selectRenderedListTextStart,
+          },
+          {
+            mac: "Cmd-ArrowLeft",
+            run: moveToRenderedListTextStart,
+            shift: selectRenderedListTextStart,
+          },
         ])),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
