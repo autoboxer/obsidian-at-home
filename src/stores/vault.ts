@@ -786,16 +786,13 @@ export function deleteNote(id: string): void {
   }
 
   const wasActive = vaultState.activeNoteId === id;
+  const fallbackId = wasActive ? noteDeletionFallback(id) : undefined;
   vaultState.notes.splice(index, 1);
   deleteNoteEditorPosition(currentEditorPositionVaultId(), id);
   removeRecentNote(id);
   removeNoteFromNavigation(id);
   if (wasActive) {
-    const fallbackNote = vaultState.notes[Math.min(index, vaultState.notes.length - 1)];
-    noteNavigationState.forward.splice(0);
-    if (fallbackNote) {
-      activateNote(fallbackNote.id);
-    } else {
+    if (!fallbackId || !activateNoteAfterDeletion(fallbackId)) {
       vaultState.activeNoteId = null;
     }
   }
@@ -1300,6 +1297,55 @@ function findNoteNavigationTarget(stack: string[]): Note | undefined {
 function removeNoteFromNavigation(id: string): void {
   noteNavigationState.back = noteNavigationState.back.filter((noteId) => noteId !== id);
   noteNavigationState.forward = noteNavigationState.forward.filter((noteId) => noteId !== id);
+}
+
+function noteDeletionFallback(id: string): string | undefined {
+  const recentId = vaultState.recentNoteIds.find(
+    (noteId) => noteId !== id && noteExists(noteId),
+  );
+  if (recentId) {
+    return recentId;
+  }
+
+  const navigationTarget = findNoteNavigationTarget(noteNavigationState.forward)
+    ?? findNoteNavigationTarget(noteNavigationState.back);
+  if (navigationTarget) {
+    return navigationTarget.id;
+  }
+
+  const orderedNotes = [...vaultState.notes].sort(compareNotesByLocation);
+  const noteIndex = orderedNotes.findIndex((note) => note.id === id);
+
+  return orderedNotes[noteIndex + 1]?.id ?? orderedNotes[noteIndex - 1]?.id;
+}
+
+function activateNoteAfterDeletion(id: string): boolean {
+  if (
+    findNoteNavigationTarget(noteNavigationState.forward)?.id === id
+    && traverseNoteNavigation(noteNavigationState.forward, noteNavigationState.back)
+  ) {
+    return true;
+  }
+  if (
+    findNoteNavigationTarget(noteNavigationState.back)?.id === id
+    && traverseNoteNavigation(noteNavigationState.back, noteNavigationState.forward)
+  ) {
+    return true;
+  }
+
+  return activateNote(id);
+}
+
+function compareNotesByLocation(first: Note, second: Note): number {
+  return folderPath(first.folderId).localeCompare(
+    folderPath(second.folderId),
+    undefined,
+    { sensitivity: "base", numeric: true },
+  ) || first.title.localeCompare(
+    second.title,
+    undefined,
+    { sensitivity: "base", numeric: true },
+  ) || first.id.localeCompare(second.id);
 }
 
 function pruneNoteNavigation(): void {
