@@ -385,7 +385,7 @@ onMounted(() => {
         historyCompartment.of(history()),
         drawSelection(),
         dropCursor(),
-        EditorState.tabSize.of(2),
+        EditorState.tabSize.of(4),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
           "aria-label": "Markdown source",

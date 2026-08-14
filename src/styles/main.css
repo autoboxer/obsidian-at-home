@@ -2192,7 +2192,7 @@ pre {
   padding: 32px clamp(25px, 4vw, 62px) 90px clamp(24px, 3.5vw, 50px);
   caret-color: var(--editor-text);
   color: var(--editor-text);
-  tab-size: 2;
+  tab-size: 4;
 }
 
 .source-editor .cm-line {
@@ -2462,18 +2462,16 @@ pre {
   text-decoration-color: color-mix(in srgb, var(--red) 45%, transparent);
 }
 
-.live-list-prefix {
-  white-space: pre;
-}
-
 .live-list-control {
-  position: relative;
-  display: inline-block;
-  white-space: pre;
+  display: inline;
 }
 
 .live-list-prefix {
-  color: transparent;
+  display: none;
+}
+
+.source-editor .cm-line.is-rendered-list {
+  padding-left: var(--live-list-content-indent);
 }
 
 .live-quote-control {
@@ -2507,9 +2505,11 @@ pre {
 .live-list-marker {
   position: absolute;
   top: 0;
-  right: 0.35em;
+  left: 0;
+  width: calc(var(--live-list-content-indent) - 0.4em);
   color: color-mix(in srgb, var(--violet) 72%, var(--text-soft));
   font-weight: 650;
+  text-align: right;
 }
 
 .live-horizontal-rule {
@@ -2788,19 +2788,17 @@ pre {
 }
 
 .live-task-control {
-  position: relative;
-  display: inline-block;
-  white-space: pre;
+  display: inline;
 }
 
 .live-task-marker {
-  color: transparent;
+  display: none;
 }
 
 .live-task-checkbox {
   position: absolute;
   top: 50%;
-  left: 0;
+  left: calc(var(--live-list-content-indent) - 1.25em);
   display: grid;
   width: 1em;
   height: 1em;
