@@ -7,8 +7,10 @@ import {
   moveFolder,
   moveNoteToFolder,
   NOTE_DRAG_MIME,
+  openRecentlyDeletedWorkspace,
   openSearchWorkspace,
   recentNotes,
+  recentlyDeletedNotes,
   selectFolder,
   treeDragState,
   uiState,
@@ -310,20 +312,30 @@ function handleRootKeydown(event: KeyboardEvent): void {
 
     <div class="explorer-scroll">
       <section class="explorer-section smart-folders">
-        <button type="button" :class="{ active: vaultState.selectedFolderId === 'all' }" @click="selectFolder('all')">
+        <button type="button" :class="{ active: uiState.notesView === 'editor' && vaultState.selectedFolderId === 'all' }" @click="selectFolder('all')">
           <AppIcon name="notes" :size="15" />
           <span>All notes</span>
           <small>{{ vaultState.notes.length }}</small>
         </button>
-        <button type="button" :class="{ active: vaultState.selectedFolderId === 'recent' }" @click="selectFolder('recent')">
+        <button type="button" :class="{ active: uiState.notesView === 'editor' && vaultState.selectedFolderId === 'recent' }" @click="selectFolder('recent')">
           <AppIcon name="clock" :size="15" />
           <span>Recent notes</span>
           <small>{{ recentNotes.length }}</small>
         </button>
-        <button type="button" :class="{ active: vaultState.selectedFolderId === 'favorites' }" @click="selectFolder('favorites')">
+        <button type="button" :class="{ active: uiState.notesView === 'editor' && vaultState.selectedFolderId === 'favorites' }" @click="selectFolder('favorites')">
           <AppIcon name="star" :size="15" />
           <span>Favorites</span>
           <small>{{ vaultState.notes.filter((note) => note.pinned).length }}</small>
+        </button>
+        <button
+          v-if="recentlyDeletedNotes.length"
+          type="button"
+          :class="{ active: uiState.notesView === 'recently-deleted' }"
+          @click="openRecentlyDeletedWorkspace"
+        >
+          <AppIcon name="trash" :size="15" />
+          <span>Recently Deleted</span>
+          <small>{{ recentlyDeletedNotes.length }}</small>
         </button>
       </section>
 

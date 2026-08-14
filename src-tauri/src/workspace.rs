@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self, File, FileTimes, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use walkdir::{DirEntry, WalkDir};
 
@@ -13,13 +13,16 @@ const STATE_DIRECTORY: &str = ".obsidian-at-home";
 const STATE_FILE: &str = "state.json";
 const EDITOR_POSITIONS_FILE: &str = "editor-positions.json";
 const EDITOR_POSITIONS_LOCK_FILE: &str = "editor-positions.lock";
+const WORKSPACE_LOCK_FILE: &str = "workspace.lock";
 const REGISTRY_FILE: &str = "workspaces.json";
 const TRANSACTIONS_DIRECTORY: &str = "transactions";
 const TRANSACTION_MANIFEST_FILE: &str = "manifest.json";
-const STATE_VERSION: u32 = 1;
+const RECENTLY_DELETED_DIRECTORY: &str = "recently-deleted";
+const RECENTLY_DELETED_SNAPSHOT_VERSION: u32 = 1;
+const STATE_VERSION: u32 = 2;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
-const TRANSACTION_VERSION: u32 = 2;
+const TRANSACTION_VERSION: u32 = 3;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
@@ -28,7 +31,11 @@ const MAX_WARNINGS: usize = 200;
 const MAX_PATH_COMPONENTS: usize = 120;
 const MAX_TRANSACTION_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EDITOR_POSITIONS_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_RECENTLY_DELETED_SNAPSHOT_BYTES: u64 = MAX_NOTE_BYTES * 6 + 1024 * 1024;
+const MAX_RECENTLY_DELETED_BYTES: u64 = MAX_TOTAL_NOTE_BYTES;
+const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
+const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -144,9 +151,23 @@ pub struct NoteEditorPosition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct RecentlyDeletedNote {
+    pub id: String,
+    pub note: Note,
+    pub original_folder_path: String,
+    pub deleted_at: u64,
+    pub expires_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_position: Option<NoteEditorPosition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceLoad {
     pub vault: VaultData,
     pub descriptor: VaultDescriptor,
+    #[serde(default)]
+    pub recently_deleted_notes: Vec<RecentlyDeletedNote>,
     pub editor_positions: BTreeMap<String, NoteEditorPosition>,
     pub editor_positions_revision: Option<String>,
     pub editor_positions_writable: bool,
@@ -169,6 +190,35 @@ pub struct SaveResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceArchiveResult {
+    pub deleted_note: RecentlyDeletedNote,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRestoreResult {
+    pub restored_note: Note,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_position: Option<NoteEditorPosition>,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRecoveryMutationResult {
+    pub removed_ids: Vec<String>,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 struct StoredNoteMetadata {
@@ -176,6 +226,21 @@ struct StoredNoteMetadata {
     pinned: bool,
     #[serde(default)]
     created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StoredRecentlyDeletedNote {
+    deleted_at: u64,
+    expires_at: u64,
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct RecentlyDeletedSnapshot {
+    version: u32,
+    deleted_note: RecentlyDeletedNote,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -199,6 +264,8 @@ struct WorkspaceState {
     active_note_id: Option<String>,
     #[serde(default)]
     recent_note_ids: Vec<String>,
+    #[serde(default)]
+    recently_deleted_notes: BTreeMap<String, StoredRecentlyDeletedNote>,
     #[serde(default = "default_folder_selection")]
     selected_folder_id: String,
     #[serde(default)]
@@ -217,6 +284,7 @@ impl Default for WorkspaceState {
             snippets: Vec::new(),
             active_note_id: None,
             recent_note_ids: Vec::new(),
+            recently_deleted_notes: BTreeMap::new(),
             selected_folder_id: default_folder_selection(),
             last_committed_transaction_id: None,
         }
@@ -308,6 +376,43 @@ struct NoteWritePlan {
     new_relative_path: String,
     content: String,
     needs_write: bool,
+    preserved_modified_at: Option<u64>,
+}
+
+#[derive(Debug)]
+struct PendingNoteArchive {
+    note: Note,
+    original_folder_path: String,
+    editor_position: Option<NoteEditorPosition>,
+}
+
+#[derive(Debug)]
+struct PreparedNoteArchive {
+    deleted_note: RecentlyDeletedNote,
+    bytes: Vec<u8>,
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Debug)]
+struct PendingNoteRestore {
+    deleted_note_id: String,
+    restored_note: Note,
+    preferred_relative_path: String,
+}
+
+#[derive(Debug)]
+struct PreparedNoteRestore {
+    restored_note: Note,
+    editor_position: Option<NoteEditorPosition>,
+    recovery_id: String,
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RecoverySnapshotRemoval {
+    Removed,
+    AlreadyMissing,
+    RemovedWithoutDurability(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,6 +447,13 @@ struct TransactionTarget {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct TransactionRecoveryTarget {
+    id: String,
+    fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct FolderCaseRename {
     from_relative_path: String,
     to_relative_path: String,
@@ -355,6 +467,8 @@ struct TransactionManifest {
     phase: TransactionPhase,
     originals: Vec<TransactionOriginal>,
     targets: Vec<TransactionTarget>,
+    #[serde(default)]
+    recovery_targets: Vec<TransactionRecoveryTarget>,
     folder_case_renames: Vec<FolderCaseRename>,
     created_directories: Vec<String>,
 }
@@ -390,6 +504,7 @@ pub fn workspace_bootstrap(
             } else {
                 let canonical = validate_workspace_root_path(&path)?;
                 reject_home_vault(&app, &canonical)?;
+                let _workspace_guard = lock_workspace_files(&canonical)?;
                 let loaded = load_workspace(&canonical, &defaults)?;
                 remember_workspace(&mut registry, &loaded.descriptor);
                 write_registry(&app, &registry)?;
@@ -417,6 +532,7 @@ pub fn workspace_open(
     reject_home_vault(&app, &root)?;
     let mut registry = read_registry(&app)?;
     reject_nested_registered_vault(&root, &registry, true)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
     let loaded = load_workspace(&root, &defaults)?;
     remember_workspace(&mut registry, &loaded.descriptor);
     write_registry(&app, &registry)?;
@@ -447,6 +563,7 @@ pub fn workspace_create(
     let root = root
         .canonicalize()
         .map_err(|error| format!("Could not resolve the new vault folder: {error}"))?;
+    let _workspace_guard = lock_workspace_files(&root)?;
 
     initial.name = name.trim().to_owned();
     let expected_revision = revision_for_root(&root)?;
@@ -475,6 +592,7 @@ pub fn workspace_save(
     let _guard = lock_workspace_io()?;
     let root = validate_workspace_root(&path)?;
     reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
     let mut result = save_workspace_files(&root, &vault, expected_revision)?;
 
     let registry_result = (|| {
@@ -493,6 +611,159 @@ pub fn workspace_save(
             .push(format!("The vault was saved, but Recents could not be updated: {error}"));
     }
     Ok(result)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_archive_note(
+    app: AppHandle,
+    path: String,
+    vault: VaultData,
+    note: Note,
+    original_folder_path: String,
+    editor_position: Option<NoteEditorPosition>,
+    expected_revision: u64,
+) -> Result<WorkspaceArchiveResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    let pending_archive = PendingNoteArchive {
+        note,
+        original_folder_path,
+        editor_position,
+    };
+    let (mut result, deleted_note) = save_workspace_files_with_archive(
+        &root,
+        &vault,
+        expected_revision,
+        Some(pending_archive),
+    )?;
+    let deleted_note = deleted_note
+        .ok_or_else(|| "The note was saved without a recovery snapshot.".to_owned())?;
+
+    let registry_result = (|| {
+        let mut registry = read_registry(&app)?;
+        let descriptor = VaultDescriptor {
+            name: display_vault_name(&vault.name, &root),
+            path: path_string(&root)?,
+            last_opened_at: result.saved_at,
+        };
+        remember_workspace(&mut registry, &descriptor);
+        write_registry(&app, &registry)
+    })();
+    if let Err(error) = registry_result {
+        result
+            .warnings
+            .push(format!("The vault was saved, but Recents could not be updated: {error}"));
+    }
+
+    Ok(WorkspaceArchiveResult {
+        deleted_note,
+        revision: result.revision,
+        saved_at: result.saved_at,
+        warnings: result.warnings,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_restore_recently_deleted_note(
+    app: AppHandle,
+    path: String,
+    deleted_note_id: String,
+    vault: VaultData,
+    expected_revision: u64,
+) -> Result<WorkspaceRestoreResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    let (state, deleted_note) = read_recovery_for_restore(
+        &root,
+        &deleted_note_id,
+        expected_revision,
+    )?;
+    let (restored_note, preferred_relative_path) = build_restored_note(
+        &root,
+        &vault,
+        &state,
+        &deleted_note,
+    )?;
+    let mut restored_vault = vault;
+    restored_vault.notes.push(restored_note.clone());
+    restored_vault.active_note_id = Some(restored_note.id.clone());
+    restored_vault.recent_note_ids.retain(|id| id != &restored_note.id);
+    restored_vault
+        .recent_note_ids
+        .insert(0, restored_note.id.clone());
+    restored_vault.recent_note_ids.truncate(MAX_RECENT_NOTES);
+    restored_vault.selected_folder_id = "all".to_owned();
+
+    let (mut result, prepared_restore) = save_workspace_files_with_restore(
+        &root,
+        &restored_vault,
+        expected_revision,
+        PendingNoteRestore {
+            deleted_note_id,
+            restored_note,
+            preferred_relative_path,
+        },
+    )?;
+
+    let registry_result = (|| {
+        let mut registry = read_registry(&app)?;
+        let descriptor = VaultDescriptor {
+            name: display_vault_name(&restored_vault.name, &root),
+            path: path_string(&root)?,
+            last_opened_at: result.saved_at,
+        };
+        remember_workspace(&mut registry, &descriptor);
+        write_registry(&app, &registry)
+    })();
+    if let Err(error) = registry_result {
+        result
+            .warnings
+            .push(format!("The vault was saved, but Recents could not be updated: {error}"));
+    }
+
+    Ok(WorkspaceRestoreResult {
+        restored_note: prepared_restore.restored_note,
+        editor_position: prepared_restore.editor_position,
+        revision: result.revision,
+        saved_at: result.saved_at,
+        warnings: result.warnings,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_delete_recently_deleted_notes(
+    app: AppHandle,
+    path: String,
+    deleted_note_ids: Vec<String>,
+    expected_revision: u64,
+) -> Result<WorkspaceRecoveryMutationResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    remove_recently_deleted_notes(
+        &root,
+        deleted_note_ids,
+        expected_revision,
+        false,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_prune_recently_deleted_notes(
+    app: AppHandle,
+    path: String,
+    expected_revision: u64,
+) -> Result<WorkspaceRecoveryMutationResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    remove_recently_deleted_notes(&root, Vec::new(), expected_revision, true)
 }
 
 #[tauri::command]
@@ -520,6 +791,7 @@ pub fn workspace_revision(app: AppHandle, path: String) -> Result<u64, String> {
     let _guard = lock_workspace_io()?;
     let root = validate_workspace_root(&path)?;
     reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
     revision_for_root(&root)
 }
 
@@ -533,6 +805,7 @@ pub fn workspace_save_editor_positions(
     let _guard = lock_workspace_io()?;
     let root = validate_workspace_root(&path)?;
     reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
     save_editor_positions(&root, positions, expected_revision)
 }
 
@@ -700,6 +973,31 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         },
         &root,
     );
+    let mut recently_deleted_state = state.recently_deleted_notes.clone();
+    let now = now_millis();
+    if recently_deleted_state
+        .values()
+        .any(|entry| now >= entry.expires_at)
+    {
+        let expired_ids = recently_deleted_state
+            .iter()
+            .filter_map(|(id, entry)| (now >= entry.expires_at).then(|| id.clone()))
+            .collect::<Vec<_>>();
+        for id in expired_ids {
+            let entry = recently_deleted_state
+                .get(&id)
+                .expect("expired recovery entry should still exist")
+                .clone();
+            if remove_expired_recovery_snapshot(&root, &id, &entry, &mut warnings) {
+                recently_deleted_state.remove(&id);
+            }
+        }
+    }
+    let recently_deleted_notes = load_recently_deleted_notes(
+        &root,
+        &recently_deleted_state,
+        &mut warnings,
+    );
 
     state = WorkspaceState {
         version: STATE_VERSION,
@@ -711,17 +1009,28 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         snippets: snippets.clone(),
         active_note_id: active_note_id.clone(),
         recent_note_ids: recent_note_ids.clone(),
+        recently_deleted_notes: recently_deleted_state,
         selected_folder_id: selected_folder_id.clone(),
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
     };
+    let mut state_was_written = false;
     if state_was_present || !state_file_was_present {
-        if let Err(error) = write_workspace_state(&root, &state) {
-            warnings.push(format!("Could not save workspace metadata: {error}"));
+        match write_workspace_state(&root, &state) {
+            Ok(()) => state_was_written = true,
+            Err(error) => warnings.push(format!("Could not save workspace metadata: {error}")),
         }
     } else {
         warnings.push(
             "Workspace metadata was not replaced because the existing file could not be read."
                 .to_owned(),
+        );
+    }
+    if state_was_written {
+        cleanup_orphaned_recovery_snapshots(
+            &root,
+            &state.recently_deleted_notes,
+            &HashSet::new(),
+            &mut warnings,
         );
     }
 
@@ -743,6 +1052,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             path: path_string(&root)?,
             last_opened_at: opened_at,
         },
+        recently_deleted_notes,
         editor_positions,
         editor_positions_revision,
         editor_positions_writable,
@@ -756,6 +1066,62 @@ fn save_workspace_files(
     vault: &VaultData,
     expected_revision: u64,
 ) -> Result<SaveResult, String> {
+    save_workspace_files_with_archive(root, vault, expected_revision, None)
+        .map(|(result, _)| result)
+}
+
+fn save_workspace_files_with_archive(
+    root: &Path,
+    vault: &VaultData,
+    expected_revision: u64,
+    pending_archive: Option<PendingNoteArchive>,
+) -> Result<(SaveResult, Option<RecentlyDeletedNote>), String> {
+    save_workspace_files_with_recovery(
+        root,
+        vault,
+        expected_revision,
+        pending_archive,
+        None,
+    )
+    .map(|(result, deleted_note, _)| (result, deleted_note))
+}
+
+fn save_workspace_files_with_restore(
+    root: &Path,
+    vault: &VaultData,
+    expected_revision: u64,
+    pending_restore: PendingNoteRestore,
+) -> Result<(SaveResult, PreparedNoteRestore), String> {
+    let (result, _, prepared_restore) = save_workspace_files_with_recovery(
+        root,
+        vault,
+        expected_revision,
+        None,
+        Some(pending_restore),
+    )?;
+    let prepared_restore = prepared_restore
+        .ok_or_else(|| "The note was restored without recovery metadata.".to_owned())?;
+
+    Ok((result, prepared_restore))
+}
+
+fn save_workspace_files_with_recovery(
+    root: &Path,
+    vault: &VaultData,
+    expected_revision: u64,
+    pending_archive: Option<PendingNoteArchive>,
+    pending_restore: Option<PendingNoteRestore>,
+) -> Result<
+    (
+        SaveResult,
+        Option<RecentlyDeletedNote>,
+        Option<PreparedNoteRestore>,
+    ),
+    String,
+> {
+    if pending_archive.is_some() && pending_restore.is_some() {
+        return Err("A note cannot be archived and restored in the same save.".to_owned());
+    }
     let root = validate_workspace_root_path(root)?;
     let mut warnings = WarningCollector::default();
     let state_path = workspace_state_path(&root);
@@ -783,7 +1149,33 @@ fn save_workspace_files(
     }
 
     let desired_folder_paths = build_folder_paths(&vault.folders)?;
-    let plans = build_note_write_plans(&root, vault, &old_state, &desired_folder_paths)?;
+    let prepared_restore = pending_restore
+        .map(|restore| {
+            prepare_note_restore(
+                &root,
+                vault,
+                &old_state,
+                &desired_folder_paths,
+                restore,
+            )
+        })
+        .transpose()?;
+    let preferred_new_paths = prepared_restore
+        .as_ref()
+        .map(|restore| {
+            BTreeMap::from([(
+                restore.restored_note.id.clone(),
+                restore.restored_note.relative_path.clone(),
+            )])
+        })
+        .unwrap_or_default();
+    let plans = build_note_write_plans(
+        &root,
+        vault,
+        &old_state,
+        &desired_folder_paths,
+        &preferred_new_paths,
+    )?;
     if revision_for_root(&root)? != expected_revision {
         return Err(
             "The vault changed while it was being saved. Reload it before trying again."
@@ -830,6 +1222,9 @@ fn save_workspace_files(
     }
 
     let saved_at = now_millis();
+    let prepared_archive = pending_archive
+        .map(|archive| prepare_note_archive(&root, vault, &old_state, archive, saved_at))
+        .transpose()?;
     let mut note_paths = BTreeMap::new();
     let mut note_metadata = BTreeMap::new();
     for (note, plan) in vault.notes.iter().zip(plans.iter()) {
@@ -852,6 +1247,20 @@ fn save_workspace_files(
         vault.active_note_id.as_deref(),
         &note_ids,
     );
+    let mut recently_deleted_notes = old_state.recently_deleted_notes.clone();
+    if let Some(archive) = &prepared_archive {
+        recently_deleted_notes.insert(
+            archive.deleted_note.id.clone(),
+            StoredRecentlyDeletedNote {
+                deleted_at: archive.deleted_note.deleted_at,
+                expires_at: archive.deleted_note.expires_at,
+                fingerprint: archive.fingerprint.clone(),
+            },
+        );
+    }
+    if let Some(restore) = &prepared_restore {
+        recently_deleted_notes.remove(&restore.recovery_id);
+    }
     let mut state = WorkspaceState {
         version: STATE_VERSION,
         name: display_vault_name(&vault.name, &root),
@@ -862,21 +1271,28 @@ fn save_workspace_files(
         snippets: vault.snippets.clone(),
         active_note_id: vault.active_note_id.clone(),
         recent_note_ids,
+        recently_deleted_notes,
         selected_folder_id: vault.selected_folder_id.clone(),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
     };
 
-    let needs_transaction = !paths_to_replace.is_empty()
+    let needs_transaction = prepared_archive.is_some()
+        || !paths_to_replace.is_empty()
         || plans.iter().any(|plan| plan.needs_write)
         || !folder_case_renames.is_empty()
         || !created_directories.is_empty();
     if needs_transaction {
         let transaction_id = new_transaction_id();
+        let recovery_archives = prepared_archive
+            .as_ref()
+            .map(std::slice::from_ref)
+            .unwrap_or(&[]);
         let (transaction_root, mut manifest) = prepare_transaction(
             &root,
             transaction_id,
             &paths_to_replace,
             &plans,
+            recovery_archives,
             folder_case_renames,
             created_directories,
         )?;
@@ -891,8 +1307,19 @@ fn save_workspace_files(
         manifest.phase = TransactionPhase::Applying;
         write_transaction_manifest(&transaction_root, &manifest)?;
 
-        if let Err(error) = apply_transaction(&root, &manifest, &plans) {
-            let recovered = rollback_transaction(&root, &transaction_root, &manifest, &mut warnings);
+        if let Err(error) = apply_transaction(
+            &root,
+            &transaction_root,
+            &manifest,
+            &plans,
+            &mut warnings,
+        ) {
+            let recovered = rollback_transaction(
+                &root,
+                &transaction_root,
+                &manifest,
+                &mut warnings,
+            );
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
@@ -900,7 +1327,28 @@ fn save_workspace_files(
             return Err(error);
         }
         if let Err(error) = verify_save_consistency(&root, &consistency) {
-            let recovered = rollback_transaction(&root, &transaction_root, &manifest, &mut warnings);
+            let recovered = rollback_transaction(
+                &root,
+                &transaction_root,
+                &manifest,
+                &mut warnings,
+            );
+            if recovered {
+                discard_private_transaction(&root, &transaction_root, &mut warnings);
+            }
+
+            return Err(error);
+        }
+        if let Err(error) = verify_applied_recovery_targets(
+            &root,
+            &manifest.recovery_targets,
+        ) {
+            let recovered = rollback_transaction(
+                &root,
+                &transaction_root,
+                &manifest,
+                &mut warnings,
+            );
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
@@ -908,7 +1356,12 @@ fn save_workspace_files(
             return Err(error);
         }
         if fingerprint_regular_file(&state_path)? != expected_state_fingerprint {
-            let recovered = rollback_transaction(&root, &transaction_root, &manifest, &mut warnings);
+            let recovered = rollback_transaction(
+                &root,
+                &transaction_root,
+                &manifest,
+                &mut warnings,
+            );
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
@@ -918,31 +1371,89 @@ fn save_workspace_files(
                     .to_owned(),
             );
         }
+        if let Some(restore) = &prepared_restore {
+            if let Err(error) = verify_recovery_snapshot_target(
+                &root,
+                &restore.recovery_id,
+                &restore.fingerprint,
+            ) {
+                let recovered = rollback_transaction(
+                    &root,
+                    &transaction_root,
+                    &manifest,
+                    &mut warnings,
+                );
+                if recovered {
+                    discard_private_transaction(&root, &transaction_root, &mut warnings);
+                }
+
+                return Err(error);
+            }
+        }
 
         state.last_committed_transaction_id = Some(manifest.id.clone());
         if let Err(error) = write_workspace_state(&root, &state) {
-            let recovered = rollback_transaction(&root, &transaction_root, &manifest, &mut warnings);
+            let recovered = rollback_transaction(
+                &root,
+                &transaction_root,
+                &manifest,
+                &mut warnings,
+            );
             if recovered {
                 discard_private_transaction(&root, &transaction_root, &mut warnings);
             }
 
             return Err(format!("Could not save workspace metadata: {error}"));
         }
+        finalize_committed_recovery_targets(
+            &root,
+            &transaction_root,
+            &manifest.recovery_targets,
+        )
+        .map_err(|error| {
+            format!(
+                "The vault was saved, but its recovery snapshot could not be finalized. Reopen the vault before editing again. {error}"
+            )
+        })?;
         // The state file is the commit boundary. Persist the same fact in the
         // manifest before cleanup so an undeletable old transaction can never
         // be mistaken for an uncommitted save after a later transaction.
         manifest.phase = TransactionPhase::Committed;
-        write_transaction_manifest(&transaction_root, &manifest).map_err(|error| {
-            format!(
-                "The vault was saved, but its transaction could not be finalized. Reopen the vault before editing again. {error}"
-            )
-        })?;
+        let transaction_was_finalized = match write_transaction_manifest(
+            &transaction_root,
+            &manifest,
+        ) {
+            Ok(()) => true,
+            Err(error) if prepared_restore.is_some() => {
+                warnings.push(format!(
+                    "The note was restored, but its save transaction will be cleaned up the next \
+                     time the vault opens: {error}"
+                ));
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "The vault was saved, but its transaction could not be finalized. Reopen the \
+                     vault before editing again. {error}"
+                ));
+            }
+        };
         if let Err(error) = verify_save_consistency(&root, &consistency) {
-            return Err(format!(
-                "The vault changed as the save was committed. Reload before editing again. {error}"
-            ));
+            if prepared_restore.is_some() {
+                warnings.push(format!(
+                    "The note was restored, but the vault changed as the restore was committed. \
+                     Reload before editing again. {error}"
+                ));
+            } else {
+                return Err(format!(
+                    "The vault changed as the save was committed. Reload before editing again. \
+                     {error}"
+                ));
+            }
         }
-        discard_private_transaction(&root, &transaction_root, &mut warnings);
+        if transaction_was_finalized {
+            discard_private_transaction(&root, &transaction_root, &mut warnings);
+        }
     } else {
         verify_save_consistency(&root, &consistency)?;
         if fingerprint_regular_file(&state_path)? != expected_state_fingerprint {
@@ -951,23 +1462,476 @@ fn save_workspace_files(
                     .to_owned(),
             );
         }
+        if let Some(restore) = &prepared_restore {
+            verify_recovery_snapshot_target(
+                &root,
+                &restore.recovery_id,
+                &restore.fingerprint,
+            )?;
+        }
         write_workspace_state(&root, &state)?;
     }
 
+    if let Some(restore) = &prepared_restore {
+        remove_recovery_snapshot_if_matches(
+            &root,
+            &restore.recovery_id,
+            &restore.fingerprint,
+            &mut warnings,
+        );
+    }
+
     remove_empty_managed_directories(&root, &old_state.folder_paths, &state.folder_paths, &mut warnings);
-    verify_save_consistency(&root, &consistency)?;
-    let revision = revision_for_root(&root)?;
-    verify_save_consistency(&root, &consistency)?;
-    if revision_for_root(&root)? != revision {
+    let revision = if prepared_restore.is_some() {
+        if let Err(error) = verify_save_consistency(&root, &consistency) {
+            warnings.push(format!(
+                "The note was restored, but the vault changed immediately afterward. Reload \
+                 before editing again. {error}"
+            ));
+        }
+        let revision = match revision_for_root(&root) {
+            Ok(revision) => revision,
+            Err(error) => {
+                warnings.push(format!(
+                    "The note was restored, but the new vault revision could not be read. Reload \
+                     before editing again. {error}"
+                ));
+                expected_revision
+            }
+        };
+        if let Err(error) = verify_save_consistency(&root, &consistency) {
+            warnings.push(format!(
+                "The note was restored, but the vault no longer matches the committed restore. \
+                 Reload before editing again. {error}"
+            ));
+        }
+        match revision_for_root(&root) {
+            Ok(current_revision) if current_revision != revision => warnings.push(
+                "The note was restored, but the vault changed immediately afterward. Reload \
+                 before editing again."
+                    .to_owned(),
+            ),
+            Ok(_) => {}
+            Err(error) => warnings.push(format!(
+                "The note was restored, but its revision could not be confirmed. Reload before \
+                 editing again. {error}"
+            )),
+        }
+        revision
+    } else {
+        verify_save_consistency(&root, &consistency)?;
+        let revision = revision_for_root(&root)?;
+        verify_save_consistency(&root, &consistency)?;
+        if revision_for_root(&root)? != revision {
+            return Err(
+                "The vault changed immediately after saving. Reload it before editing again."
+                    .to_owned(),
+            );
+        }
+        revision
+    };
+    let deleted_note = prepared_archive.map(|archive| archive.deleted_note);
+    Ok((
+        SaveResult {
+            revision,
+            saved_at,
+            warnings: warnings.finish(),
+        },
+        deleted_note,
+        prepared_restore,
+    ))
+}
+
+fn prepare_note_archive(
+    root: &Path,
+    vault: &VaultData,
+    old_state: &WorkspaceState,
+    mut pending: PendingNoteArchive,
+    deleted_at: u64,
+) -> Result<PreparedNoteArchive, String> {
+    if pending.note.id.trim().is_empty() {
+        return Err("The deleted note has an invalid ID.".to_owned());
+    }
+    if pending.note.content.len() as u64 > MAX_NOTE_BYTES {
+        return Err(format!(
+            "The note {:?} is larger than {} MiB and cannot be archived.",
+            pending.note.title,
+            MAX_NOTE_BYTES / 1024 / 1024,
+        ));
+    }
+    if pending
+        .editor_position
+        .as_ref()
+        .is_some_and(|position| !is_valid_editor_position(position))
+    {
+        return Err("The deleted note has an invalid editor position.".to_owned());
+    }
+    if vault.notes.iter().any(|note| note.id == pending.note.id) {
+        return Err("Remove the note from the live vault before archiving it.".to_owned());
+    }
+
+    let removed_note_ids = old_state
+        .note_paths
+        .keys()
+        .filter(|id| !vault.notes.iter().any(|note| note.id == id.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if removed_note_ids != [pending.note.id.as_str()] {
         return Err(
-            "The vault changed immediately after saving. Reload it before editing again."
+            "Exactly one saved note must be removed when creating a recovery snapshot."
                 .to_owned(),
         );
     }
-    Ok(SaveResult {
-        revision,
-        saved_at,
-        warnings: warnings.finish(),
+
+    let original_relative_path = old_state
+        .note_paths
+        .get(&pending.note.id)
+        .ok_or_else(|| "The note must be saved before it can be archived.".to_owned())?;
+    validate_markdown_relative_path(original_relative_path)?;
+    let original_path = resolve_workspace_file(root, original_relative_path, false)?;
+    let stored_content = fs::read_to_string(&original_path)
+        .map_err(|error| format!("Could not read the note before archiving it: {error}"))?;
+    let requested_content = content_with_requested_tags(&pending.note, Some(&stored_content))?;
+    if requested_content.as_bytes() != stored_content.as_bytes() {
+        return Err(
+            "The note changed before it could be archived. Save it and try again.".to_owned(),
+        );
+    }
+    pending.note.content = stored_content;
+    let stored_folder_path = Path::new(original_relative_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    if pending.original_folder_path != stored_folder_path {
+        return Err(
+            "The note's original folder changed before it could be archived. Reload the vault and try again."
+                .to_owned(),
+        );
+    }
+    if !pending.original_folder_path.is_empty() {
+        validate_relative_path(&pending.original_folder_path, false)?;
+    }
+    pending.note.relative_path = original_relative_path.clone();
+
+    validate_recently_deleted_capacity(&old_state.recently_deleted_notes, 0)?;
+    let id = new_recently_deleted_id(root, &old_state.recently_deleted_notes)?;
+    let expires_at = deleted_at.saturating_add(RECENTLY_DELETED_RETENTION_MILLIS);
+    let deleted_note = RecentlyDeletedNote {
+        id,
+        note: pending.note,
+        original_folder_path: pending.original_folder_path,
+        deleted_at,
+        expires_at,
+        editor_position: pending.editor_position,
+    };
+    let snapshot = RecentlyDeletedSnapshot {
+        version: RECENTLY_DELETED_SNAPSHOT_VERSION,
+        deleted_note: deleted_note.clone(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|error| format!("Could not encode the recovery snapshot: {error}"))?;
+    bytes.push(b'\n');
+    if bytes.len() as u64 > MAX_RECENTLY_DELETED_SNAPSHOT_BYTES {
+        return Err("The recovery snapshot is unexpectedly large.".to_owned());
+    }
+    validate_recently_deleted_capacity(
+        &old_state.recently_deleted_notes,
+        bytes.len() as u64,
+    )?;
+    let fingerprint = fingerprint_bytes(&bytes);
+
+    Ok(PreparedNoteArchive {
+        deleted_note,
+        bytes,
+        fingerprint,
+    })
+}
+
+fn validate_recently_deleted_capacity(
+    stored: &BTreeMap<String, StoredRecentlyDeletedNote>,
+    additional_bytes: u64,
+) -> Result<(), String> {
+    if stored.len() >= MAX_RECENTLY_DELETED_NOTES && additional_bytes > 0 {
+        return Err(format!(
+            "Recently Deleted can contain at most {MAX_RECENTLY_DELETED_NOTES} notes."
+        ));
+    }
+
+    let mut total_bytes = additional_bytes;
+    for (id, entry) in stored {
+        validate_recently_deleted_id(id)?;
+        if entry.fingerprint.length > MAX_RECENTLY_DELETED_SNAPSHOT_BYTES {
+            return Err("A stored recovery snapshot is unexpectedly large.".to_owned());
+        }
+        total_bytes = total_bytes
+            .checked_add(entry.fingerprint.length)
+            .ok_or_else(|| "Recently Deleted is too large to measure safely.".to_owned())?;
+    }
+    if total_bytes > MAX_RECENTLY_DELETED_BYTES {
+        return Err(format!(
+            "Recently Deleted cannot contain more than {} MiB of note snapshots.",
+            MAX_RECENTLY_DELETED_BYTES / 1024 / 1024,
+        ));
+    }
+
+    Ok(())
+}
+
+fn new_recently_deleted_id(
+    root: &Path,
+    stored: &BTreeMap<String, StoredRecentlyDeletedNote>,
+) -> Result<String, String> {
+    for _ in 0..100 {
+        let id = format!("deleted-{}", new_transaction_id());
+        if stored.contains_key(&id) {
+            continue;
+        }
+        let path = recently_deleted_snapshot_path(root, &id)?;
+        match fs::symlink_metadata(path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(id),
+            Err(error) => {
+                return Err(format!("Could not inspect the recovery snapshot folder: {error}"));
+            }
+        }
+    }
+
+    Err("Could not allocate a unique recovery snapshot ID.".to_owned())
+}
+
+fn validate_recently_deleted_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > 180
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("A recovery snapshot has an invalid ID.".to_owned());
+    }
+
+    Ok(())
+}
+
+fn read_recovery_for_restore(
+    root: &Path,
+    deleted_note_id: &str,
+    expected_revision: u64,
+) -> Result<(WorkspaceState, RecentlyDeletedNote), String> {
+    validate_recently_deleted_id(deleted_note_id)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before restoring the note."
+                .to_owned(),
+        );
+    }
+
+    let state_path = workspace_state_path(root);
+    let expected_state_fingerprint = fingerprint_regular_file(&state_path)?;
+    let mut warnings = WarningCollector::default();
+    let (state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    let state = state.ok_or_else(|| {
+        if state_file_was_present {
+            "Workspace metadata is unreadable or newer than this app.".to_owned()
+        } else {
+            "Workspace metadata is missing. Reopen the vault before restoring the note."
+                .to_owned()
+        }
+    })?;
+    recover_workspace_transactions(root, Some(&state), &mut warnings)?;
+    if fingerprint_regular_file(&state_path)? != expected_state_fingerprint
+        || revision_for_root(root)? != expected_revision
+    {
+        return Err(
+            "The vault changed while the deleted note was being read. Reload it and try again."
+                .to_owned(),
+        );
+    }
+
+    inspect_recently_deleted_directory(root)?;
+    let stored = state
+        .recently_deleted_notes
+        .get(deleted_note_id)
+        .ok_or_else(|| "That deleted note is no longer available.".to_owned())?;
+    if stored.expires_at <= now_millis() {
+        return Err("That deleted note has expired and can no longer be restored.".to_owned());
+    }
+    let deleted_note = read_indexed_recently_deleted_note(root, deleted_note_id, stored)?;
+    if fingerprint_regular_file(&state_path)? != expected_state_fingerprint
+        || revision_for_root(root)? != expected_revision
+    {
+        return Err(
+            "The vault changed while the deleted note was being read. Reload it and try again."
+                .to_owned(),
+        );
+    }
+
+    Ok((state, deleted_note))
+}
+
+fn build_restored_note(
+    root: &Path,
+    vault: &VaultData,
+    state: &WorkspaceState,
+    deleted_note: &RecentlyDeletedNote,
+) -> Result<(Note, String), String> {
+    let folder_paths = build_folder_paths(&vault.folders)?;
+    let existing_plans = build_note_write_plans(
+        root,
+        vault,
+        state,
+        &folder_paths,
+        &BTreeMap::new(),
+    )?;
+    let original_folder_id = folder_paths
+        .iter()
+        .find_map(|(id, path)| (path == &deleted_note.original_folder_path).then(|| id.clone()));
+    let target_folder_path = original_folder_id
+        .as_ref()
+        .and_then(|id| folder_paths.get(id))
+        .map(String::as_str)
+        .unwrap_or("");
+
+    let original_path = Path::new(&deleted_note.note.relative_path);
+    let original_stem = original_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Untitled note");
+    let extension = original_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| value.eq_ignore_ascii_case("md") || value.eq_ignore_ascii_case("markdown"))
+        .unwrap_or("md");
+
+    let mut occupied_paths = existing_plans
+        .iter()
+        .map(|plan| portable_path_key(&plan.new_relative_path))
+        .collect::<HashSet<_>>();
+    occupied_paths.extend(folder_paths.values().map(|path| portable_path_key(path)));
+    occupied_paths.extend(note_file_stamps(root)?.into_keys());
+
+    let mut preferred_relative_path = None;
+    let mut restored_title = String::new();
+    for suffix in 1..=MAX_NOTES {
+        let title = if suffix == 1 {
+            original_stem.to_owned()
+        } else {
+            format!("{original_stem} {suffix}")
+        };
+        let file_name = format!("{title}.{extension}");
+        let candidate = if target_folder_path.is_empty() {
+            file_name
+        } else {
+            format!("{target_folder_path}/{file_name}")
+        };
+        validate_markdown_relative_path(&candidate)?;
+        if occupied_paths.contains(&portable_path_key(&candidate)) {
+            continue;
+        }
+        let path = resolve_workspace_file(root, &candidate, true)?;
+        match fs::symlink_metadata(path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                restored_title = title;
+                preferred_relative_path = Some(candidate);
+                break;
+            }
+            Err(error) => {
+                return Err(format!("Could not inspect the restore destination: {error}"));
+            }
+        }
+    }
+    let preferred_relative_path = preferred_relative_path
+        .ok_or_else(|| "Could not find a safe file name for the restored note.".to_owned())?;
+
+    let mut used_ids = vault
+        .notes
+        .iter()
+        .map(|note| note.id.clone())
+        .collect::<HashSet<_>>();
+    let restored_id = if used_ids.insert(deleted_note.note.id.clone()) {
+        deleted_note.note.id.clone()
+    } else {
+        fresh_id("note", &preferred_relative_path, &mut used_ids)
+    };
+    let mut restored_note = deleted_note.note.clone();
+    restored_note.id = restored_id;
+    restored_note.title = restored_title;
+    restored_note.folder_id = original_folder_id;
+    restored_note.relative_path = preferred_relative_path.clone();
+
+    Ok((restored_note, preferred_relative_path))
+}
+
+fn prepare_note_restore(
+    root: &Path,
+    vault: &VaultData,
+    old_state: &WorkspaceState,
+    folder_paths: &BTreeMap<String, String>,
+    pending: PendingNoteRestore,
+) -> Result<PreparedNoteRestore, String> {
+    validate_recently_deleted_id(&pending.deleted_note_id)?;
+    inspect_recently_deleted_directory(root)?;
+    let stored = old_state
+        .recently_deleted_notes
+        .get(&pending.deleted_note_id)
+        .ok_or_else(|| "That deleted note is no longer available.".to_owned())?;
+    let deleted_note = read_indexed_recently_deleted_note(
+        root,
+        &pending.deleted_note_id,
+        stored,
+    )?;
+
+    let restored = &pending.restored_note;
+    if restored.content != deleted_note.note.content
+        || restored.tags != deleted_note.note.tags
+        || restored.pinned != deleted_note.note.pinned
+        || restored.created_at != deleted_note.note.created_at
+        || restored.updated_at != deleted_note.note.updated_at
+    {
+        return Err("The restored note changed before it could be saved.".to_owned());
+    }
+    if restored.relative_path != pending.preferred_relative_path {
+        return Err("The restored note path changed before it could be saved.".to_owned());
+    }
+    let restored_folder_path = match restored.folder_id.as_deref() {
+        Some(folder_id) => folder_paths
+            .get(folder_id)
+            .ok_or_else(|| "The restored note folder no longer exists.".to_owned())?
+            .as_str(),
+        None => "",
+    };
+    let path_folder = Path::new(&restored.relative_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    if path_folder != restored_folder_path {
+        return Err("The restored note path does not match its folder.".to_owned());
+    }
+
+    let old_ids = old_state.note_paths.keys().map(String::as_str).collect::<HashSet<_>>();
+    if old_ids
+        .iter()
+        .any(|id| !vault.notes.iter().any(|note| note.id == **id))
+    {
+        return Err("Restore the note without removing another live note.".to_owned());
+    }
+    let new_notes = vault
+        .notes
+        .iter()
+        .filter(|note| !old_ids.contains(note.id.as_str()))
+        .collect::<Vec<_>>();
+    if new_notes.len() != 1 || new_notes[0] != restored {
+        return Err("Exactly one recovery snapshot must be restored at a time.".to_owned());
+    }
+
+    Ok(PreparedNoteRestore {
+        restored_note: restored.clone(),
+        editor_position: deleted_note.editor_position,
+        recovery_id: pending.deleted_note_id,
+        fingerprint: stored.fingerprint.clone(),
     })
 }
 
@@ -976,6 +1940,7 @@ fn build_note_write_plans(
     vault: &VaultData,
     old_state: &WorkspaceState,
     folder_paths: &BTreeMap<String, String>,
+    preferred_new_paths: &BTreeMap<String, String>,
 ) -> Result<Vec<NoteWritePlan>, String> {
     if vault.notes.len() > MAX_NOTES {
         return Err(format!("A vault can contain at most {MAX_NOTES} Markdown notes."));
@@ -1024,7 +1989,30 @@ fn build_note_write_plans(
             let old_title = path.file_stem().and_then(|value| value.to_str()).unwrap_or("");
             old_folder == folder_path && old_title == note.title
         });
-        let new_relative_path = if preserve_old_name {
+        let preferred_new_path = old_relative_path
+            .is_none()
+            .then(|| preferred_new_paths.get(&note.id))
+            .flatten();
+        let preserved_modified_at = preferred_new_path.map(|_| note.updated_at);
+        let new_relative_path = if let Some(preferred_path) = preferred_new_path {
+            validate_markdown_relative_path(preferred_path)?;
+            let preferred = Path::new(preferred_path);
+            let preferred_folder = preferred
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .and_then(path_to_slash_string)
+                .unwrap_or_default();
+            let preferred_title = preferred
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if preferred_folder != folder_path || preferred_title != note.title {
+                return Err(
+                    "The restored note path does not match its title and folder.".to_owned(),
+                );
+            }
+            preferred_path.clone()
+        } else if preserve_old_name {
             old_relative_path.clone().expect("preserved path should exist")
         } else if folder_path.is_empty() {
             format!("{stem}.{extension}")
@@ -1078,6 +2066,7 @@ fn build_note_write_plans(
             new_relative_path,
             content,
             needs_write,
+            preserved_modified_at,
         });
     }
     Ok(plans)
@@ -1234,6 +2223,569 @@ fn scan_markdown_files(
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     folders.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok((notes, folders))
+}
+
+fn load_recently_deleted_notes(
+    root: &Path,
+    stored: &BTreeMap<String, StoredRecentlyDeletedNote>,
+    warnings: &mut WarningCollector,
+) -> Vec<RecentlyDeletedNote> {
+    if stored.is_empty() {
+        return Vec::new();
+    }
+    if let Err(error) = inspect_recently_deleted_directory(root) {
+        warnings.push(error);
+
+        return Vec::new();
+    }
+
+    let mut entries = stored.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left_id, left), (right_id, right)| {
+        right
+            .deleted_at
+            .cmp(&left.deleted_at)
+            .then_with(|| right_id.cmp(left_id))
+    });
+    if entries.len() > MAX_RECENTLY_DELETED_NOTES {
+        warnings.push(format!(
+            "Only the newest {MAX_RECENTLY_DELETED_NOTES} recovery snapshots were loaded."
+        ));
+        entries.truncate(MAX_RECENTLY_DELETED_NOTES);
+    }
+
+    let mut deleted_notes = Vec::with_capacity(entries.len());
+    let mut total_bytes = 0_u64;
+    for (id, entry) in entries {
+        if validate_recently_deleted_id(id).is_err() {
+            warnings.push("Ignored a recovery snapshot with an invalid ID.".to_owned());
+            continue;
+        }
+        if entry.expires_at
+            != entry
+                .deleted_at
+                .saturating_add(RECENTLY_DELETED_RETENTION_MILLIS)
+        {
+            warnings.push(format!(
+                "Ignored recovery snapshot {id} because its retention period is invalid."
+            ));
+            continue;
+        }
+        if entry.fingerprint.length > MAX_RECENTLY_DELETED_SNAPSHOT_BYTES {
+            warnings.push(format!(
+                "Ignored recovery snapshot {id} because it is unexpectedly large."
+            ));
+            continue;
+        }
+        let Some(next_total) = total_bytes.checked_add(entry.fingerprint.length) else {
+            warnings.push(
+                "Stopped loading recovery snapshots because their size overflowed.".to_owned(),
+            );
+            break;
+        };
+        if next_total > MAX_RECENTLY_DELETED_BYTES {
+            warnings.push(format!(
+                "Stopped after reading {} MiB of recovery snapshots.",
+                MAX_RECENTLY_DELETED_BYTES / 1024 / 1024,
+            ));
+            break;
+        }
+        total_bytes = next_total;
+
+        match read_indexed_recently_deleted_note(root, id, entry) {
+            Ok(deleted_note) => deleted_notes.push(deleted_note),
+            Err(error) => warnings.push(error),
+        }
+    }
+
+    deleted_notes
+}
+
+fn read_indexed_recently_deleted_note(
+    root: &Path,
+    id: &str,
+    entry: &StoredRecentlyDeletedNote,
+) -> Result<RecentlyDeletedNote, String> {
+    validate_recently_deleted_id(id)?;
+    if entry.expires_at
+        != entry
+            .deleted_at
+            .saturating_add(RECENTLY_DELETED_RETENTION_MILLIS)
+    {
+        return Err(format!(
+            "Recovery snapshot {id} has an invalid retention period."
+        ));
+    }
+    if entry.fingerprint.length > MAX_RECENTLY_DELETED_SNAPSHOT_BYTES {
+        return Err(format!("Recovery snapshot {id} is unexpectedly large."));
+    }
+
+    let path = recently_deleted_snapshot_path(root, id)?;
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            format!("Recovery snapshot {id} is missing.")
+        } else {
+            format!("Could not inspect recovery snapshot {id}: {error}")
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "Recovery snapshot {id} is not a regular file."
+        ));
+    }
+    if metadata.len() != entry.fingerprint.length {
+        return Err(format!("Recovery snapshot {id} does not match its metadata."));
+    }
+
+    let file = File::open(&path)
+        .map_err(|error| format!("Could not open recovery snapshot {id}: {error}"))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect recovery snapshot {id}: {error}"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != entry.fingerprint.length {
+        return Err(format!(
+            "Recovery snapshot {id} changed while it was being opened."
+        ));
+    }
+    let read_limit = entry
+        .fingerprint
+        .length
+        .checked_add(1)
+        .ok_or_else(|| format!("Recovery snapshot {id} is too large to read safely."))?;
+    let mut bytes = Vec::with_capacity(entry.fingerprint.length as usize);
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not read recovery snapshot {id}: {error}"))?;
+    if bytes.len() as u64 != entry.fingerprint.length
+        || fingerprint_bytes(&bytes) != entry.fingerprint
+    {
+        return Err(format!("Recovery snapshot {id} failed its integrity check."));
+    }
+
+    let snapshot = serde_json::from_slice::<RecentlyDeletedSnapshot>(&bytes)
+        .map_err(|error| format!("Could not parse recovery snapshot {id}: {error}"))?;
+    if snapshot.version == 0 || snapshot.version > RECENTLY_DELETED_SNAPSHOT_VERSION {
+        return Err(format!(
+            "Recovery snapshot {id} uses unsupported version {}.",
+            snapshot.version,
+        ));
+    }
+    validate_loaded_recently_deleted_note(id, entry, &snapshot.deleted_note)?;
+
+    Ok(snapshot.deleted_note)
+}
+
+fn verify_recovery_snapshot_target(
+    root: &Path,
+    id: &str,
+    fingerprint: &FileFingerprint,
+) -> Result<(), String> {
+    let path = recently_deleted_snapshot_path(root, id)?;
+    if fingerprint_regular_file(&path)? != Some(fingerprint.clone()) {
+        return Err(format!(
+            "Recovery snapshot {id} changed while the operation was being prepared."
+        ));
+    }
+
+    Ok(())
+}
+
+fn remove_recovery_snapshot_if_matches(
+    root: &Path,
+    id: &str,
+    fingerprint: &FileFingerprint,
+    warnings: &mut WarningCollector,
+) -> bool {
+    match delete_recovery_snapshot_if_matches(root, id, fingerprint) {
+        Ok(RecoverySnapshotRemoval::Removed | RecoverySnapshotRemoval::AlreadyMissing) => true,
+        Ok(RecoverySnapshotRemoval::RemovedWithoutDurability(error)) => {
+            warnings.push(format!(
+                "Recovery snapshot {id} was removed, but its deletion could not be made fully \
+                 durable: {error}"
+            ));
+            true
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "The recovery entry was removed, but snapshot {id} could not be cleaned up: \
+                 {error}"
+            ));
+            false
+        }
+    }
+}
+
+fn delete_recovery_snapshot_if_matches(
+    root: &Path,
+    id: &str,
+    fingerprint: &FileFingerprint,
+) -> Result<RecoverySnapshotRemoval, String> {
+    let directory = root
+        .join(STATE_DIRECTORY)
+        .join(RECENTLY_DELETED_DIRECTORY);
+    match inspect_recently_deleted_directory(root) {
+        Ok(_) => {}
+        Err(_) if fs::symlink_metadata(&directory).is_err_and(|error| {
+            error.kind() == io::ErrorKind::NotFound
+        }) => return Ok(RecoverySnapshotRemoval::AlreadyMissing),
+        Err(error) => return Err(error),
+    }
+    let path = recently_deleted_snapshot_path(root, id)?;
+    match fingerprint_regular_file(&path)? {
+        Some(current) if current == *fingerprint => match remove_file_durable(&path) {
+            Ok(()) => Ok(RecoverySnapshotRemoval::Removed),
+            Err(error) => classify_recovery_snapshot_removal_error(&path, id, error),
+        },
+        Some(_) => Err(format!(
+            "Recovery snapshot {id} changed during cleanup and was left untouched."
+        )),
+        None => Ok(RecoverySnapshotRemoval::AlreadyMissing),
+    }
+}
+
+fn classify_recovery_snapshot_removal_error(
+    path: &Path,
+    id: &str,
+    removal_error: io::Error,
+) -> Result<RecoverySnapshotRemoval, String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(
+            RecoverySnapshotRemoval::RemovedWithoutDurability(removal_error.to_string()),
+        ),
+        Ok(_) => Err(format!(
+            "Could not remove recovery snapshot {id}: {removal_error}"
+        )),
+        Err(error) => Err(format!(
+            "Could not remove recovery snapshot {id}: {removal_error}. Its path could not be \
+             checked afterward: {error}"
+        )),
+    }
+}
+
+fn remove_expired_recovery_snapshot(
+    root: &Path,
+    id: &str,
+    entry: &StoredRecentlyDeletedNote,
+    warnings: &mut WarningCollector,
+) -> bool {
+    let directory = root
+        .join(STATE_DIRECTORY)
+        .join(RECENTLY_DELETED_DIRECTORY);
+    match inspect_recently_deleted_directory(root) {
+        Ok(_) => {}
+        Err(_) if fs::symlink_metadata(&directory).is_err_and(|error| {
+            error.kind() == io::ErrorKind::NotFound
+        }) => {
+            warnings.push(format!(
+                "Finished removing expired recovery entry {id} after its snapshot was already \
+                 cleaned up."
+            ));
+
+            return true;
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "Expired recovery entry {id} remains recoverable because cleanup could not start: \
+                 {error}"
+            ));
+
+            return false;
+        }
+    }
+
+    match read_indexed_recently_deleted_note(root, id, entry) {
+        Ok(_) => {}
+        Err(error) => {
+            let path = match recently_deleted_snapshot_path(root, id) {
+                Ok(path) => path,
+                Err(path_error) => {
+                    warnings.push(path_error);
+
+                    return false;
+                }
+            };
+            if fs::symlink_metadata(path).is_err_and(|metadata_error| {
+                metadata_error.kind() == io::ErrorKind::NotFound
+            }) {
+                warnings.push(format!(
+                    "Finished removing expired recovery entry {id} after its snapshot was already \
+                     cleaned up."
+                ));
+
+                return true;
+            }
+            warnings.push(format!(
+                "Expired recovery entry {id} was retained because it could not be verified: \
+                 {error}"
+            ));
+
+            return false;
+        }
+    }
+
+    match delete_recovery_snapshot_if_matches(root, id, &entry.fingerprint) {
+        Ok(RecoverySnapshotRemoval::Removed | RecoverySnapshotRemoval::AlreadyMissing) => true,
+        Ok(RecoverySnapshotRemoval::RemovedWithoutDurability(error)) => {
+            warnings.push(format!(
+                "Expired recovery snapshot {id} was removed, but its deletion could not be made \
+                 fully durable: {error}"
+            ));
+            true
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "Expired recovery entry {id} remains recoverable because its snapshot could not \
+                 be removed: {error}"
+            ));
+            false
+        }
+    }
+}
+
+fn remove_recently_deleted_notes(
+    root: &Path,
+    requested_ids: Vec<String>,
+    expected_revision: u64,
+    expired_only: bool,
+) -> Result<WorkspaceRecoveryMutationResult, String> {
+    if !expired_only && requested_ids.is_empty() {
+        return Err("Choose at least one deleted note to remove.".to_owned());
+    }
+    if requested_ids.len() > MAX_RECENTLY_DELETED_NOTES {
+        return Err("Too many recovery entries were requested at once.".to_owned());
+    }
+    let mut requested = HashSet::new();
+    for id in &requested_ids {
+        validate_recently_deleted_id(id)?;
+        if !requested.insert(id.clone()) {
+            return Err("A recovery entry was requested more than once.".to_owned());
+        }
+    }
+
+    let mut warnings = WarningCollector::default();
+    let state_path = workspace_state_path(root);
+    let expected_state_fingerprint = fingerprint_regular_file(&state_path)?;
+    let (state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    let mut state = state.ok_or_else(|| {
+        if state_file_was_present {
+            "Workspace metadata is unreadable or newer than this app.".to_owned()
+        } else {
+            "Workspace metadata is missing. Reopen the vault and try again.".to_owned()
+        }
+    })?;
+    recover_workspace_transactions(root, Some(&state), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision
+        || fingerprint_regular_file(&state_path)? != expected_state_fingerprint
+    {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before changing Recently Deleted."
+                .to_owned(),
+        );
+    }
+
+    if !expired_only && !state.recently_deleted_notes.is_empty() {
+        inspect_recently_deleted_directory(root)?;
+    }
+    let now = now_millis();
+    let candidate_ids = if expired_only {
+        state
+            .recently_deleted_notes
+            .iter()
+            .filter_map(|(id, entry)| (now >= entry.expires_at).then(|| id.clone()))
+            .collect::<Vec<_>>()
+    } else {
+        requested_ids
+    };
+    let mut removals = Vec::new();
+    for id in candidate_ids {
+        let Some(entry) = state.recently_deleted_notes.get(&id) else {
+            if expired_only {
+                continue;
+            }
+
+            return Err(format!("Recovery entry {id} is no longer available."));
+        };
+        if expired_only {
+            removals.push((id, entry.clone()));
+        } else {
+            match read_indexed_recently_deleted_note(root, &id, entry) {
+                Ok(_) => removals.push((id, entry.clone())),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    if fingerprint_regular_file(&state_path)? != expected_state_fingerprint
+        || revision_for_root(root)? != expected_revision
+    {
+        return Err(
+            "The vault changed while Recently Deleted was being updated. Reload it and try again."
+                .to_owned(),
+        );
+    }
+    if expired_only {
+        removals.retain(|(id, entry)| {
+            remove_expired_recovery_snapshot(root, id, entry, &mut warnings)
+        });
+    } else {
+        for (id, entry) in &removals {
+            verify_recovery_snapshot_target(root, id, &entry.fingerprint)?;
+        }
+    }
+
+    let saved_at = now_millis();
+    let removed_ids = removals
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    if !removed_ids.is_empty() {
+        state.version = STATE_VERSION;
+        for id in &removed_ids {
+            state.recently_deleted_notes.remove(id);
+        }
+        write_workspace_state(root, &state)?;
+    }
+    let mut protected_ids = HashSet::new();
+    if !expired_only && !removed_ids.is_empty() {
+        for (id, entry) in &removals {
+            if !remove_recovery_snapshot_if_matches(
+                root,
+                id,
+                &entry.fingerprint,
+                &mut warnings,
+            ) {
+                protected_ids.insert(id.clone());
+            }
+        }
+    }
+
+    cleanup_orphaned_recovery_snapshots(
+        root,
+        &state.recently_deleted_notes,
+        &protected_ids,
+        &mut warnings,
+    );
+    let revision = revision_for_root(root)?;
+
+    Ok(WorkspaceRecoveryMutationResult {
+        removed_ids,
+        revision,
+        saved_at,
+        warnings: warnings.finish(),
+    })
+}
+
+fn cleanup_orphaned_recovery_snapshots(
+    root: &Path,
+    indexed: &BTreeMap<String, StoredRecentlyDeletedNote>,
+    protected_ids: &HashSet<String>,
+    warnings: &mut WarningCollector,
+) {
+    let directory = match inspect_recently_deleted_directory(root) {
+        Ok(directory) => directory,
+        Err(error) => {
+            if fs::symlink_metadata(
+                root.join(STATE_DIRECTORY)
+                    .join(RECENTLY_DELETED_DIRECTORY),
+            )
+            .is_ok()
+            {
+                warnings.push(error);
+            }
+
+            return;
+        }
+    };
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warnings.push(format!("Could not inspect Recently Deleted cleanup: {error}"));
+
+            return;
+        }
+    };
+    for entry in entries.take(MAX_RECENTLY_DELETED_NOTES.saturating_mul(2)) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!("Could not inspect a recovery snapshot: {error}"));
+                continue;
+            }
+        };
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        let Some(id) = file_name.strip_suffix(".snapshot") else {
+            continue;
+        };
+        if validate_recently_deleted_id(id).is_err()
+            || indexed.contains_key(id)
+            || protected_ids.contains(id)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not inspect orphaned recovery snapshot {id}: {error}"
+                ));
+                continue;
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            warnings.push(format!(
+                "Orphaned recovery snapshot {id} was left untouched because it is not a regular \
+                 file."
+            ));
+            continue;
+        }
+        if let Err(error) = remove_file_durable(&path) {
+            warnings.push(format!(
+                "Could not clean orphaned recovery snapshot {id}: {error}"
+            ));
+        }
+    }
+}
+
+fn validate_loaded_recently_deleted_note(
+    id: &str,
+    stored: &StoredRecentlyDeletedNote,
+    deleted_note: &RecentlyDeletedNote,
+) -> Result<(), String> {
+    if deleted_note.id != id
+        || deleted_note.deleted_at != stored.deleted_at
+        || deleted_note.expires_at != stored.expires_at
+        || deleted_note.note.id.trim().is_empty()
+        || deleted_note.note.content.len() as u64 > MAX_NOTE_BYTES
+    {
+        return Err(format!("Recovery snapshot {id} contains invalid note metadata."));
+    }
+    validate_markdown_relative_path(&deleted_note.note.relative_path).map_err(|_| {
+        format!("Recovery snapshot {id} contains an unsafe original note path.")
+    })?;
+    let expected_folder_path = Path::new(&deleted_note.note.relative_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    if deleted_note.original_folder_path != expected_folder_path {
+        return Err(format!(
+            "Recovery snapshot {id} does not match its original folder."
+        ));
+    }
+    if deleted_note
+        .editor_position
+        .as_ref()
+        .is_some_and(|position| !is_valid_editor_position(position))
+    {
+        return Err(format!(
+            "Recovery snapshot {id} contains an invalid editor position."
+        ));
+    }
+
+    Ok(())
 }
 
 fn read_workspace_state(
@@ -1594,6 +3146,35 @@ fn write_editor_positions(
     }
     atomic_write(&editor_positions_path(root), &bytes)
         .map_err(|error| format!("Could not write editor positions: {error}"))
+}
+
+fn lock_workspace_files(root: &Path) -> Result<File, String> {
+    let file = open_workspace_lock_file(root)?;
+    file.lock()
+        .map_err(|error| format!("Could not lock the vault: {error}"))?;
+
+    Ok(file)
+}
+
+fn open_workspace_lock_file(root: &Path) -> Result<File, String> {
+    let directory = root.join(STATE_DIRECTORY);
+    ensure_state_directory(root, &directory)?;
+    let path = directory.join(WORKSPACE_LOCK_FILE);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err("The workspace lock is not a regular file.".to_owned());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Could not inspect the workspace lock: {error}")),
+    }
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .map_err(|error| format!("Could not open the workspace lock: {error}"))
 }
 
 fn lock_editor_positions(root: &Path) -> Result<File, String> {
@@ -2365,6 +3946,7 @@ fn prepare_transaction(
     id: String,
     paths_to_replace: &BTreeSet<String>,
     plans: &[NoteWritePlan],
+    recovery_archives: &[PreparedNoteArchive],
     folder_case_renames: Vec<FolderCaseRename>,
     created_directories: Vec<String>,
 ) -> Result<(PathBuf, TransactionManifest), String> {
@@ -2408,12 +3990,50 @@ fn prepare_transaction(
             fingerprint: fingerprint_bytes(plan.content.as_bytes()),
         })
         .collect();
+    let mut recovery_targets = Vec::with_capacity(recovery_archives.len());
+    for archive in recovery_archives {
+        validate_recently_deleted_id(&archive.deleted_note.id)?;
+        if fingerprint_bytes(&archive.bytes) != archive.fingerprint {
+            return Err("A recovery snapshot changed while the save was being prepared.".to_owned());
+        }
+        let archived_content_fingerprint =
+            fingerprint_bytes(archive.deleted_note.note.content.as_bytes());
+        let original = originals
+            .iter()
+            .find(|original| {
+                original.relative_path == archive.deleted_note.note.relative_path
+            })
+            .ok_or_else(|| {
+                "The note being archived was not included in the save transaction.".to_owned()
+            })?;
+        if original.fingerprint != archived_content_fingerprint {
+            return Err(
+                "The note changed while its recovery snapshot was being prepared. Try again."
+                    .to_owned(),
+            );
+        }
+        let staged = transaction_recovery_snapshot_path(
+            &transaction_root,
+            &archive.deleted_note.id,
+        )?;
+        if let Some(parent) = staged.parent() {
+            ensure_private_directory_tree(&transaction_root, parent)
+                .map_err(|error| format!("Could not prepare a recovery snapshot: {error}"))?;
+        }
+        atomic_write(&staged, &archive.bytes)
+            .map_err(|error| format!("Could not stage a recovery snapshot: {error}"))?;
+        recovery_targets.push(TransactionRecoveryTarget {
+            id: archive.deleted_note.id.clone(),
+            fingerprint: archive.fingerprint.clone(),
+        });
+    }
     let manifest = TransactionManifest {
         version: TRANSACTION_VERSION,
         id,
         phase: TransactionPhase::Prepared,
         originals,
         targets,
+        recovery_targets,
         folder_case_renames,
         created_directories,
     };
@@ -2423,9 +4043,13 @@ fn prepare_transaction(
 
 fn apply_transaction(
     root: &Path,
+    transaction_root: &Path,
     manifest: &TransactionManifest,
     plans: &[NoteWritePlan],
+    warnings: &mut WarningCollector,
 ) -> Result<(), String> {
+    apply_recovery_targets(root, transaction_root, &manifest.recovery_targets)?;
+
     for original in &manifest.originals {
         let source = resolve_workspace_file(root, &original.relative_path, true)?;
         let current = fingerprint_regular_file(&source)?.ok_or_else(|| {
@@ -2471,8 +4095,201 @@ fn apply_transaction(
         }
         atomic_write(&target, plan.content.as_bytes())
             .map_err(|error| format!("Could not save {}: {error}", plan.new_relative_path))?;
+        if let Some(modified_at) = plan.preserved_modified_at {
+            if let Err(error) = set_file_modified_millis(&target, modified_at) {
+                warnings.push(format!(
+                    "The note was restored, but the modified time for {} could not be preserved: \
+                     {error}",
+                    plan.new_relative_path,
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn apply_recovery_targets(
+    root: &Path,
+    transaction_root: &Path,
+    targets: &[TransactionRecoveryTarget],
+) -> Result<(), String> {
+    if targets.is_empty() {
+        return Ok(());
+    }
+    ensure_recently_deleted_directory(root)?;
+
+    for target in targets {
+        let bytes = read_staged_recovery_snapshot(transaction_root, target)?;
+        let destination = recently_deleted_snapshot_path(root, &target.id)?;
+        match fs::symlink_metadata(&destination) {
+            Ok(_) => {
+                return Err(format!(
+                    "A recovery snapshot already exists for {}.",
+                    target.id,
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("Could not inspect a recovery snapshot: {error}"));
+            }
+        }
+        atomic_write(&destination, &bytes)
+            .map_err(|error| format!("Could not save a recovery snapshot: {error}"))?;
+        if fingerprint_regular_file(&destination)? != Some(target.fingerprint.clone()) {
+            return Err("A recovery snapshot changed while it was being saved.".to_owned());
+        }
+    }
+
+    Ok(())
+}
+
+fn finalize_committed_recovery_targets(
+    root: &Path,
+    transaction_root: &Path,
+    targets: &[TransactionRecoveryTarget],
+) -> Result<(), String> {
+    if targets.is_empty() {
+        return Ok(());
+    }
+    ensure_recently_deleted_directory(root)?;
+
+    for target in targets {
+        let destination = recently_deleted_snapshot_path(root, &target.id)?;
+        match fingerprint_regular_file(&destination)? {
+            Some(fingerprint) if fingerprint == target.fingerprint => continue,
+            Some(_) => {
+                return Err(format!(
+                    "Recovery snapshot {} changed before its save was finalized.",
+                    target.id,
+                ));
+            }
+            None => {}
+        }
+
+        let bytes = read_staged_recovery_snapshot(transaction_root, target)?;
+        atomic_write(&destination, &bytes)
+            .map_err(|error| format!("Could not finalize a recovery snapshot: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn read_staged_recovery_snapshot(
+    transaction_root: &Path,
+    target: &TransactionRecoveryTarget,
+) -> Result<Vec<u8>, String> {
+    validate_recently_deleted_id(&target.id)?;
+    if target.fingerprint.length > MAX_RECENTLY_DELETED_SNAPSHOT_BYTES {
+        return Err("A staged recovery snapshot is unexpectedly large.".to_owned());
+    }
+
+    let transaction_metadata = fs::symlink_metadata(transaction_root)
+        .map_err(|error| format!("Could not inspect a save transaction: {error}"))?;
+    if transaction_metadata.file_type().is_symlink() || !transaction_metadata.is_dir() {
+        return Err("The save transaction is not a regular folder.".to_owned());
+    }
+
+    let recovery_directory = transaction_root.join("recoveries");
+    let recovery_metadata = fs::symlink_metadata(&recovery_directory)
+        .map_err(|error| format!("Could not inspect staged recovery snapshots: {error}"))?;
+    if recovery_metadata.file_type().is_symlink() || !recovery_metadata.is_dir() {
+        return Err("The staged recovery snapshot path is not a regular folder.".to_owned());
+    }
+
+    let path = transaction_recovery_snapshot_path(transaction_root, &target.id)?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("Could not inspect a staged recovery snapshot: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("A staged recovery snapshot is not a regular file.".to_owned());
+    }
+    if metadata.len() != target.fingerprint.length {
+        return Err("A staged recovery snapshot does not match its manifest.".to_owned());
+    }
+
+    let file = File::open(&path)
+        .map_err(|error| format!("Could not open a staged recovery snapshot: {error}"))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect an open recovery snapshot: {error}"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != target.fingerprint.length {
+        return Err("A staged recovery snapshot changed while it was being opened.".to_owned());
+    }
+    let read_limit = target
+        .fingerprint
+        .length
+        .checked_add(1)
+        .ok_or_else(|| "A staged recovery snapshot is too large to read safely.".to_owned())?;
+    let mut bytes = Vec::with_capacity(target.fingerprint.length as usize);
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not read a staged recovery snapshot: {error}"))?;
+    if bytes.len() as u64 != target.fingerprint.length {
+        return Err("A staged recovery snapshot changed while it was being read.".to_owned());
+    }
+    if fingerprint_bytes(&bytes) != target.fingerprint {
+        return Err("A staged recovery snapshot failed its integrity check.".to_owned());
+    }
+
+    Ok(bytes)
+}
+
+fn verify_applied_recovery_targets(
+    root: &Path,
+    targets: &[TransactionRecoveryTarget],
+) -> Result<(), String> {
+    for target in targets {
+        let path = recently_deleted_snapshot_path(root, &target.id)?;
+        if fingerprint_regular_file(&path)? != Some(target.fingerprint.clone()) {
+            return Err(format!(
+                "Recovery snapshot {} changed while the note was being archived.",
+                target.id,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn rollback_recovery_targets(
+    root: &Path,
+    targets: &[TransactionRecoveryTarget],
+    warnings: &mut WarningCollector,
+) -> bool {
+    let mut recovered = true;
+    for target in targets {
+        let path = match recently_deleted_snapshot_path(root, &target.id) {
+            Ok(path) => path,
+            Err(error) => {
+                warnings.push(error);
+                recovered = false;
+                continue;
+            }
+        };
+        match fingerprint_regular_file(&path) {
+            Ok(Some(fingerprint)) if fingerprint == target.fingerprint => {
+                if let Err(error) = remove_file_durable(&path) {
+                    warnings.push(format!(
+                        "Could not remove an uncommitted recovery snapshot: {error}"
+                    ));
+                    recovered = false;
+                }
+            }
+            Ok(Some(_)) => {
+                warnings.push(format!(
+                    "Did not remove recovery snapshot {} because it changed after the interrupted save.",
+                    target.id,
+                ));
+                recovered = false;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warnings.push(error);
+                recovered = false;
+            }
+        }
+    }
+
+    recovered
 }
 
 fn rollback_transaction(
@@ -2481,7 +4298,7 @@ fn rollback_transaction(
     manifest: &TransactionManifest,
     warnings: &mut WarningCollector,
 ) -> bool {
-    let mut recovered = true;
+    let mut recovered = rollback_recovery_targets(root, &manifest.recovery_targets, warnings);
     for target in manifest.targets.iter().rev() {
         let Ok(path) = resolve_workspace_file(root, &target.relative_path, true) else {
             recovered = false;
@@ -2757,6 +4574,21 @@ fn recover_workspace_transactions(
             })?;
         }
         if committed || manifest.phase == TransactionPhase::Committed {
+            let recovery_targets = manifest
+                .recovery_targets
+                .iter()
+                .filter(|target| {
+                    state
+                        .and_then(|state| state.recently_deleted_notes.get(&target.id))
+                        .is_some_and(|stored| stored.fingerprint == target.fingerprint)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            finalize_committed_recovery_targets(
+                root,
+                &transaction_root,
+                &recovery_targets,
+            )?;
             discard_private_transaction(root, &transaction_root, warnings);
             warnings.push("Finished cleaning up a previously committed save.".to_owned());
             continue;
@@ -3570,6 +5402,21 @@ fn create_directory_durable(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn set_file_modified_millis(path: &Path, modified_at: u64) -> io::Result<()> {
+    let modified = UNIX_EPOCH
+        .checked_add(Duration::from_millis(modified_at))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "modified time is too large"))?;
+    let file = OpenOptions::new().read(true).write(true).open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "modified-time target is not a regular file",
+        ));
+    }
+    file.set_times(FileTimes::new().set_modified(modified))?;
+    file.sync_all()
+}
+
 fn remove_file_durable(path: &Path) -> io::Result<()> {
     fs::remove_file(path)?;
     if let Some(parent) = path.parent() {
@@ -3673,6 +5520,52 @@ fn registry_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn workspace_state_path(root: &Path) -> PathBuf {
     root.join(STATE_DIRECTORY).join(STATE_FILE)
+}
+
+fn recently_deleted_snapshot_path(root: &Path, id: &str) -> Result<PathBuf, String> {
+    validate_recently_deleted_id(id)?;
+    Ok(root
+        .join(STATE_DIRECTORY)
+        .join(RECENTLY_DELETED_DIRECTORY)
+        .join(format!("{id}.snapshot")))
+}
+
+fn transaction_recovery_snapshot_path(
+    transaction_root: &Path,
+    id: &str,
+) -> Result<PathBuf, String> {
+    validate_recently_deleted_id(id)?;
+    let relative_path = format!("recoveries/{id}.snapshot");
+    Ok(transaction_root.join(checked_internal_transaction_path(
+        &relative_path,
+        true,
+    )?))
+}
+
+fn ensure_recently_deleted_directory(root: &Path) -> Result<PathBuf, String> {
+    let state_directory = root.join(STATE_DIRECTORY);
+    ensure_state_directory(root, &state_directory)?;
+    let directory = state_directory.join(RECENTLY_DELETED_DIRECTORY);
+    ensure_regular_directory(&directory, "Recently Deleted")?;
+
+    Ok(directory)
+}
+
+fn inspect_recently_deleted_directory(root: &Path) -> Result<PathBuf, String> {
+    let state_directory = root.join(STATE_DIRECTORY);
+    let state_metadata = fs::symlink_metadata(&state_directory)
+        .map_err(|error| format!("Could not inspect workspace metadata: {error}"))?;
+    if state_metadata.file_type().is_symlink() || !state_metadata.is_dir() {
+        return Err("The workspace metadata path is not a regular folder.".to_owned());
+    }
+    let directory = state_directory.join(RECENTLY_DELETED_DIRECTORY);
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|error| format!("Could not inspect Recently Deleted: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("The Recently Deleted path is not a regular folder.".to_owned());
+    }
+
+    Ok(directory)
 }
 
 fn editor_positions_path(root: &Path) -> PathBuf {
@@ -3869,6 +5762,965 @@ mod tests {
                 left: 12.25,
             },
         }
+    }
+
+    fn empty_vault(name: &str) -> VaultData {
+        VaultData {
+            name: name.to_owned(),
+            notes: Vec::new(),
+            folders: Vec::new(),
+            templates: Vec::new(),
+            snippets: Vec::new(),
+            active_note_id: None,
+            recent_note_ids: Vec::new(),
+            selected_folder_id: "all".to_owned(),
+        }
+    }
+
+    fn test_note(content: &str) -> Note {
+        Note {
+            id: "note-1".to_owned(),
+            relative_path: "First note.md".to_owned(),
+            title: "First note".to_owned(),
+            content: content.to_owned(),
+            folder_id: None,
+            tags: Vec::new(),
+            pinned: true,
+            created_at: 100,
+            updated_at: 200,
+        }
+    }
+
+    fn write_saved_note(workspace: &TestWorkspace, note: &Note) -> WorkspaceState {
+        fs::write(workspace.root.join(&note.relative_path), &note.content)
+            .expect("saved note should be written");
+        let mut state = WorkspaceState::default();
+        state.name = "Test vault".to_owned();
+        state
+            .note_paths
+            .insert(note.id.clone(), note.relative_path.clone());
+        state.note_metadata.insert(
+            note.id.clone(),
+            StoredNoteMetadata {
+                pinned: note.pinned,
+                created_at: note.created_at,
+            },
+        );
+        state.active_note_id = Some(note.id.clone());
+        state.recent_note_ids.push(note.id.clone());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        state
+    }
+
+    fn prepare_test_archive(
+        workspace: &TestWorkspace,
+        note: Note,
+        state: &WorkspaceState,
+    ) -> PreparedNoteArchive {
+        prepare_note_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            state,
+            PendingNoteArchive {
+                note,
+                original_folder_path: String::new(),
+                editor_position: Some(editor_position(3)),
+            },
+            1_000,
+        )
+        .expect("recovery snapshot should be prepared")
+    }
+
+    fn mark_recovery_expired(workspace: &TestWorkspace, id: &str) -> u64 {
+        let (state, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+        let mut state = state.expect("state should load");
+        let entry = state
+            .recently_deleted_notes
+            .get_mut(id)
+            .expect("recovery entry should exist");
+        let path = recently_deleted_snapshot_path(&workspace.root, id)
+            .expect("snapshot path should be safe");
+        let mut snapshot: RecentlyDeletedSnapshot = serde_json::from_slice(
+            &fs::read(&path).expect("snapshot should be readable"),
+        )
+        .expect("snapshot should decode");
+        snapshot.deleted_note.deleted_at = 1;
+        snapshot.deleted_note.expires_at = 1 + RECENTLY_DELETED_RETENTION_MILLIS;
+        let mut bytes = serde_json::to_vec_pretty(&snapshot)
+            .expect("expired snapshot should encode");
+        bytes.push(b'\n');
+        fs::write(&path, &bytes).expect("expired snapshot should be written");
+        entry.deleted_at = snapshot.deleted_note.deleted_at;
+        entry.expires_at = snapshot.deleted_note.expires_at;
+        entry.fingerprint = fingerprint_bytes(&bytes);
+        write_workspace_state(&workspace.root, &state)
+            .expect("expired recovery metadata should be written");
+        revision_for_root(&workspace.root)
+            .expect("expired revision should be calculated")
+    }
+
+    #[test]
+    fn version_one_state_defaults_and_migrates_recently_deleted_notes() {
+        let workspace = TestWorkspace::new("state-v1-migration");
+        let state: WorkspaceState = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "name": "Legacy vault",
+            "notePaths": {},
+            "folderPaths": {},
+            "noteMetadata": {},
+            "templates": [],
+            "snippets": [],
+            "activeNoteId": null,
+            "recentNoteIds": [],
+            "selectedFolderId": "all",
+            "lastCommittedTransactionId": null
+        }))
+        .expect("version one state should deserialize");
+        assert!(state.recently_deleted_notes.is_empty());
+        write_workspace_state(&workspace.root, &state)
+            .expect("legacy state should be written");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .expect("legacy workspace should load");
+        let (migrated, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+
+        assert!(loaded.recently_deleted_notes.is_empty());
+        assert_eq!(migrated.expect("migrated state should exist").version, STATE_VERSION);
+    }
+
+    #[test]
+    fn version_two_transactions_default_recovery_targets() {
+        let manifest: TransactionManifest = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "id": "save-legacy",
+            "phase": "prepared",
+            "originals": [],
+            "targets": [],
+            "folderCaseRenames": [],
+            "createdDirectories": []
+        }))
+        .expect("version two transaction should deserialize");
+
+        assert!(manifest.recovery_targets.is_empty());
+    }
+
+    #[test]
+    fn workspace_lock_serializes_separate_file_handles() {
+        let workspace = TestWorkspace::new("workspace-lock");
+        let revision_before = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let first = lock_workspace_files(&workspace.root)
+            .expect("first workspace handle should lock");
+        let second = open_workspace_lock_file(&workspace.root)
+            .expect("second workspace handle should open");
+
+        assert!(second.try_lock().is_err());
+        drop(first);
+        second
+            .try_lock()
+            .expect("second workspace handle should lock after release");
+
+        let revision_after = revision_for_root(&workspace.root)
+            .expect("updated revision should be calculated");
+        assert_eq!(revision_after, revision_before);
+    }
+
+    #[test]
+    fn recently_deleted_contract_uses_camel_case_and_fixed_retention() {
+        let note = test_note("Remember me");
+        let deleted_note = RecentlyDeletedNote {
+            id: "deleted-contract".to_owned(),
+            note,
+            original_folder_path: "Projects".to_owned(),
+            deleted_at: 5_000,
+            expires_at: 5_000 + RECENTLY_DELETED_RETENTION_MILLIS,
+            editor_position: Some(editor_position(2)),
+        };
+        let value = serde_json::to_value(&deleted_note)
+            .expect("deleted note should serialize");
+
+        assert_eq!(value["id"], "deleted-contract");
+        assert_eq!(value["originalFolderPath"], "Projects");
+        assert_eq!(value["deletedAt"], 5_000);
+        assert_eq!(
+            value["expiresAt"],
+            5_000 + RECENTLY_DELETED_RETENTION_MILLIS,
+        );
+        assert!(value.get("editorPosition").is_some());
+    }
+
+    #[test]
+    fn archives_and_reloads_a_note_without_scanning_the_snapshot() {
+        let workspace = TestWorkspace::new("archive-round-trip");
+        let note = test_note("A recovered thought\n");
+        write_saved_note(&workspace, &note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+
+        let (saved, deleted_note) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note: note.clone(),
+                original_folder_path: String::new(),
+                editor_position: Some(editor_position(4)),
+            }),
+        )
+        .expect("note should be archived");
+        let deleted_note = deleted_note.expect("archive result should contain the note");
+
+        assert!(!workspace.root.join(&note.relative_path).exists());
+        assert_eq!(
+            deleted_note.expires_at - deleted_note.deleted_at,
+            RECENTLY_DELETED_RETENTION_MILLIS,
+        );
+        let snapshot_path = recently_deleted_snapshot_path(
+            &workspace.root,
+            &deleted_note.id,
+        )
+        .expect("snapshot path should be safe");
+        assert_eq!(
+            snapshot_path.extension().and_then(|value| value.to_str()),
+            Some("snapshot"),
+        );
+        assert!(snapshot_path.is_file());
+
+        let (scanned_notes, _) = scan_markdown_files(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        )
+        .expect("workspace should scan");
+        assert!(scanned_notes.is_empty());
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .expect("workspace should reopen");
+        assert!(loaded.vault.notes.is_empty());
+        assert_eq!(loaded.recently_deleted_notes, vec![deleted_note.clone()]);
+
+        save_workspace_files(&workspace.root, &loaded.vault, loaded.revision)
+            .expect("ordinary saves should preserve recovery snapshots");
+        let reopened = load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .expect("workspace should reopen after an ordinary save");
+        assert_eq!(reopened.recently_deleted_notes, vec![deleted_note]);
+        assert!(saved.revision > 0);
+    }
+
+    #[test]
+    fn restored_snapshot_keeps_updated_time_after_workspace_reload() {
+        let workspace = TestWorkspace::new("restore-round-trip");
+        let mut note = test_note("Remember this\n");
+        note.relative_path = "First note.markdown".to_owned();
+        write_saved_note(&workspace, &note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let (archived, deleted_note) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note: note.clone(),
+                original_folder_path: String::new(),
+                editor_position: Some(editor_position(7)),
+            }),
+        )
+        .expect("note should be archived");
+        let deleted_note = deleted_note.expect("archive should return the deleted note");
+        let (state, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+        let state = state.expect("archived state should load");
+        let mut vault = empty_vault("Test vault");
+        let (restored_note, preferred_relative_path) = build_restored_note(
+            &workspace.root,
+            &vault,
+            &state,
+            &deleted_note,
+        )
+        .expect("restore destination should be selected");
+        vault.notes.push(restored_note.clone());
+        vault.active_note_id = Some(restored_note.id.clone());
+        vault.recent_note_ids.push(restored_note.id.clone());
+
+        let (_, restored) = save_workspace_files_with_restore(
+            &workspace.root,
+            &vault,
+            archived.revision,
+            PendingNoteRestore {
+                deleted_note_id: deleted_note.id.clone(),
+                restored_note: restored_note.clone(),
+                preferred_relative_path,
+            },
+        )
+        .expect("snapshot should restore");
+
+        assert_eq!(restored.restored_note, restored_note);
+        assert_eq!(restored.restored_note.updated_at, note.updated_at);
+        assert_eq!(restored.editor_position, Some(editor_position(7)));
+        assert_eq!(restored.restored_note.relative_path, "First note.markdown");
+        assert_eq!(
+            fs::read_to_string(workspace.root.join("First note.markdown"))
+                .expect("restored note should be readable"),
+            note.content,
+        );
+        assert!(!recently_deleted_snapshot_path(&workspace.root, &deleted_note.id)
+            .expect("snapshot path should be safe")
+            .exists());
+        let (state, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+        assert!(state
+            .expect("restored state should load")
+            .recently_deleted_notes
+            .is_empty());
+        let reopened = load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .expect("restored workspace should reopen");
+        let reopened_note = reopened
+            .vault
+            .notes
+            .iter()
+            .find(|candidate| candidate.id == restored.restored_note.id)
+            .expect("restored note should reopen");
+        assert_eq!(reopened_note.updated_at, note.updated_at);
+    }
+
+    #[test]
+    fn expired_snapshot_cannot_be_restored() {
+        let workspace = TestWorkspace::new("restore-expired");
+        let note = test_note("Too late\n");
+        write_saved_note(&workspace, &note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let (_, deleted_note) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note,
+                original_folder_path: String::new(),
+                editor_position: None,
+            }),
+        )
+        .expect("note should be archived");
+        let deleted_note = deleted_note.expect("archive should return the deleted note");
+        let expired_revision = mark_recovery_expired(&workspace, &deleted_note.id);
+
+        let error = read_recovery_for_restore(
+            &workspace.root,
+            &deleted_note.id,
+            expired_revision,
+        )
+        .expect_err("expired snapshot should not be restorable");
+
+        assert_eq!(
+            error,
+            "That deleted note has expired and can no longer be restored.",
+        );
+        assert!(recently_deleted_snapshot_path(&workspace.root, &deleted_note.id)
+            .expect("snapshot path should be safe")
+            .exists());
+    }
+
+    #[test]
+    fn restoring_never_overwrites_an_occupied_original_path() {
+        let workspace = TestWorkspace::new("restore-path-conflict");
+        let note = test_note("Recoverable\n");
+        write_saved_note(&workspace, &note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let (archived, deleted_note) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note: note.clone(),
+                original_folder_path: String::new(),
+                editor_position: None,
+            }),
+        )
+        .expect("note should be archived");
+        let deleted_note = deleted_note.expect("archive should return the deleted note");
+        fs::write(workspace.root.join("First note.md"), "External content\n")
+            .expect("conflicting note should be written");
+        let conflict_revision = revision_for_root(&workspace.root)
+            .expect("conflict revision should be calculated");
+        assert_ne!(conflict_revision, archived.revision);
+        let (state, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+        let state = state.expect("archived state should load");
+        let mut vault = empty_vault("Test vault");
+        let (restored_note, preferred_relative_path) = build_restored_note(
+            &workspace.root,
+            &vault,
+            &state,
+            &deleted_note,
+        )
+        .expect("a conflict-safe destination should be selected");
+        assert_eq!(restored_note.relative_path, "First note 2.md");
+        vault.notes.push(restored_note.clone());
+
+        save_workspace_files_with_restore(
+            &workspace.root,
+            &vault,
+            conflict_revision,
+            PendingNoteRestore {
+                deleted_note_id: deleted_note.id,
+                restored_note,
+                preferred_relative_path,
+            },
+        )
+        .expect("snapshot should restore beside the conflict");
+
+        assert_eq!(
+            fs::read_to_string(workspace.root.join("First note.md"))
+                .expect("conflicting file should remain"),
+            "External content\n",
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.root.join("First note 2.md"))
+                .expect("restored file should be readable"),
+            note.content,
+        );
+    }
+
+    #[test]
+    fn manual_and_expiry_cleanup_remove_only_verified_snapshots() {
+        let workspace = TestWorkspace::new("recovery-removal");
+        let first_note = test_note("First recovery\n");
+        write_saved_note(&workspace, &first_note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let (first_archive, first_deleted) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note: first_note,
+                original_folder_path: String::new(),
+                editor_position: None,
+            }),
+        )
+        .expect("first note should be archived");
+        let first_deleted = first_deleted.expect("first archive should return metadata");
+
+        let mut second_note = test_note("Second recovery\n");
+        second_note.id = "note-2".to_owned();
+        second_note.title = "Second note".to_owned();
+        second_note.relative_path = "Second note.md".to_owned();
+        let mut second_vault = empty_vault("Test vault");
+        second_vault.notes.push(second_note.clone());
+        let saved = save_workspace_files(
+            &workspace.root,
+            &second_vault,
+            first_archive.revision,
+        )
+        .expect("second note should be saved");
+        let (second_archive, second_deleted) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            saved.revision,
+            Some(PendingNoteArchive {
+                note: second_note,
+                original_folder_path: String::new(),
+                editor_position: None,
+            }),
+        )
+        .expect("second note should be archived");
+        let second_deleted = second_deleted.expect("second archive should return metadata");
+
+        let removed = remove_recently_deleted_notes(
+            &workspace.root,
+            vec![first_deleted.id.clone()],
+            second_archive.revision,
+            false,
+        )
+        .expect("one selected snapshot should be removed");
+        assert_eq!(removed.removed_ids, vec![first_deleted.id.clone()]);
+        assert!(!recently_deleted_snapshot_path(&workspace.root, &first_deleted.id)
+            .expect("first snapshot path should be safe")
+            .exists());
+        assert!(recently_deleted_snapshot_path(&workspace.root, &second_deleted.id)
+            .expect("second snapshot path should be safe")
+            .exists());
+
+        let path = recently_deleted_snapshot_path(&workspace.root, &second_deleted.id)
+            .expect("second snapshot path should be safe");
+        let expired_revision = mark_recovery_expired(&workspace, &second_deleted.id);
+
+        let pruned = remove_recently_deleted_notes(
+            &workspace.root,
+            Vec::new(),
+            expired_revision,
+            true,
+        )
+        .expect("expired snapshot should be pruned");
+        assert_eq!(pruned.removed_ids, vec![second_deleted.id.clone()]);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn loading_finishes_expiry_after_snapshot_cleanup_preceded_state_cleanup() {
+        let workspace = TestWorkspace::new("interrupted-expiry-cleanup");
+        let note = test_note("Expired recovery\n");
+        write_saved_note(&workspace, &note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let (_, deleted_note) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note,
+                original_folder_path: String::new(),
+                editor_position: None,
+            }),
+        )
+        .expect("note should be archived");
+        let deleted_note = deleted_note.expect("archive should return metadata");
+        mark_recovery_expired(&workspace, &deleted_note.id);
+        let path = recently_deleted_snapshot_path(&workspace.root, &deleted_note.id)
+            .expect("snapshot path should be safe");
+        remove_file_durable(&path).expect("snapshot cleanup should be interrupted before state");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .expect("workspace should finish the interrupted cleanup");
+        let (state, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+
+        assert!(loaded.recently_deleted_notes.is_empty());
+        assert!(state
+            .expect("cleaned state should load")
+            .recently_deleted_notes
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_expiry_cleanup_remains_available_for_retry_but_not_restore() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = TestWorkspace::new("recoverable-expiry-failure");
+        let note = test_note("Still recoverable\n");
+        write_saved_note(&workspace, &note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let (_, deleted_note) = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note,
+                original_folder_path: String::new(),
+                editor_position: Some(editor_position(5)),
+            }),
+        )
+        .expect("note should be archived");
+        let deleted_note = deleted_note.expect("archive should return metadata");
+        let expired_revision = mark_recovery_expired(&workspace, &deleted_note.id);
+        let directory = inspect_recently_deleted_directory(&workspace.root)
+            .expect("recovery directory should exist");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o555))
+            .expect("recovery directory should become read-only");
+
+        let pruned = remove_recently_deleted_notes(
+            &workspace.root,
+            Vec::new(),
+            expired_revision,
+            true,
+        )
+        .expect("failed physical cleanup should remain a successful prune check");
+        let restore_error = read_recovery_for_restore(
+            &workspace.root,
+            &deleted_note.id,
+            pruned.revision,
+        )
+        .expect_err("an expired snapshot should not remain restorable");
+        assert!(recently_deleted_snapshot_path(&workspace.root, &deleted_note.id)
+            .expect("snapshot path should be safe")
+            .exists());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+            .expect("recovery directory permissions should be restored");
+        let retried = remove_recently_deleted_notes(
+            &workspace.root,
+            Vec::new(),
+            pruned.revision,
+            true,
+        )
+        .expect("expiry cleanup should succeed when retried");
+
+        assert!(pruned.removed_ids.is_empty());
+        assert!(pruned
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("remains recoverable")));
+        assert_eq!(
+            restore_error,
+            "That deleted note has expired and can no longer be restored.",
+        );
+        assert_eq!(retried.removed_ids, vec![deleted_note.id.clone()]);
+        assert!(!recently_deleted_snapshot_path(&workspace.root, &deleted_note.id)
+            .expect("snapshot path should be safe")
+            .exists());
+    }
+
+    #[test]
+    fn post_commit_cleanup_warns_without_deleting_a_changed_snapshot() {
+        let workspace = TestWorkspace::new("changed-recovery-cleanup");
+        ensure_recently_deleted_directory(&workspace.root)
+            .expect("recovery directory should be created");
+        let id = "deleted-changed-cleanup";
+        let path = recently_deleted_snapshot_path(&workspace.root, id)
+            .expect("snapshot path should be safe");
+        fs::write(&path, b"expected recovery").expect("snapshot should be written");
+        let expected = fingerprint_bytes(b"expected recovery");
+        fs::write(&path, b"changed recovery").expect("snapshot should change");
+        let mut warnings = WarningCollector::default();
+
+        assert!(!remove_recovery_snapshot_if_matches(
+            &workspace.root,
+            id,
+            &expected,
+            &mut warnings,
+        ));
+        assert_eq!(
+            fs::read(&path).expect("changed snapshot should remain"),
+            b"changed recovery",
+        );
+        assert!(warnings
+            .finish()
+            .iter()
+            .any(|warning| warning.contains("left untouched")));
+    }
+
+    #[test]
+    fn removed_snapshot_with_a_sync_error_is_not_treated_as_recoverable() {
+        let workspace = TestWorkspace::new("recovery-sync-error");
+        ensure_recently_deleted_directory(&workspace.root)
+            .expect("recovery directory should be created");
+        let id = "deleted-sync-error";
+        let path = recently_deleted_snapshot_path(&workspace.root, id)
+            .expect("snapshot path should be safe");
+        fs::write(&path, b"recovery").expect("snapshot should be written");
+        fs::remove_file(&path).expect("snapshot should be unlinked");
+
+        let result = classify_recovery_snapshot_removal_error(
+            &path,
+            id,
+            io::Error::other("directory sync failed"),
+        )
+        .expect("an absent snapshot should count as removed");
+
+        assert_eq!(
+            result,
+            RecoverySnapshotRemoval::RemovedWithoutDurability(
+                "directory sync failed".to_owned(),
+            ),
+        );
+    }
+
+    #[test]
+    fn refuses_to_archive_stale_note_content() {
+        let workspace = TestWorkspace::new("stale-archive");
+        let saved_note = test_note("Saved content");
+        write_saved_note(&workspace, &saved_note);
+        let revision = revision_for_root(&workspace.root)
+            .expect("initial revision should be calculated");
+        let mut stale_note = saved_note.clone();
+        stale_note.content = "Unsaved content".to_owned();
+
+        let error = save_workspace_files_with_archive(
+            &workspace.root,
+            &empty_vault("Test vault"),
+            revision,
+            Some(PendingNoteArchive {
+                note: stale_note,
+                original_folder_path: String::new(),
+                editor_position: None,
+            }),
+        )
+        .expect_err("stale note content should be rejected");
+
+        assert!(error.contains("changed"));
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&saved_note.relative_path))
+                .expect("live note should remain"),
+            saved_note.content,
+        );
+    }
+
+    #[test]
+    fn refuses_to_archive_a_note_changed_during_transaction_preparation() {
+        let workspace = TestWorkspace::new("archive-preparation-race");
+        let note = test_note("Original");
+        let state = write_saved_note(&workspace, &note);
+        let archive = prepare_test_archive(&workspace, note.clone(), &state);
+        fs::write(workspace.root.join(&note.relative_path), "Replaced")
+            .expect("the saved note should change");
+        let replaced = BTreeSet::from([note.relative_path.clone()]);
+
+        let error = prepare_transaction(
+            &workspace.root,
+            new_transaction_id(),
+            &replaced,
+            &[],
+            std::slice::from_ref(&archive),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect_err("changed note content should not be archived");
+
+        assert!(error.contains("changed"));
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&note.relative_path))
+                .expect("the changed note should remain live"),
+            "Replaced",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_follow_a_staged_recovery_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = TestWorkspace::new("staged-recovery-symlink");
+        let outside = TestWorkspace::new("staged-recovery-outside");
+        let transaction_root = prepare_transaction_root(
+            &workspace.root,
+            &new_transaction_id(),
+        )
+        .expect("transaction should be created");
+        let recovery_directory = transaction_root.join("recoveries");
+        fs::create_dir(&recovery_directory).expect("recovery directory should be created");
+        let outside_path = outside.root.join("outside.snapshot");
+        let bytes = b"outside recovery data";
+        fs::write(&outside_path, bytes).expect("outside data should be written");
+        let id = "deleted-symlink";
+        symlink(
+            &outside_path,
+            recovery_directory.join(format!("{id}.snapshot")),
+        )
+        .expect("staged snapshot symlink should be created");
+        let target = TransactionRecoveryTarget {
+            id: id.to_owned(),
+            fingerprint: fingerprint_bytes(bytes),
+        };
+
+        let error = read_staged_recovery_snapshot(&transaction_root, &target)
+            .expect_err("staged symlinks should be rejected");
+
+        assert!(error.contains("regular file"));
+    }
+
+    #[test]
+    fn refuses_to_read_an_oversized_staged_recovery_snapshot() {
+        let workspace = TestWorkspace::new("oversized-staged-recovery");
+        let transaction_root = prepare_transaction_root(
+            &workspace.root,
+            &new_transaction_id(),
+        )
+        .expect("transaction should be created");
+        let recovery_directory = transaction_root.join("recoveries");
+        fs::create_dir(&recovery_directory).expect("recovery directory should be created");
+        let id = "deleted-oversized";
+        let path = recovery_directory.join(format!("{id}.snapshot"));
+        File::create(&path)
+            .and_then(|file| file.set_len(MAX_RECENTLY_DELETED_SNAPSHOT_BYTES + 1))
+            .expect("oversized staged snapshot should be created");
+        let target = TransactionRecoveryTarget {
+            id: id.to_owned(),
+            fingerprint: FileFingerprint {
+                length: MAX_RECENTLY_DELETED_SNAPSHOT_BYTES + 1,
+                hash: 0,
+            },
+        };
+
+        let error = read_staged_recovery_snapshot(&transaction_root, &target)
+            .expect_err("oversized staged snapshots should be rejected");
+
+        assert!(error.contains("unexpectedly large"));
+    }
+
+    #[test]
+    fn rolling_back_an_archive_restores_the_note_and_removes_the_snapshot() {
+        let workspace = TestWorkspace::new("archive-rollback");
+        let note = test_note("Rollback content");
+        let state = write_saved_note(&workspace, &note);
+        let archive = prepare_test_archive(&workspace, note.clone(), &state);
+        let replaced = BTreeSet::from([note.relative_path.clone()]);
+        let (transaction_root, mut manifest) = prepare_transaction(
+            &workspace.root,
+            new_transaction_id(),
+            &replaced,
+            &[],
+            std::slice::from_ref(&archive),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("transaction should be prepared");
+        manifest.phase = TransactionPhase::Applying;
+        write_transaction_manifest(&transaction_root, &manifest)
+            .expect("manifest should be updated");
+        apply_transaction(
+            &workspace.root,
+            &transaction_root,
+            &manifest,
+            &[],
+            &mut WarningCollector::default(),
+        )
+        .expect("transaction should apply");
+        assert!(!workspace.root.join(&note.relative_path).exists());
+
+        let mut warnings = WarningCollector::default();
+        assert!(rollback_transaction(
+            &workspace.root,
+            &transaction_root,
+            &manifest,
+            &mut warnings,
+        ));
+
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&note.relative_path))
+                .expect("live note should be restored"),
+            note.content,
+        );
+        assert!(!recently_deleted_snapshot_path(
+            &workspace.root,
+            &archive.deleted_note.id,
+        )
+        .expect("snapshot path should be safe")
+        .exists());
+        assert!(warnings.finish().is_empty());
+    }
+
+    #[test]
+    fn committed_archive_recovery_retains_the_snapshot() {
+        let workspace = TestWorkspace::new("archive-commit-recovery");
+        let note = test_note("Committed content");
+        let mut state = write_saved_note(&workspace, &note);
+        let archive = prepare_test_archive(&workspace, note.clone(), &state);
+        let replaced = BTreeSet::from([note.relative_path.clone()]);
+        let transaction_id = new_transaction_id();
+        let (transaction_root, mut manifest) = prepare_transaction(
+            &workspace.root,
+            transaction_id.clone(),
+            &replaced,
+            &[],
+            std::slice::from_ref(&archive),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("transaction should be prepared");
+        manifest.phase = TransactionPhase::Applying;
+        write_transaction_manifest(&transaction_root, &manifest)
+            .expect("manifest should be updated");
+        apply_transaction(
+            &workspace.root,
+            &transaction_root,
+            &manifest,
+            &[],
+            &mut WarningCollector::default(),
+        )
+        .expect("transaction should apply");
+
+        state.note_paths.clear();
+        state.note_metadata.clear();
+        state.active_note_id = None;
+        state.recent_note_ids.clear();
+        state.last_committed_transaction_id = Some(transaction_id);
+        state.recently_deleted_notes.insert(
+            archive.deleted_note.id.clone(),
+            StoredRecentlyDeletedNote {
+                deleted_at: archive.deleted_note.deleted_at,
+                expires_at: archive.deleted_note.expires_at,
+                fingerprint: archive.fingerprint.clone(),
+            },
+        );
+        write_workspace_state(&workspace.root, &state)
+            .expect("committed state should be written");
+
+        let mut warnings = WarningCollector::default();
+        recover_workspace_transactions(&workspace.root, Some(&state), &mut warnings)
+            .expect("committed transaction should recover");
+
+        assert!(!workspace.root.join(&note.relative_path).exists());
+        assert!(!transaction_root.exists());
+        assert!(recently_deleted_snapshot_path(
+            &workspace.root,
+            &archive.deleted_note.id,
+        )
+        .expect("snapshot path should be safe")
+        .is_file());
+        let loaded = load_recently_deleted_notes(
+            &workspace.root,
+            &state.recently_deleted_notes,
+            &mut WarningCollector::default(),
+        );
+        assert_eq!(loaded, vec![archive.deleted_note]);
+    }
+
+    #[test]
+    fn stale_committed_transaction_does_not_recreate_a_removed_snapshot() {
+        let workspace = TestWorkspace::new("stale-committed-archive");
+        let state = WorkspaceState::default();
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let id = "deleted-stale-transaction".to_owned();
+        let bytes = b"stale recovery payload\n".to_vec();
+        let fingerprint = fingerprint_bytes(&bytes);
+        let transaction_id = new_transaction_id();
+        let transaction_root = prepare_transaction_root(&workspace.root, &transaction_id)
+            .expect("transaction should be created");
+        let staged = transaction_recovery_snapshot_path(&transaction_root, &id)
+            .expect("staged path should be safe");
+        ensure_private_directory_tree(
+            &transaction_root,
+            staged.parent().expect("staged path should have a parent"),
+        )
+        .expect("staging directory should be created");
+        atomic_write(&staged, &bytes).expect("staged snapshot should be written");
+        let manifest = TransactionManifest {
+            version: TRANSACTION_VERSION,
+            id: transaction_id,
+            phase: TransactionPhase::Committed,
+            originals: Vec::new(),
+            targets: Vec::new(),
+            recovery_targets: vec![TransactionRecoveryTarget {
+                id: "deleted-stale-transaction".to_owned(),
+                fingerprint,
+            }],
+            folder_case_renames: Vec::new(),
+            created_directories: Vec::new(),
+        };
+        write_transaction_manifest(&transaction_root, &manifest)
+            .expect("manifest should be written");
+
+        recover_workspace_transactions(
+            &workspace.root,
+            Some(&state),
+            &mut WarningCollector::default(),
+        )
+        .expect("stale committed transaction should be cleaned");
+
+        assert!(!transaction_root.exists());
+        assert!(!recently_deleted_snapshot_path(
+            &workspace.root,
+            "deleted-stale-transaction",
+        )
+        .expect("snapshot path should be safe")
+        .exists());
     }
 
     #[test]

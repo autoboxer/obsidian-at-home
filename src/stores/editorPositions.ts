@@ -148,6 +148,25 @@ export function getNoteEditorPosition(
   return normalized;
 }
 
+export function captureNoteEditorPosition(
+  vaultId: string,
+  noteId: string,
+  content: string,
+): NoteEditorPosition | undefined {
+  for (const capture of positionCaptures) {
+    if (capture.vaultId !== vaultId || capture.noteId !== noteId) {
+      continue;
+    }
+
+    const position = capture.read();
+    if (position) {
+      setNoteEditorPosition(vaultId, noteId, position);
+    }
+  }
+
+  return getNoteEditorPosition(vaultId, noteId, content);
+}
+
 export function setNoteEditorPosition(
   vaultId: string,
   noteId: string,

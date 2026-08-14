@@ -4,21 +4,35 @@ import { computed, reactive, watch } from "vue";
 import { createEmptyVault, createSeedVault } from "../data/seed";
 import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from "../lib";
 import {
+  compareRecentlyDeletedNotes,
+  readBrowserWorkspace,
+  RECENTLY_DELETED_LIMIT,
+  RECENTLY_DELETED_RETENTION,
+  writeBrowserWorkspace,
+} from "../services/browserWorkspace";
+import type { StoredBrowserWorkspace } from "../services/browserWorkspace";
+import {
+  captureNoteEditorPosition,
   deleteNoteEditorPosition,
   editorPositionVaultId,
   flushNoteEditorPositions,
   hasPendingNoteEditorPositions,
   initializeNoteEditorPositions,
   pruneNoteEditorPositions,
+  setNoteEditorPosition,
 } from "./editorPositions";
 import {
+  archiveWorkspaceNote,
   bootstrapWorkspace,
   createWorkspace,
+  deleteRecentlyDeletedNotes,
   forgetWorkspace,
   getWorkspaceRevision,
   isTauri,
   openWorkspace,
   pickFolder,
+  pruneRecentlyDeletedNotes,
+  restoreRecentlyDeletedNote as restoreRecentlyDeletedNoteNative,
   saveWorkspace,
 } from "../services/native";
 import type {
@@ -29,22 +43,26 @@ import type {
   Folder,
   ImportResult,
   Note,
+  NoteEditorPosition,
   NoteTemplate,
+  RecentlyDeletedNote,
   SearchScope,
   ToolView,
   VaultData,
   VaultDescriptor,
   VaultSessionState,
   WorkspaceLoad,
+  WorkspaceSaveResult,
 } from "../types";
 
-const STORAGE_KEY = "obsidian-at-home.vault.v1";
 const LEGACY_MIGRATED_KEY = "obsidian-at-home.vault.filesystem-migrated.v1";
 const APP_ZOOM_KEY = "obsidian-at-home.zoom.v1";
 const PERSIST_DELAY = 220;
 const EXTERNAL_CHECK_DELAY = 3_000;
 const NOTE_NAVIGATION_LIMIT = 100;
 const RECENT_NOTE_LIMIT = 10;
+const RECENTLY_DELETED_RETRY_INITIAL_DELAY = 5_000;
+const RECENTLY_DELETED_RETRY_MAX_DELAY = 5 * 60_000;
 
 export const MIN_ZOOM = 0.7;
 export const MAX_ZOOM = 1.5;
@@ -64,6 +82,7 @@ export const treeDragState = reactive<{ noteId: string | null; folderId: string 
 
 interface UiState {
   tool: ToolView;
+  notesView: "editor" | "recently-deleted";
   noteFilter: string;
   commandOpen: boolean;
   contextOpen: boolean;
@@ -90,7 +109,25 @@ interface NoteNavigationState {
   forward: string[];
 }
 
+interface WorkspaceUiSnapshot {
+  tool: ToolView;
+  notesView: UiState["notesView"];
+  noteFilter: string;
+}
+
+interface RecentlyDeletedState {
+  notes: RecentlyDeletedNote[];
+  busy: boolean;
+  error: string | null;
+}
+
 export const vaultState = reactive<VaultData>(createEmptyVault());
+
+export const recentlyDeletedState = reactive<RecentlyDeletedState>({
+  notes: [],
+  busy: false,
+  error: null,
+});
 
 export const vaultSession = reactive<VaultSessionState>({
   phase: "loading",
@@ -107,6 +144,7 @@ export const vaultSession = reactive<VaultSessionState>({
 
 export const uiState = reactive<UiState>({
   tool: "notes",
+  notesView: "editor",
   noteFilter: "",
   commandOpen: false,
   contextOpen: true,
@@ -136,12 +174,15 @@ const noteNavigationState = reactive<NoteNavigationState>({
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let externalCheckTimer: ReturnType<typeof setInterval> | undefined;
+let recentlyDeletedTimer: ReturnType<typeof setTimeout> | undefined;
+let recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
 let initialized = false;
 let suppressPersistence = 0;
 let dirtyVersion = 0;
 let savedVersion = 0;
 let sessionGeneration = 0;
 let saveInFlight: Promise<boolean> | null = null;
+let recoverySaveInFlight: Promise<boolean> | null = null;
 let checkingExternalChanges = false;
 let initializePromise: Promise<void> | null = null;
 let closeHandlerInstalled = false;
@@ -187,14 +228,26 @@ async function initializeVaultStorage(): Promise<void> {
   vaultSession.phase = "loading";
 
   if (!isTauri()) {
-    const storedVault = readStoredVault();
+    let storedVault: StoredBrowserWorkspace | null;
+    try {
+      storedVault = readStoredVault();
+    } catch (error) {
+      hydrateVault(createEmptyVault());
+      hydrateRecentlyDeletedNotes([]);
+      resetNoteNavigation();
+      vaultSession.backend = "browser";
+      vaultSession.phase = "error";
+      vaultSession.error = errorMessage(error, "Saved browser notes could not be read safely.");
+      initialized = true;
+      installVaultLifecycleHandlers();
+
+      return;
+    }
     const browserVault = storedVault?.vault ?? createSeedVault();
     hydrateVault(browserVault);
+    hydrateRecentlyDeletedNotes(storedVault?.recentlyDeletedNotes ?? []);
     initializeNoteEditorPositions("browser", null, vaultState.notes);
     resetNoteNavigation();
-    if (storedVault?.needsRewrite) {
-      safeStorageSet(STORAGE_KEY, JSON.stringify(browserVault));
-    }
     vaultSession.backend = "browser";
     vaultSession.phase = "ready";
     vaultSession.path = null;
@@ -205,15 +258,25 @@ async function initializeVaultStorage(): Promise<void> {
     vaultSession.warnings = [];
     initialized = true;
     savedVersion = dirtyVersion;
+    if (storedVault?.needsRewrite) {
+      persistBrowserWorkspace(snapshotVault(), snapshotRecentlyDeletedNotes());
+    }
+    scheduleRecentlyDeletedExpiry();
+    void pruneExpiredRecentlyDeletedNotes();
     installVaultLifecycleHandlers();
 
     return;
   }
 
   vaultSession.backend = "native";
-  const legacy = readStoredVault();
+  let legacy: StoredBrowserWorkspace | null = null;
+  try {
+    legacy = readStoredVault();
+  } catch {
+    // A newer browser workspace remains untouched and unavailable for migration
+  }
   vaultSession.legacyAvailable = Boolean(
-    legacy && safeStorageGet(LEGACY_MIGRATED_KEY) !== storageFingerprint(legacy.raw),
+    legacy && safeStorageGet(LEGACY_MIGRATED_KEY) !== legacy.migrationFingerprint,
   );
 
   try {
@@ -223,6 +286,7 @@ async function initializeVaultStorage(): Promise<void> {
       applyWorkspace(result.workspace, result.recentVaults);
     } else {
       hydrateVault(createEmptyVault());
+      hydrateRecentlyDeletedNotes([]);
       resetNoteNavigation();
       vaultSession.phase = "needs-vault";
       vaultSession.path = null;
@@ -233,6 +297,7 @@ async function initializeVaultStorage(): Promise<void> {
     }
   } catch (error) {
     hydrateVault(createEmptyVault());
+    hydrateRecentlyDeletedNotes([]);
     resetNoteNavigation();
     vaultSession.phase = "error";
     vaultSession.error = errorMessage(error, "The vault list could not be opened.");
@@ -252,13 +317,14 @@ export async function createFilesystemVault(name: string, useLegacy = false): Pr
   if (!cleanName) {
     return false;
   }
-  if (!(await flushBeforeVaultChange())) {
-    return false;
-  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
   try {
+    if (!(await flushBeforeVaultChange())) {
+      return false;
+    }
+
     const parentPath = await pickFolder();
     if (!parentPath) {
       return false;
@@ -272,7 +338,7 @@ export async function createFilesystemVault(name: string, useLegacy = false): Pr
     applyWorkspace(workspace);
 
     if (useLegacy && legacy) {
-      safeStorageSet(LEGACY_MIGRATED_KEY, storageFingerprint(legacy.raw));
+      safeStorageSet(LEGACY_MIGRATED_KEY, legacy.migrationFingerprint);
       vaultSession.legacyAvailable = false;
       notify(`Saved ${legacy.vault.notes.length} ${legacy.vault.notes.length === 1 ? "note" : "notes"} as Markdown files`, "success");
     } else {
@@ -286,6 +352,7 @@ export async function createFilesystemVault(name: string, useLegacy = false): Pr
     return false;
   } finally {
     vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
   }
 }
 
@@ -293,13 +360,14 @@ export async function openFilesystemVault(): Promise<boolean> {
   if (vaultSession.backend !== "native" || vaultSession.busy) {
     return false;
   }
-  if (!(await flushBeforeVaultChange())) {
-    return false;
-  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
   try {
+    if (!(await flushBeforeVaultChange())) {
+      return false;
+    }
+
     const path = await pickFolder();
     if (!path) {
       return false;
@@ -315,6 +383,7 @@ export async function openFilesystemVault(): Promise<boolean> {
     return false;
   } finally {
     vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
   }
 }
 
@@ -322,13 +391,14 @@ export async function switchFilesystemVault(path: string): Promise<boolean> {
   if (vaultSession.backend !== "native" || vaultSession.busy || path === vaultSession.path) {
     return path === vaultSession.path;
   }
-  if (!(await flushBeforeVaultChange())) {
-    return false;
-  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
   try {
+    if (!(await flushBeforeVaultChange())) {
+      return false;
+    }
+
     const workspace = await openWorkspace(path, createEmptyVault());
     applyWorkspace(workspace);
     notify(`Switched to ${workspace.descriptor.name}`, "success");
@@ -340,6 +410,7 @@ export async function switchFilesystemVault(path: string): Promise<boolean> {
     return false;
   } finally {
     vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
   }
 }
 
@@ -348,13 +419,14 @@ export async function forgetCurrentVault(): Promise<boolean> {
   if (vaultSession.backend !== "native" || !path || vaultSession.busy) {
     return false;
   }
-  if (!(await flushBeforeVaultChange())) {
-    return false;
-  }
 
   vaultSession.busy = true;
   vaultSession.error = null;
   try {
+    if (!(await flushBeforeVaultChange())) {
+      return false;
+    }
+
     const recentVaults = await forgetWorkspace(path);
     sessionGeneration += 1;
     vaultSession.recentVaults = recentVaults;
@@ -364,6 +436,7 @@ export async function forgetCurrentVault(): Promise<boolean> {
     vaultSession.warnings = [];
     vaultSession.phase = "needs-vault";
     hydrateVault(createEmptyVault());
+    hydrateRecentlyDeletedNotes([]);
     resetNoteNavigation();
     dirtyVersion = 0;
     savedVersion = 0;
@@ -377,6 +450,7 @@ export async function forgetCurrentVault(): Promise<boolean> {
     return false;
   } finally {
     vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
   }
 }
 
@@ -397,9 +471,10 @@ export async function reloadFilesystemVault(): Promise<boolean> {
   if (vaultSession.backend !== "native" || !path || vaultSession.busy) {
     return false;
   }
-  await flushNoteEditorPositions(currentEditorPositionVaultId());
+
   vaultSession.busy = true;
   try {
+    await flushNoteEditorPositions(currentEditorPositionVaultId());
     const workspace = await openWorkspace(path, createEmptyVault());
     applyWorkspace(workspace);
     notify("Reloaded the vault from disk", "success");
@@ -411,6 +486,7 @@ export async function reloadFilesystemVault(): Promise<boolean> {
     return false;
   } finally {
     vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
   }
 }
 
@@ -444,11 +520,22 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
     return false;
   } finally {
     vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
   }
 }
 
 export async function flushVault(): Promise<boolean> {
   clearTimeout(persistTimer);
+
+  if (recoverySaveInFlight) {
+    const saved = await recoverySaveInFlight;
+    if (!saved) {
+      return false;
+    }
+
+    return savedVersion < dirtyVersion ? flushVault() : true;
+  }
+
   if (!initialized || savedVersion >= dirtyVersion) {
     return true;
   }
@@ -466,11 +553,12 @@ export async function flushVault(): Promise<boolean> {
   const generation = sessionGeneration;
   const path = vaultSession.path;
   const snapshot = snapshotVault();
+  const recentlyDeletedSnapshot = snapshotRecentlyDeletedNotes();
   uiState.saveStatus = "saving";
 
   const operation = (async (): Promise<boolean> => {
     if (vaultSession.backend === "browser") {
-      const saved = persistBrowserVault(snapshot);
+      const saved = persistBrowserWorkspace(snapshot, recentlyDeletedSnapshot);
       if (saved && generation === sessionGeneration) {
         savedVersion = targetVersion;
       }
@@ -542,6 +630,10 @@ export const recentNotes = computed<Note[]>(() => {
     return note ? [note] : [];
   });
 });
+
+export const recentlyDeletedNotes = computed<RecentlyDeletedNote[]>(() =>
+  [...recentlyDeletedState.notes].sort(compareRecentlyDeletedNotes),
+);
 
 export const backNavigationNote = computed<Note | undefined>(() =>
   findNoteNavigationTarget(noteNavigationState.back),
@@ -615,20 +707,47 @@ export function selectNote(id: string): void {
     recordDirectNoteNavigation(vaultState.activeNoteId, id);
   }
   activateNote(id);
+  uiState.tool = "notes";
+  uiState.notesView = "editor";
 }
 
 export function navigateBack(): boolean {
-  return traverseNoteNavigation(noteNavigationState.back, noteNavigationState.forward);
+  const navigated = traverseNoteNavigation(noteNavigationState.back, noteNavigationState.forward);
+  if (navigated) {
+    uiState.tool = "notes";
+    uiState.notesView = "editor";
+  }
+
+  return navigated;
 }
 
 export function navigateForward(): boolean {
-  return traverseNoteNavigation(noteNavigationState.forward, noteNavigationState.back);
+  const navigated = traverseNoteNavigation(noteNavigationState.forward, noteNavigationState.back);
+  if (navigated) {
+    uiState.tool = "notes";
+    uiState.notesView = "editor";
+  }
+
+  return navigated;
 }
 
 export function selectFolder(selection: FolderSelection): void {
   vaultState.selectedFolderId = isSmartFolderSelection(selection) ? selection : "all";
   uiState.tool = "notes";
+  uiState.notesView = "editor";
   uiState.noteFilter = "";
+}
+
+export function openRecentlyDeletedWorkspace(): boolean {
+  if (!recentlyDeletedState.notes.length) {
+    return false;
+  }
+
+  uiState.commandOpen = false;
+  uiState.tool = "notes";
+  uiState.notesView = "recently-deleted";
+
+  return true;
 }
 
 export function openSearchWorkspace(
@@ -692,6 +811,7 @@ export function createNote(folderId?: string | null, title = "Untitled note", co
   selectNote(note.id);
   vaultState.selectedFolderId = "all";
   uiState.tool = "notes";
+  uiState.notesView = "editor";
   uiState.noteFilter = "";
   notify("New note created", "success");
 
@@ -779,24 +899,226 @@ export function moveNoteToFolder(noteId: string, folderId: string | null): boole
   return true;
 }
 
-export function deleteNote(id: string): void {
-  const index = vaultState.notes.findIndex((note) => note.id === id);
-  if (index < 0) {
-    return;
+export async function deleteNote(id: string): Promise<boolean> {
+  return runRecoveryOperation(async () => {
+    if (!(await flushVault())) {
+      return false;
+    }
+
+    const index = vaultState.notes.findIndex((note) => note.id === id);
+    const note = vaultState.notes[index];
+    if (!note) {
+      return false;
+    }
+
+    const archivedNote = cloneValue(note);
+    const originalFolderPath = folderPath(note.folderId);
+    const vaultId = currentEditorPositionVaultId();
+    const editorPosition = captureNoteEditorPosition(vaultId, note.id, note.content);
+    const previousVault = snapshotVault();
+    const previousNavigation = snapshotNoteNavigation();
+    const previousWorkspaceUi = snapshotWorkspaceUi();
+
+    if (vaultSession.backend === "browser") {
+      if (recentlyDeletedState.notes.length >= RECENTLY_DELETED_LIMIT) {
+        recentlyDeletedState.error = "Recently Deleted is full.";
+        notify("Recently Deleted is full, so the note was not deleted", "warning");
+
+        return false;
+      }
+      const candidateVault = snapshotVaultAfterDeletion(id);
+      const deletedAt = Date.now();
+      const deletedNote: RecentlyDeletedNote = {
+        id: createId("deleted"),
+        note: archivedNote,
+        originalFolderPath,
+        deletedAt,
+        expiresAt: deletedAt + RECENTLY_DELETED_RETENTION,
+        ...(editorPosition ? { editorPosition } : {}),
+      };
+      const candidateDeletedNotes = [
+        deletedNote,
+        ...snapshotRecentlyDeletedNotes(),
+      ].sort(compareRecentlyDeletedNotes);
+
+      if (!persistBrowserWorkspace(candidateVault, candidateDeletedNotes)) {
+        recentlyDeletedState.error = "The note could not be moved to Recently Deleted.";
+        notify("The note was not deleted because browser storage is full or unavailable", "warning");
+
+        return false;
+      }
+
+      applyVaultMutation(() => applyNoteDeletion(id));
+      hydrateRecentlyDeletedNotes(candidateDeletedNotes);
+      deleteNoteEditorPosition(vaultId, id);
+      savedVersion = dirtyVersion;
+      recentlyDeletedState.error = null;
+      notify("Note moved to Recently Deleted", "neutral");
+      scheduleRecentlyDeletedExpiry();
+
+      return true;
+    }
+
+    const path = vaultSession.path;
+    if (!path) {
+      return false;
+    }
+
+    applyVaultMutation(() => applyNoteDeletion(id));
+    const candidateVault = snapshotVault();
+    const saved = await performNativeRecoverySave(
+      () => archiveWorkspaceNote(
+        path,
+        candidateVault,
+        archivedNote,
+        originalFolderPath,
+        editorPosition,
+        vaultSession.revision,
+      ),
+      (result) => {
+        applyWorkspaceSaveResult(result);
+        hydrateRecentlyDeletedNotes([
+          result.deletedNote,
+          ...recentlyDeletedState.notes,
+        ]);
+        deleteNoteEditorPosition(vaultId, id);
+      },
+      async () => {
+        const workspace = await reconcileNativeWorkspace(path);
+        if (workspace) {
+          if (workspace.vault.notes.some((candidate) => candidate.id === id)) {
+            restoreNoteNavigation(previousNavigation);
+            restoreWorkspaceUi(previousWorkspaceUi);
+          }
+
+          return true;
+        }
+
+        restoreFailedNoteDeletion(
+          index,
+          archivedNote,
+          previousVault,
+          previousNavigation,
+          previousWorkspaceUi,
+        );
+
+        return false;
+      },
+      "The note could not be moved to Recently Deleted.",
+    );
+    if (!saved) {
+      return false;
+    }
+
+    if (!(await flushNoteEditorPositions(vaultId))) {
+      addVaultWarning("The note was recovered safely, but its old editor position could not be removed.");
+    } else {
+      notifyRecoverySuccess("Note moved to Recently Deleted", "neutral");
+    }
+    scheduleRecentlyDeletedExpiry();
+
+    return true;
+  });
+}
+
+export async function restoreRecentlyDeletedNote(id: string): Promise<boolean> {
+  return runRecoveryOperation(async () => {
+    if (!(await flushVault())) {
+      return false;
+    }
+
+    const deletedNote = recentlyDeletedState.notes.find((entry) => entry.id === id);
+    if (!deletedNote) {
+      return false;
+    }
+    if (deletedNote.expiresAt <= Date.now()) {
+      recentlyDeletedState.error = "That deleted note has expired and can no longer be restored.";
+      notify(recentlyDeletedState.error, "warning");
+
+      return false;
+    }
+    const previousActiveNoteId = vaultState.activeNoteId;
+    const vaultId = currentEditorPositionVaultId();
+
+    if (vaultSession.backend === "browser") {
+      const restoredNote = buildBrowserRestoredNote(deletedNote);
+      const candidateVault = snapshotVaultWithRestoredNote(restoredNote);
+      const candidateDeletedNotes = recentlyDeletedState.notes.filter((entry) => entry.id !== id);
+      let editorPositionSaved = true;
+      if (deletedNote.editorPosition) {
+        setNoteEditorPosition(vaultId, restoredNote.id, deletedNote.editorPosition);
+        editorPositionSaved = await flushNoteEditorPositions(vaultId);
+      }
+      if (!persistBrowserWorkspace(candidateVault, candidateDeletedNotes)) {
+        if (deletedNote.editorPosition) {
+          deleteNoteEditorPosition(vaultId, restoredNote.id);
+          void flushNoteEditorPositions(vaultId);
+        }
+        recentlyDeletedState.error = "That note could not be restored.";
+        notify("The note was not restored because browser storage is full or unavailable", "warning");
+
+        return false;
+      }
+
+      applyVaultMutation(() => applyRestoredNote(restoredNote, previousActiveNoteId));
+      hydrateRecentlyDeletedNotes(candidateDeletedNotes);
+      savedVersion = dirtyVersion;
+      recentlyDeletedState.error = null;
+      if (editorPositionSaved) {
+        notify(`Restored ${restoredNote.title}`, "success");
+      } else {
+        addVaultWarning("The note was restored, but its editor position could not be saved.");
+      }
+      scheduleRecentlyDeletedExpiry();
+
+      return true;
+    }
+
+    const path = vaultSession.path;
+    if (!path) {
+      return false;
+    }
+    const saved = await performNativeRecoverySave(
+      () => restoreRecentlyDeletedNoteNative(path, id, snapshotVault(), vaultSession.revision),
+      (result) => {
+        applyWorkspaceSaveResult(result);
+        applyVaultMutation(() => applyRestoredNote(result.restoredNote, previousActiveNoteId));
+        removeRecentlyDeletedEntries([id]);
+        if (result.editorPosition) {
+          setNoteEditorPosition(vaultId, result.restoredNote.id, result.editorPosition);
+        }
+      },
+      async () => Boolean(await reconcileNativeWorkspace(path)),
+      "That note could not be restored.",
+    );
+    if (!saved) {
+      return false;
+    }
+
+    if (!(await flushNoteEditorPositions(vaultId))) {
+      addVaultWarning("The note was restored, but its editor position could not be saved.");
+    } else {
+      const restoredTitle = vaultState.notes.find((note) => note.id === vaultState.activeNoteId)?.title
+        ?? deletedNote.note.title;
+      notifyRecoverySuccess(`Restored ${restoredTitle}`, "success");
+    }
+    scheduleRecentlyDeletedExpiry();
+
+    return true;
+  });
+}
+
+export async function permanentlyDeleteRecentlyDeletedNote(id: string): Promise<boolean> {
+  return removeRecentlyDeletedNotes([id], "Note deleted permanently");
+}
+
+export async function emptyRecentlyDeletedNotes(): Promise<boolean> {
+  const ids = recentlyDeletedState.notes.map((entry) => entry.id);
+  if (!ids.length) {
+    return true;
   }
 
-  const wasActive = vaultState.activeNoteId === id;
-  const fallbackId = wasActive ? noteDeletionFallback(id) : undefined;
-  vaultState.notes.splice(index, 1);
-  deleteNoteEditorPosition(currentEditorPositionVaultId(), id);
-  removeRecentNote(id);
-  removeNoteFromNavigation(id);
-  if (wasActive) {
-    if (!fallbackId || !activateNoteAfterDeletion(fallbackId)) {
-      vaultState.activeNoteId = null;
-    }
-  }
-  notify("Note deleted", "neutral");
+  return removeRecentlyDeletedNotes(ids, "Recently Deleted emptied");
 }
 
 export function togglePinned(id: string): void {
@@ -1036,6 +1358,16 @@ export async function mergeImportedVault(
   result: ImportResult,
   replace = false,
 ): Promise<{ noteCount: number; saved: boolean }> {
+  return runExclusiveVaultDataOperation(
+    { noteCount: result.notes.length, saved: false },
+    () => mergeImportedVaultExclusive(result, replace),
+  );
+}
+
+async function mergeImportedVaultExclusive(
+  result: ImportResult,
+  replace: boolean,
+): Promise<{ noteCount: number; saved: boolean }> {
   if (!(await flushVault())) {
     return { noteCount: result.notes.length, saved: false };
   }
@@ -1177,6 +1509,10 @@ export function notify(message: string, tone: ToastTone = "neutral"): void {
 }
 
 export async function clearVault(): Promise<boolean> {
+  return runExclusiveVaultDataOperation(false, clearVaultExclusive);
+}
+
+async function clearVaultExclusive(): Promise<boolean> {
   if (!(await flushVault())) {
     return false;
   }
@@ -1206,6 +1542,481 @@ export async function clearVault(): Promise<boolean> {
   notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
 
   return saved;
+}
+
+async function runExclusiveVaultDataOperation<T>(
+  fallback: T,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (vaultSession.busy || vaultSession.phase !== "ready") {
+    return fallback;
+  }
+
+  vaultSession.busy = true;
+  try {
+    return await operation();
+  } finally {
+    vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
+  }
+}
+
+async function runRecoveryOperation(operation: () => Promise<boolean>): Promise<boolean> {
+  if (
+    recentlyDeletedState.busy
+    || vaultSession.busy
+    || vaultSession.phase !== "ready"
+  ) {
+    return false;
+  }
+
+  recentlyDeletedState.busy = true;
+  recentlyDeletedState.error = null;
+  vaultSession.busy = true;
+  uiState.commandOpen = false;
+  try {
+    return await operation();
+  } finally {
+    recentlyDeletedState.busy = false;
+    vaultSession.busy = false;
+    scheduleRecentlyDeletedExpiry();
+  }
+}
+
+async function performNativeRecoverySave<T extends WorkspaceSaveResult>(
+  request: () => Promise<T>,
+  onSuccess: (result: T) => void,
+  onFailure: () => Promise<boolean>,
+  fallbackError: string,
+): Promise<boolean> {
+  clearTimeout(persistTimer);
+  const generation = sessionGeneration;
+  const path = vaultSession.path;
+  const originalSessionIsActive = (): boolean => (
+    generation === sessionGeneration && path === vaultSession.path
+  );
+  let writesMayResume = true;
+  const operation = (async (): Promise<boolean> => {
+    try {
+      const result = await request();
+      if (!originalSessionIsActive()) {
+        writesMayResume = false;
+
+        return false;
+      }
+      onSuccess(result);
+      recentlyDeletedState.error = null;
+
+      return true;
+    } catch (error) {
+      if (!originalSessionIsActive()) {
+        writesMayResume = false;
+
+        return false;
+      }
+      let reconciled = false;
+      try {
+        reconciled = await onFailure();
+      } catch {
+        reconciled = false;
+      }
+      if (vaultSession.path !== path) {
+        writesMayResume = false;
+
+        return false;
+      }
+      writesMayResume = reconciled;
+      const message = errorMessage(error, fallbackError);
+      recentlyDeletedState.error = message;
+      vaultSession.error = message;
+      vaultSession.conflict = !reconciled;
+      uiState.vaultChooserOpen = !reconciled;
+      uiState.saveStatus = reconciled ? "saved" : "error";
+      notify(message, "warning");
+
+      return false;
+    }
+  })();
+
+  recoverySaveInFlight = operation;
+  let saved: boolean;
+  try {
+    saved = await operation;
+  } finally {
+    if (recoverySaveInFlight === operation) {
+      recoverySaveInFlight = null;
+    }
+  }
+  if (writesMayResume && savedVersion < dirtyVersion) {
+    persistTimer = setTimeout(() => void flushVault(), 0);
+  }
+
+  return saved;
+}
+
+async function reconcileNativeWorkspace(path: string): Promise<WorkspaceLoad | null> {
+  try {
+    const workspace = await openWorkspace(path, createEmptyVault());
+    applyWorkspace(workspace);
+
+    return workspace;
+  } catch {
+    return null;
+  }
+}
+
+function applyWorkspaceSaveResult(result: WorkspaceSaveResult): void {
+  vaultSession.revision = result.revision;
+  vaultSession.error = null;
+  vaultSession.conflict = false;
+  vaultSession.warnings = result.warnings;
+  uiState.saveStatus = savedVersion < dirtyVersion ? "saving" : "saved";
+  uiState.lastSavedAt = result.savedAt || Date.now();
+}
+
+function addVaultWarning(message: string): void {
+  vaultSession.warnings = [message, ...vaultSession.warnings].slice(0, 200);
+  notify(message, "warning");
+}
+
+function notifyRecoverySuccess(message: string, tone: ToastTone): void {
+  if (vaultSession.warnings.length) {
+    notify(vaultSession.warnings[0], "warning");
+  } else {
+    notify(message, tone);
+  }
+}
+
+async function removeRecentlyDeletedNotes(ids: string[], successMessage: string): Promise<boolean> {
+  return runRecoveryOperation(async () => {
+    const uniqueIds = [...new Set(ids)];
+    const availableIds = new Set(recentlyDeletedState.notes.map((entry) => entry.id));
+    if (
+      !uniqueIds.length
+      || uniqueIds.some((id) => !availableIds.has(id))
+    ) {
+      return false;
+    }
+    if (!(await flushVault())) {
+      return false;
+    }
+
+    if (vaultSession.backend === "browser") {
+      const removedIds = new Set(uniqueIds);
+      const candidateDeletedNotes = recentlyDeletedState.notes.filter(
+        (entry) => !removedIds.has(entry.id),
+      );
+      if (!persistBrowserWorkspace(snapshotVault(), candidateDeletedNotes)) {
+        recentlyDeletedState.error = "Recently Deleted could not be updated.";
+        notify("Recently Deleted was not changed because browser storage is unavailable", "warning");
+
+        return false;
+      }
+
+      hydrateRecentlyDeletedNotes(candidateDeletedNotes);
+      savedVersion = dirtyVersion;
+      recentlyDeletedState.error = null;
+      notify(successMessage, "neutral");
+      scheduleRecentlyDeletedExpiry();
+
+      return true;
+    }
+
+    const path = vaultSession.path;
+    if (!path) {
+      return false;
+    }
+    const saved = await performNativeRecoverySave(
+      () => deleteRecentlyDeletedNotes(path, uniqueIds, vaultSession.revision),
+      (result) => {
+        applyWorkspaceSaveResult(result);
+        removeRecentlyDeletedEntries(result.removedIds);
+      },
+      async () => Boolean(await reconcileNativeWorkspace(path)),
+      "Recently Deleted could not be updated.",
+    );
+    if (saved) {
+      notifyRecoverySuccess(successMessage, "neutral");
+      scheduleRecentlyDeletedExpiry();
+    }
+
+    return saved;
+  });
+}
+
+async function pruneExpiredRecentlyDeletedNotes(): Promise<boolean> {
+  const now = Date.now();
+  if (!recentlyDeletedState.notes.some((entry) => entry.expiresAt <= now)) {
+    scheduleRecentlyDeletedExpiry();
+
+    return true;
+  }
+
+  const pruned = await runRecoveryOperation(async () => {
+    if (!(await flushVault())) {
+      return false;
+    }
+
+    if (vaultSession.backend === "browser") {
+      const candidateDeletedNotes = recentlyDeletedState.notes.filter(
+        (entry) => entry.expiresAt > Date.now(),
+      );
+      if (!persistBrowserWorkspace(snapshotVault(), candidateDeletedNotes)) {
+        recentlyDeletedState.error = "Expired notes could not be removed safely.";
+        addVaultWarning("Expired notes remain recoverable because browser storage could not be updated.");
+
+        return false;
+      }
+
+      hydrateRecentlyDeletedNotes(candidateDeletedNotes);
+      savedVersion = dirtyVersion;
+      recentlyDeletedState.error = null;
+
+      return true;
+    }
+
+    const path = vaultSession.path;
+    if (!path) {
+      return false;
+    }
+
+    return performNativeRecoverySave(
+      () => pruneRecentlyDeletedNotes(path, vaultSession.revision),
+      (result) => {
+        applyWorkspaceSaveResult(result);
+        removeRecentlyDeletedEntries(result.removedIds);
+      },
+      async () => Boolean(await reconcileNativeWorkspace(path)),
+      "Expired notes could not be removed safely.",
+    );
+  });
+
+  const expiredEntriesRemain = recentlyDeletedState.notes.some(
+    (entry) => entry.expiresAt <= Date.now(),
+  );
+  if (pruned && !expiredEntriesRemain) {
+    scheduleRecentlyDeletedExpiry();
+  } else {
+    scheduleRecentlyDeletedExpiryRetry();
+  }
+  if (pruned && vaultSession.backend === "native" && vaultSession.warnings.length) {
+    if (expiredEntriesRemain) {
+      recentlyDeletedState.error = vaultSession.warnings[0];
+    }
+    notify(vaultSession.warnings[0], "warning");
+  }
+
+  return pruned;
+}
+
+function scheduleRecentlyDeletedExpiry(): void {
+  clearTimeout(recentlyDeletedTimer);
+  recentlyDeletedTimer = undefined;
+  if (!recentlyDeletedState.notes.length) {
+    recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
+
+    return;
+  }
+  if (vaultSession.phase !== "ready") {
+    return;
+  }
+
+  const nextExpiry = recentlyDeletedState.notes.reduce(
+    (earliest, entry) => Math.min(earliest, entry.expiresAt),
+    Number.POSITIVE_INFINITY,
+  );
+  const delay = Math.max(0, nextExpiry - Date.now());
+  if (delay > 0) {
+    recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
+  }
+  recentlyDeletedTimer = setTimeout(
+    () => void pruneExpiredRecentlyDeletedNotes(),
+    Math.max(25, Math.min(delay, 2_147_483_647)),
+  );
+}
+
+function scheduleRecentlyDeletedExpiryRetry(): void {
+  clearTimeout(recentlyDeletedTimer);
+  recentlyDeletedTimer = undefined;
+  if (!recentlyDeletedState.notes.length || vaultSession.phase !== "ready") {
+    return;
+  }
+
+  const delay = recentlyDeletedRetryDelay;
+  recentlyDeletedRetryDelay = Math.min(
+    recentlyDeletedRetryDelay * 2,
+    RECENTLY_DELETED_RETRY_MAX_DELAY,
+  );
+  recentlyDeletedTimer = setTimeout(
+    () => void pruneExpiredRecentlyDeletedNotes(),
+    delay,
+  );
+}
+
+function applyVaultMutation(mutation: () => void): void {
+  suppressPersistence += 1;
+  try {
+    mutation();
+  } finally {
+    suppressPersistence -= 1;
+  }
+}
+
+function applyNoteDeletion(id: string): void {
+  const index = vaultState.notes.findIndex((note) => note.id === id);
+  if (index < 0) {
+    return;
+  }
+
+  const wasActive = vaultState.activeNoteId === id;
+  const fallbackId = wasActive ? noteDeletionFallback(id) : undefined;
+  vaultState.notes.splice(index, 1);
+  removeRecentNote(id);
+  removeNoteFromNavigation(id);
+  if (
+    wasActive
+    && (!fallbackId || !activateNoteAfterDeletion(fallbackId))
+  ) {
+    vaultState.activeNoteId = null;
+  }
+}
+
+function snapshotVaultAfterDeletion(id: string): VaultData {
+  const previousVault = snapshotVault();
+  const previousNavigation = snapshotNoteNavigation();
+  const previousWorkspaceUi = snapshotWorkspaceUi();
+  applyVaultMutation(() => applyNoteDeletion(id));
+  const candidateVault = snapshotVault();
+  hydrateVault(previousVault);
+  restoreNoteNavigation(previousNavigation);
+  restoreWorkspaceUi(previousWorkspaceUi);
+
+  return candidateVault;
+}
+
+function restoreFailedNoteDeletion(
+  index: number,
+  note: Note,
+  previousVault: VaultData,
+  previousNavigation: NoteNavigationState,
+  previousWorkspaceUi: WorkspaceUiSnapshot,
+): void {
+  applyVaultMutation(() => {
+    if (!noteExists(note.id)) {
+      vaultState.notes.splice(Math.min(index, vaultState.notes.length), 0, cloneValue(note));
+    }
+    vaultState.activeNoteId = previousVault.activeNoteId;
+    vaultState.recentNoteIds.splice(
+      0,
+      vaultState.recentNoteIds.length,
+      ...previousVault.recentNoteIds,
+    );
+    vaultState.selectedFolderId = previousVault.selectedFolderId;
+    restoreNoteNavigation(previousNavigation);
+    restoreWorkspaceUi(previousWorkspaceUi);
+  });
+}
+
+function applyRestoredNote(note: Note, previousActiveNoteId: string | null): void {
+  if (noteExists(note.id)) {
+    return;
+  }
+
+  vaultState.notes.unshift(cloneValue(note));
+  recordDirectNoteNavigation(previousActiveNoteId, note.id);
+  activateNote(note.id);
+  vaultState.selectedFolderId = "all";
+  uiState.tool = "notes";
+  uiState.notesView = "editor";
+  uiState.noteFilter = "";
+}
+
+function snapshotVaultWithRestoredNote(note: Note): VaultData {
+  const previousVault = snapshotVault();
+  const previousNavigation = snapshotNoteNavigation();
+  const previousWorkspaceUi = snapshotWorkspaceUi();
+  applyVaultMutation(() => applyRestoredNote(note, vaultState.activeNoteId));
+  const candidateVault = snapshotVault();
+  hydrateVault(previousVault);
+  restoreNoteNavigation(previousNavigation);
+  restoreWorkspaceUi(previousWorkspaceUi);
+
+  return candidateVault;
+}
+
+function buildBrowserRestoredNote(deletedNote: RecentlyDeletedNote): Note {
+  const originalFolderId = folderIdForPath(deletedNote.originalFolderPath);
+  const folderId = originalFolderId ?? null;
+  const baseTitle = deletedNote.note.title.trim() || "Untitled note";
+  let title = baseTitle;
+  let suffix = 2;
+  while (restoredTitleConflicts(title, folderId)) {
+    title = `${baseTitle} ${suffix}`;
+    suffix += 1;
+  }
+
+  const originalExtension = deletedNote.note.relativePath.toLocaleLowerCase().endsWith(".markdown")
+    ? "markdown"
+    : "md";
+  const restoredFolderPath = folderId ? folderPath(folderId) : "";
+  const relativePath = `${restoredFolderPath ? `${restoredFolderPath}/` : ""}${safeNoteStem(title)}.${originalExtension}`;
+
+  return {
+    ...cloneValue(deletedNote.note),
+    id: noteExists(deletedNote.note.id) ? createId("note") : deletedNote.note.id,
+    title,
+    relativePath,
+    folderId,
+  };
+}
+
+function folderIdForPath(path: string): string | undefined {
+  if (!path) {
+    return undefined;
+  }
+
+  return vaultState.folders.find((folder) => folderPath(folder.id) === path)?.id;
+}
+
+function restoredTitleConflicts(title: string, folderId: string | null): boolean {
+  const note: Note = {
+    id: "",
+    title,
+    content: "",
+    relativePath: "",
+    folderId,
+    tags: [],
+    pinned: false,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+
+  return vaultState.notes.some(
+    (candidate) => candidate.folderId === folderId && noteStemKey(candidate) === noteStemKey(note),
+  ) || vaultState.folders.some(
+    (folder) => folder.parentId === folderId && folderConflictsWithNote(folder.name, note),
+  );
+}
+
+function removeRecentlyDeletedEntries(ids: string[]): void {
+  const removedIds = new Set(ids);
+  hydrateRecentlyDeletedNotes(
+    recentlyDeletedState.notes.filter((entry) => !removedIds.has(entry.id)),
+  );
+}
+
+function snapshotWorkspaceUi(): WorkspaceUiSnapshot {
+  return {
+    tool: uiState.tool,
+    notesView: uiState.notesView,
+    noteFilter: uiState.noteFilter,
+  };
+}
+
+function restoreWorkspaceUi(snapshot: WorkspaceUiSnapshot): void {
+  uiState.tool = snapshot.tool;
+  uiState.notesView = snapshot.notesView;
+  uiState.noteFilter = snapshot.noteFilter;
 }
 
 function activateNote(id: string): boolean {
@@ -1491,33 +2302,8 @@ function createId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
-interface StoredVault {
-  raw: string;
-  vault: VaultData;
-  needsRewrite: boolean;
-}
-
-function readStoredVault(): StoredVault | null {
-  const raw = safeStorageGet(STORAGE_KEY);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<VaultData>;
-    if (!Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) {
-      return null;
-    }
-    const vault = normalizeVault(parsed);
-
-    return {
-      raw,
-      vault,
-      needsRewrite: parsed.selectedFolderId !== vault.selectedFolderId
-        || !stringArraysMatch(parsed.recentNoteIds, vault.recentNoteIds),
-    };
-  } catch {
-    return null;
-  }
+function readStoredVault(): StoredBrowserWorkspace | null {
+  return readBrowserWorkspace(normalizeVault);
 }
 
 function normalizeVault(input: Partial<VaultData>): VaultData {
@@ -1616,14 +2402,12 @@ function normalizeRecentNoteIds(
   return recentNoteIds;
 }
 
-function stringArraysMatch(value: unknown, expected: string[]): boolean {
-  return Array.isArray(value)
-    && value.length === expected.length
-    && value.every((item, index) => item === expected[index]);
+function snapshotVault(): VaultData {
+  return cloneValue(vaultState);
 }
 
-function snapshotVault(): VaultData {
-  return JSON.parse(JSON.stringify(vaultState)) as VaultData;
+function snapshotRecentlyDeletedNotes(): RecentlyDeletedNote[] {
+  return cloneValue(recentlyDeletedState.notes);
 }
 
 function hydrateVault(vault: Partial<VaultData>): void {
@@ -1635,10 +2419,24 @@ function hydrateVault(vault: Partial<VaultData>): void {
   }
 }
 
+function hydrateRecentlyDeletedNotes(notes: RecentlyDeletedNote[]): void {
+  recentlyDeletedState.notes = cloneValue(notes).sort(compareRecentlyDeletedNotes);
+  if (!notes.length) {
+    clearTimeout(recentlyDeletedTimer);
+    recentlyDeletedTimer = undefined;
+    uiState.notesView = "editor";
+  }
+}
+
+function cloneValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.recentVaults): void {
   const previousPath = vaultSession.path;
   sessionGeneration += 1;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
+  hydrateRecentlyDeletedNotes(workspace.recentlyDeletedNotes);
   initializeNoteEditorPositions(
     "native",
     workspace.descriptor.path,
@@ -1651,6 +2449,7 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
     pruneNoteNavigation();
   } else {
     resetNoteNavigation();
+    uiState.notesView = "editor";
   }
   vaultSession.phase = "ready";
   vaultSession.path = workspace.descriptor.path;
@@ -1667,6 +2466,8 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
   uiState.commandOpen = false;
   resetSearchState();
   uiState.vaultChooserOpen = false;
+  recentlyDeletedState.error = null;
+  scheduleRecentlyDeletedExpiry();
   if (workspace.warnings.length) {
     notify(`${workspace.warnings.length} ${workspace.warnings.length === 1 ? "file warning" : "file warnings"} while opening the vault`, "warning");
   }
@@ -1714,9 +2515,14 @@ async function flushBeforeVaultChange(): Promise<boolean> {
   return positionsSaved;
 }
 
-function persistBrowserVault(vault: VaultData): boolean {
+function persistBrowserWorkspace(
+  vault: VaultData,
+  recentlyDeletedNotes: RecentlyDeletedNote[],
+): boolean {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(vault));
+    writeBrowserWorkspace(vault, recentlyDeletedNotes);
+    vaultSession.error = null;
+    vaultSession.conflict = false;
     uiState.saveStatus = "saved";
     uiState.lastSavedAt = Date.now();
 
@@ -1734,7 +2540,12 @@ function installVaultLifecycleHandlers(): void {
   }
 
   window.addEventListener("blur", () => void flushApplicationState());
-  window.addEventListener("focus", () => void refreshWorkspaceFromDisk());
+  window.addEventListener("focus", () => {
+    void (async () => {
+      await refreshWorkspaceFromDisk();
+      await pruneExpiredRecentlyDeletedNotes();
+    })();
+  });
   window.addEventListener("beforeunload", () => {
     void flushVault();
     void flushNoteEditorPositions();
@@ -1743,7 +2554,10 @@ function installVaultLifecycleHandlers(): void {
     if (document.visibilityState === "hidden") {
       void flushApplicationState();
     } else {
-      void refreshWorkspaceFromDisk();
+      void (async () => {
+        await refreshWorkspaceFromDisk();
+        await pruneExpiredRecentlyDeletedNotes();
+      })();
     }
   });
 
@@ -1817,6 +2631,7 @@ async function refreshWorkspaceFromDisk(): Promise<void> {
     || checkingExternalChanges
     || document.visibilityState === "hidden"
     || saveInFlight
+    || recoverySaveInFlight
     || dirtyVersion > savedVersion
   ) return;
 
@@ -1832,6 +2647,8 @@ async function refreshWorkspaceFromDisk(): Promise<void> {
     if (
       generation !== sessionGeneration
       || path !== vaultSession.path
+      || vaultSession.busy
+      || recoverySaveInFlight
       || dirtyVersion > savedVersion
     ) return;
     applyWorkspace(workspace);
@@ -1900,16 +2717,6 @@ function clampZoom(zoom: number): number {
   const roundedZoom = Number((Math.round(zoom / ZOOM_STEP) * ZOOM_STEP).toFixed(2));
 
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, roundedZoom));
-}
-
-function storageFingerprint(value: string): string {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-
-  return `v1-${value.length}-${(hash >>> 0).toString(16)}`;
 }
 
 function applyEnabledSnippets(): void {

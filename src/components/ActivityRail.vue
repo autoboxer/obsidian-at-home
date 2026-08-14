@@ -31,6 +31,9 @@ function selectTool(tool: ToolView): void {
     return;
   }
   uiState.tool = tool;
+  if (tool === "notes") {
+    uiState.notesView = "editor";
+  }
 }
 
 function handleZoomFocusOut(event: FocusEvent): void {

@@ -206,8 +206,8 @@ function requestDelete(): void {
     return;
   }
   noteMenuOpen.value = false;
-  if (window.confirm(`Delete “${activeNote.value.title || "Untitled note"}”? This cannot be undone.`)) {
-    deleteNote(activeNote.value.id);
+  if (window.confirm(`Delete “${activeNote.value.title || "Untitled note"}”? It will remain in Recently Deleted for seven days.`)) {
+    void deleteNote(activeNote.value.id);
   }
 }
 

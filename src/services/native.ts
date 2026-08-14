@@ -2,11 +2,15 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   ExportResult,
   ImportResult,
+  Note,
   NoteEditorPosition,
   VaultData,
   VaultDescriptor,
+  WorkspaceArchiveResult,
   WorkspaceBootstrap,
   WorkspaceLoad,
+  WorkspaceRecoveryMutationResult,
+  WorkspaceRestoreResult,
   WorkspaceSaveResult,
 } from "../types";
 
@@ -71,6 +75,60 @@ export async function saveWorkspace(
   expectedRevision: number,
 ): Promise<WorkspaceSaveResult> {
   return invoke<WorkspaceSaveResult>("workspace_save", { path, vault, expectedRevision });
+}
+
+export async function archiveWorkspaceNote(
+  path: string,
+  vault: VaultData,
+  note: Note,
+  originalFolderPath: string,
+  editorPosition: NoteEditorPosition | undefined,
+  expectedRevision: number,
+): Promise<WorkspaceArchiveResult> {
+  return invoke<WorkspaceArchiveResult>("workspace_archive_note", {
+    path,
+    vault,
+    note,
+    originalFolderPath,
+    editorPosition,
+    expectedRevision,
+  });
+}
+
+export async function restoreRecentlyDeletedNote(
+  path: string,
+  deletedNoteId: string,
+  vault: VaultData,
+  expectedRevision: number,
+): Promise<WorkspaceRestoreResult> {
+  return invoke<WorkspaceRestoreResult>("workspace_restore_recently_deleted_note", {
+    path,
+    deletedNoteId,
+    vault,
+    expectedRevision,
+  });
+}
+
+export async function deleteRecentlyDeletedNotes(
+  path: string,
+  deletedNoteIds: string[],
+  expectedRevision: number,
+): Promise<WorkspaceRecoveryMutationResult> {
+  return invoke<WorkspaceRecoveryMutationResult>("workspace_delete_recently_deleted_notes", {
+    path,
+    deletedNoteIds,
+    expectedRevision,
+  });
+}
+
+export async function pruneRecentlyDeletedNotes(
+  path: string,
+  expectedRevision: number,
+): Promise<WorkspaceRecoveryMutationResult> {
+  return invoke<WorkspaceRecoveryMutationResult>("workspace_prune_recently_deleted_notes", {
+    path,
+    expectedRevision,
+  });
 }
 
 export async function saveWorkspaceEditorPositions(
