@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import { RangeSet, StateEffect } from "@codemirror/state";
+import { EditorSelection, RangeSet, StateEffect } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -28,7 +28,12 @@ import { parseLiveMarkdownTables } from "./liveMarkdownTable";
 import { sanitizeLinkUrl } from "./markdown";
 import { parseWikiLinks } from "./wikiLinks";
 import type { EditorState, Extension, SelectionRange } from "@codemirror/state";
-import type { DecorationSet, ViewUpdate, WidgetType } from "@codemirror/view";
+import type {
+  DecorationSet,
+  MouseSelectionStyle,
+  ViewUpdate,
+  WidgetType,
+} from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
@@ -64,6 +69,12 @@ interface LiveConstructOptions {
 
 interface StoredDecoration extends LiveMarkdownRange {
   decoration: Decoration;
+}
+
+interface InlineMarkupSpan extends LiveMarkdownRange {
+  contentFrom: number;
+  contentTo: number;
+  syntax: LiveMarkdownRange[];
 }
 
 interface LiveMarkdownModel {
@@ -213,7 +224,230 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
 );
 
 export function liveMarkdownExtension(options: LiveMarkdownOptions): Extension {
-  return liveMarkdownPlugin.of(options);
+  return [
+    liveMarkdownPlugin.of(options),
+    EditorView.mouseSelectionStyle.of(inlineMarkupMouseSelection),
+  ];
+}
+
+function inlineMarkupMouseSelection(
+  view: EditorView,
+  event: MouseEvent,
+): MouseSelectionStyle | null {
+  if (
+    event.button !== 0 ||
+    event.detail !== 1 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey
+  ) {
+    return null;
+  }
+
+  let startSelection = view.state.selection;
+  let start = inlineMarkupPointerPosition(view, event);
+
+  return {
+    get(currentEvent, extend, multiple) {
+      const current = inlineMarkupPointerPosition(view, currentEvent);
+      const range = start.pos === current.pos
+        ? EditorSelection.cursor(current.pos, current.assoc)
+        : EditorSelection.range(
+          start.pos,
+          current.pos,
+          undefined,
+          undefined,
+          current.assoc,
+        );
+
+      if (extend) {
+        return startSelection.replaceRange(
+          startSelection.main.extend(range.from, range.to, range.assoc),
+        );
+      }
+      if (multiple) {
+        return startSelection.addRange(range);
+      }
+
+      return EditorSelection.create([range]);
+    },
+    update(update) {
+      if (!update.docChanged) {
+        return false;
+      }
+
+      start = {
+        pos: update.changes.mapPos(start.pos, start.assoc),
+        assoc: start.assoc,
+      };
+      startSelection = startSelection.map(update.changes);
+
+      return false;
+    },
+  };
+}
+
+function inlineMarkupPointerPosition(
+  view: EditorView,
+  event: MouseEvent,
+): { assoc: -1 | 1; pos: number } {
+  const native = view.posAndSideAtCoords({
+    x: event.clientX,
+    y: event.clientY,
+  }, false);
+  const line = view.state.doc.lineAt(native.pos);
+  let opening: number | undefined;
+  let closing: number | undefined;
+
+  for (const span of inlineMarkupSpans(view.state, line.from, line.to)) {
+    if (inlineMarkupSpanIsRevealed(view, span)) {
+      continue;
+    }
+
+    const start = view.coordsAtPos(span.contentFrom, 1);
+    const end = view.coordsAtPos(span.contentTo, -1);
+    if (!start || !end) {
+      continue;
+    }
+
+    const startX = (start.left + start.right) / 2;
+    const endX = (end.left + end.right) / 2;
+    const leftToRight = endX >= startX;
+    const beforeContent = leftToRight
+      ? event.clientX <= startX
+      : event.clientX >= startX;
+    const afterContent = leftToRight
+      ? event.clientX >= endX
+      : event.clientX <= endX;
+
+    if (
+      beforeContent &&
+      native.pos >= span.from &&
+      native.pos <= span.contentFrom
+    ) {
+      opening = opening === undefined
+        ? span.from
+        : Math.min(opening, span.from);
+    }
+    if (
+      afterContent &&
+      native.pos >= span.contentTo &&
+      native.pos <= span.to
+    ) {
+      closing = closing === undefined
+        ? span.to
+        : Math.max(closing, span.to);
+    }
+  }
+
+  if (opening !== undefined && closing !== undefined && opening === closing) {
+    return { pos: opening, assoc: native.assoc };
+  }
+  if (opening !== undefined) {
+    return { pos: opening, assoc: 1 };
+  }
+  if (closing !== undefined) {
+    return { pos: closing, assoc: -1 };
+  }
+
+  return native;
+}
+
+function inlineMarkupSpans(
+  state: EditorState,
+  from: number,
+  to: number,
+): InlineMarkupSpan[] {
+  const spans: InlineMarkupSpan[] = [];
+
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter(reference) {
+      const span = inlineMarkupSpan(reference, state);
+      if (span) {
+        spans.push(span);
+      }
+
+      return undefined;
+    },
+  });
+
+  return spans;
+}
+
+function inlineMarkupSpan(
+  node: SyntaxNodeRef,
+  state: EditorState,
+): InlineMarkupSpan | undefined {
+  const markerName = node.name === "InlineCode"
+    ? "CodeMark"
+    : node.name === "StrongEmphasis" || node.name === "Emphasis"
+      ? "EmphasisMark"
+      : node.name === "Strikethrough" ? "StrikethroughMark" : undefined;
+  if (!markerName) {
+    return undefined;
+  }
+
+  const markers = node.node.getChildren(markerName);
+  const opening = markers[0];
+  const closing = markers.at(-1);
+  if (!opening || !closing || opening === closing || opening.to > closing.from) {
+    return undefined;
+  }
+
+  const syntax: LiveMarkdownRange[] = [
+    { from: opening.from, to: opening.to },
+    { from: closing.from, to: closing.to },
+  ];
+  let contentFrom = opening.to;
+  let contentTo = closing.from;
+  if (node.name === "InlineCode") {
+    const rawContent = state.sliceDoc(contentFrom, contentTo);
+    if (/\r|\n/.test(rawContent)) {
+      return undefined;
+    }
+    if (/^\s.*\s$/.test(rawContent) && rawContent.trim()) {
+      syntax.push(
+        { from: contentFrom, to: contentFrom + 1 },
+        { from: contentTo - 1, to: contentTo },
+      );
+      contentFrom += 1;
+      contentTo -= 1;
+    }
+  }
+
+  return {
+    from: node.from,
+    to: node.to,
+    contentFrom,
+    contentTo,
+    syntax,
+  };
+}
+
+function inlineMarkupSpanIsRevealed(
+  view: EditorView,
+  span: InlineMarkupSpan,
+): boolean {
+  if (documentSearchMatches(view.state).some((match) =>
+    span.syntax.some((syntax) => rangesOverlap(match, syntax))
+  )) {
+    return true;
+  }
+  if (!view.hasFocus) {
+    return false;
+  }
+
+  return view.state.selection.ranges.some((selection) => {
+    if (selection.empty) {
+      return span.syntax.some((syntax) =>
+        selection.head >= syntax.from && selection.head <= syntax.to
+      );
+    }
+
+    return span.syntax.some((syntax) => rangesOverlap(selection, syntax));
+  });
 }
 
 function parseLiveMarkdownModel(
@@ -764,18 +998,13 @@ function addInlineDecorations(
         return undefined;
       }
       if (node.name === "StrongEmphasis") {
-        addDelimitedMark(model, node, "EmphasisMark", "is-strong");
+        addInlineMarkupDecoration(model, node, state, "is-strong");
       } else if (node.name === "Emphasis") {
-        addDelimitedMark(model, node, "EmphasisMark", "is-emphasis");
+        addInlineMarkupDecoration(model, node, state, "is-emphasis");
       } else if (node.name === "Strikethrough") {
-        addDelimitedMark(
-          model,
-          node,
-          "StrikethroughMark",
-          "is-strikethrough",
-        );
+        addInlineMarkupDecoration(model, node, state, "is-strikethrough");
       } else if (node.name === "InlineCode") {
-        addInlineCodeDecoration(model, node, value);
+        addInlineMarkupDecoration(model, node, state, "is-code");
       } else if (
         node.name === "Autolink" ||
         node.name === "Link"
@@ -788,72 +1017,23 @@ function addInlineDecorations(
   });
 }
 
-function addDelimitedMark(
+function addInlineMarkupDecoration(
   model: LiveMarkdownModel,
   node: SyntaxNodeRef,
-  markerName: string,
+  state: EditorState,
   className: string,
 ): void {
-  const markers = node.node.getChildren(markerName);
-  const opening = markers[0];
-  const closing = markers.at(-1);
-  if (!opening || !closing || opening === closing || opening.to > closing.from) {
+  const span = inlineMarkupSpan(node, state);
+  if (!span) {
     return;
   }
 
-  addConstruct(model, node.from, node.to, [
-    { from: opening.from, to: opening.to },
-    { from: closing.from, to: closing.to },
-  ]);
-  if (opening.to < closing.from) {
-    addMarkDecoration(
-      model,
-      { from: opening.to, to: closing.from },
-      `live-inline-segment ${className}`,
-    );
-  }
-}
-
-function addInlineCodeDecoration(
-  model: LiveMarkdownModel,
-  node: SyntaxNodeRef,
-  value: string,
-): void {
-  const markers = node.node.getChildren("CodeMark");
-  const opening = markers[0];
-  const closing = markers.at(-1);
-  if (!opening || !closing || opening === closing || opening.to > closing.from) {
-    return;
-  }
-
-  const rawContent = value.slice(opening.to, closing.from);
-  if (/\r|\n/.test(rawContent)) {
-    return;
-  }
-
-  const syntax: HiddenSyntax[] = [
-    { from: opening.from, to: opening.to },
-    { from: closing.from, to: closing.to },
-  ];
-  let contentFrom = opening.to;
-  let contentTo = closing.from;
-  if (/^\s.*\s$/.test(rawContent) && rawContent.trim()) {
-    syntax.push(
-      { from: contentFrom, to: contentFrom + 1 },
-      { from: contentTo - 1, to: contentTo },
-    );
-    contentFrom += 1;
-    contentTo -= 1;
-  }
-
-  addConstruct(model, node.from, node.to, syntax);
-  if (contentFrom < contentTo) {
-    addMarkDecoration(
-      model,
-      { from: contentFrom, to: contentTo },
-      "live-inline-segment is-code",
-    );
-  }
+  addConstruct(model, span.from, span.to, span.syntax);
+  addMarkDecoration(
+    model,
+    { from: span.contentFrom, to: span.contentTo },
+    `live-inline-segment ${className}`,
+  );
 }
 
 function addMarkdownLinkDecoration(
