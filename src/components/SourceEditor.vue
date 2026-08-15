@@ -51,6 +51,7 @@ import {
   insertLiveMarkdownTableLineBreak,
   insertLiveMarkdownTableRow,
   navigateLiveMarkdownTable,
+  type LiveMarkdownTableNavigation,
 } from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
@@ -250,29 +251,39 @@ const handleShiftEnter: Command = (view) => {
   return true;
 };
 
+function applyTableNavigation(
+  view: EditorView,
+  navigation: LiveMarkdownTableNavigation,
+): boolean {
+  const value = view.state.doc.toString();
+  const tableEdit = navigateLiveMarkdownTable(
+    value,
+    parseLiveMarkdownTables(value),
+    view.state.selection.main.head,
+    navigation,
+  );
+  if (!tableEdit) {
+    return false;
+  }
+
+  applyFullDocumentEdit(
+    view,
+    tableEdit.value,
+    tableEdit.selectionStart,
+    tableEdit.selectionEnd,
+    tableEdit.value === value ? "select.table" : "input.table",
+  );
+
+  return true;
+}
+
 const handleTab: Command = (view) => {
   if (view.composing) {
     return false;
   }
 
-  const value = view.state.doc.toString();
   const selection = view.state.selection.main;
-  const tableEdit = navigateLiveMarkdownTable(
-    value,
-    parseLiveMarkdownTables(value),
-    selection.from,
-    selection.to,
-    "next-cell",
-  );
-  if (tableEdit) {
-    applyFullDocumentEdit(
-      view,
-      tableEdit.value,
-      tableEdit.selectionStart,
-      tableEdit.selectionEnd,
-      "select.table",
-    );
-
+  if (applyTableNavigation(view, "next-cell")) {
     return true;
   }
   if (adjustSelectedLines(view, false)) {
@@ -294,30 +305,29 @@ const handleShiftTab: Command = (view) => {
     return false;
   }
 
-  const value = view.state.doc.toString();
-  const selection = view.state.selection.main;
-  const tableEdit = navigateLiveMarkdownTable(
-    value,
-    parseLiveMarkdownTables(value),
-    selection.from,
-    selection.to,
-    "previous-cell",
-  );
-  if (tableEdit) {
-    applyFullDocumentEdit(
-      view,
-      tableEdit.value,
-      tableEdit.selectionStart,
-      tableEdit.selectionEnd,
-      "select.table",
-    );
-
+  if (applyTableNavigation(view, "previous-cell")) {
     return true;
   }
 
   adjustSelectedLines(view, true);
 
   return true;
+};
+
+const handleTableArrowDown: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  return applyTableNavigation(view, "down-row");
+};
+
+const handleTableArrowUp: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  return applyTableNavigation(view, "up-row");
 };
 
 const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
@@ -501,6 +511,8 @@ onMounted(() => {
         Prec.high(keymap.of([
           { key: "ArrowDown", run: suggestionDown },
           { key: "ArrowUp", run: suggestionUp },
+          { key: "ArrowDown", run: handleTableArrowDown },
+          { key: "ArrowUp", run: handleTableArrowUp },
           { key: "Enter", run: acceptSuggestion },
           { key: "Escape", run: closeSuggestions },
           { key: "Shift-Enter", run: handleShiftEnter },
