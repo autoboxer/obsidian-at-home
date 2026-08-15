@@ -529,6 +529,17 @@ onMounted(() => {
     positionCaptureEnabled = true;
     schedulePositionCapture(view);
   }
+  window.requestAnimationFrame(() => {
+    if (editorView.value !== view || !view.dom.isConnected) {
+      return;
+    }
+
+    const scrollLeft = view.scrollDOM.scrollLeft;
+    const scrollTop = view.scrollDOM.scrollTop;
+    view.focus();
+    view.scrollDOM.scrollLeft = scrollLeft;
+    view.scrollDOM.scrollTop = scrollTop;
+  });
 });
 
 onBeforeUnmount(() => {
