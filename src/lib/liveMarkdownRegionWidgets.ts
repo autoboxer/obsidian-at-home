@@ -290,7 +290,7 @@ export class EmptyTableCellWidget extends WidgetType {
   constructor(
     private readonly position: number,
     private readonly columnIndex: number,
-    private readonly last: boolean,
+    private readonly className: string,
   ) {
     super();
   }
@@ -298,16 +298,15 @@ export class EmptyTableCellWidget extends WidgetType {
   eq(other: EmptyTableCellWidget): boolean {
     return this.position === other.position &&
       this.columnIndex === other.columnIndex &&
-      this.last === other.last;
+      this.className === other.className;
   }
 
   toDOM(view: EditorView): HTMLElement {
     const cell = view.dom.ownerDocument.createElement("span");
     cell.className = [
-      "live-table-cell",
+      this.className,
       "is-empty",
-      this.last ? "is-last" : "",
-    ].filter(Boolean).join(" ");
+    ].join(" ");
     cell.dataset.columnIndex = String(this.columnIndex);
     cell.textContent = "\u00a0";
     cell.setAttribute("aria-hidden", "true");
@@ -323,6 +322,19 @@ export class EmptyTableCellWidget extends WidgetType {
     });
 
     return cell;
+  }
+
+  coordsAt(dom: HTMLElement): DOMRect | null {
+    const text = dom.firstChild;
+    if (!text) {
+      return null;
+    }
+
+    const range = dom.ownerDocument.createRange();
+    range.setStart(text, 0);
+    range.collapse(true);
+
+    return range.getBoundingClientRect();
   }
 }
 

@@ -541,6 +541,7 @@ function addTableRowDecorations(
         decoration: Decoration.mark({
           attributes: { "data-column-index": String(index) },
           class: className,
+          inclusive: true,
         }),
       });
     } else {
@@ -550,7 +551,7 @@ function addTableRowDecorations(
         to: position,
         decoration: Decoration.widget({
           side: index + 1,
-          widget: new EmptyTableCellWidget(position, index, cellLast),
+          widget: new EmptyTableCellWidget(position, index, className),
         }),
       });
     }
