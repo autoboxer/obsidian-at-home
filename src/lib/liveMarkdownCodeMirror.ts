@@ -21,6 +21,7 @@ import {
   CodeFenceFooterWidget,
   CodeFenceHeaderWidget,
   EmptyTableCellWidget,
+  TableCellBreakWidget,
   TableDelimiterWidget,
 } from "./liveMarkdownRegionWidgets";
 import { parseLiveMarkdownTables } from "./liveMarkdownTable";
@@ -51,8 +52,14 @@ interface LiveConstruct {
   boundaryReveal: "construct" | "none" | "syntax";
   from: number;
   renderedDecorations: StoredDecoration[];
+  revealWithinSyntax: boolean;
   to: number;
   syntax: HiddenSyntax[];
+}
+
+interface LiveConstructOptions {
+  boundaryReveal?: LiveConstruct["boundaryReveal"];
+  revealWithinSyntax?: boolean;
 }
 
 interface StoredDecoration extends LiveMarkdownRange {
@@ -253,7 +260,7 @@ function parseLiveMarkdownModel(
       from: table.delimiter.from,
       to: table.delimiter.end,
     });
-    addTableDecorations(model, table);
+    addTableDecorations(model, state, table);
   }
 
   const markdownLinkRanges = supportedMarkdownLinkRanges(
@@ -325,7 +332,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)], "none");
+    }], [renderedListLineDecoration(block)], { boundaryReveal: "none" });
     if (block.task.checked && block.content.from < block.content.to) {
       addMarkDecoration(model, block.content, "live-task-content");
     }
@@ -343,7 +350,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)], "none");
+    }], [renderedListLineDecoration(block)], { boundaryReveal: "none" });
 
     return;
   }
@@ -463,9 +470,10 @@ function addMultilineMarkDecoration(
 
 function addTableDecorations(
   model: LiveMarkdownModel,
+  state: EditorState,
   table: LiveMarkdownTable,
 ): void {
-  addTableRowDecorations(model, table, table.header, "header", false);
+  addTableRowDecorations(model, state, table, table.header, "header", false);
 
   const delimiterLast = table.rows.length === 0;
   addConstruct(
@@ -493,6 +501,7 @@ function addTableDecorations(
   table.rows.forEach((row, index) => {
     addTableRowDecorations(
       model,
+      state,
       table,
       row,
       "body",
@@ -503,13 +512,17 @@ function addTableDecorations(
 
 function addTableRowDecorations(
   model: LiveMarkdownModel,
+  state: EditorState,
   table: LiveMarkdownTable,
   row: LiveMarkdownTableRow,
   role: "body" | "header",
   last: boolean,
 ): void {
   const cells = row.cells.slice(0, table.columnCount);
-  const syntax = tableRowSyntax(row, cells);
+  const syntax = [
+    ...tableRowSyntax(row, cells),
+    ...tableCellBreakSyntax(state, cells),
+  ].sort((left, right) => left.from - right.from || left.to - right.to);
   const classes = [
     "live-markdown-block",
     "is-table-row",
@@ -535,6 +548,7 @@ function addTableRowDecorations(
         decoration: Decoration.mark({
           attributes: { "data-column-index": String(index) },
           class: className,
+          inclusive: true,
         }),
       });
     } else {
@@ -544,7 +558,7 @@ function addTableRowDecorations(
         to: position,
         decoration: Decoration.widget({
           side: index + 1,
-          widget: new EmptyTableCellWidget(position, index, cellLast),
+          widget: new EmptyTableCellWidget(position, index, className),
         }),
       });
     }
@@ -556,7 +570,10 @@ function addTableRowDecorations(
     row.to,
     syntax,
     renderedDecorations,
-    "construct",
+    {
+      boundaryReveal: "construct",
+      revealWithinSyntax: false,
+    },
   );
 }
 
@@ -578,6 +595,59 @@ function tableRowSyntax(
   }
 
   return syntax;
+}
+
+function tableCellBreakSyntax(
+  state: EditorState,
+  cells: readonly LiveMarkdownTableRow["cells"][number][],
+): HiddenSyntax[] {
+  const syntax: HiddenSyntax[] = [];
+  const firstCell = cells[0];
+  const lastCell = cells.at(-1);
+  if (!firstCell || !lastCell) {
+    return syntax;
+  }
+
+  syntaxTree(state).iterate({
+    from: firstCell.from,
+    to: lastCell.to,
+    enter(reference) {
+      if (reference.name !== "HTMLTag") {
+        return undefined;
+      }
+
+      const cell = cells.find((candidate) =>
+        reference.from >= candidate.from && reference.to <= candidate.to
+      );
+      const source = state.sliceDoc(reference.from, reference.to);
+      if (
+        !cell ||
+        !/^<br[ \t]*\/?>$/i.test(source) ||
+        characterIsEscaped(cell.source, reference.from - cell.from)
+      ) {
+        return false;
+      }
+
+      syntax.push({
+        from: reference.from,
+        to: reference.to,
+        widget: new TableCellBreakWidget(),
+      });
+
+      return false;
+    },
+  });
+
+  return syntax;
+}
+
+function characterIsEscaped(value: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+
+  return backslashes % 2 === 1;
 }
 
 function tableCellClass(
@@ -859,7 +929,7 @@ function addConstruct(
   to: number,
   syntax: readonly HiddenSyntax[],
   renderedDecorations: readonly StoredDecoration[] = [],
-  boundaryReveal: LiveConstruct["boundaryReveal"] = "syntax",
+  options: LiveConstructOptions = {},
 ): void {
   const nonemptySyntax = syntax.filter((range) => range.from < range.to);
   if (!nonemptySyntax.length) {
@@ -867,9 +937,10 @@ function addConstruct(
   }
 
   model.constructs.push({
-    boundaryReveal,
+    boundaryReveal: options.boundaryReveal ?? "syntax",
     from,
     renderedDecorations: [...renderedDecorations],
+    revealWithinSyntax: options.revealWithinSyntax ?? true,
     to,
     syntax: nonemptySyntax,
   });
@@ -950,7 +1021,7 @@ function selectionRevealsConstruct(
     const insideSyntax = construct.syntax.some((syntax) =>
       selection.head > syntax.from && selection.head < syntax.to
     );
-    if (insideSyntax) {
+    if (insideSyntax && construct.revealWithinSyntax) {
       return true;
     }
     if (construct.boundaryReveal === "syntax") {

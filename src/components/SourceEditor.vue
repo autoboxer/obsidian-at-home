@@ -47,7 +47,12 @@ import {
 } from "../lib/frontmatter";
 import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
 import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
-import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
+import {
+  insertLiveMarkdownTableLineBreak,
+  insertLiveMarkdownTableRow,
+  navigateLiveMarkdownTable,
+  type LiveMarkdownTableNavigation,
+} from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { Extension, SelectionRange } from "@codemirror/state";
@@ -195,12 +200,10 @@ const handleEnter: Command = (view) => {
 
   const value = view.state.doc.toString();
   const selection = view.state.selection.main;
-  const tableEdit = navigateLiveMarkdownTable(
+  const tableEdit = insertLiveMarkdownTableRow(
     value,
     parseLiveMarkdownTables(value),
-    selection.from,
-    selection.to,
-    "next-row",
+    selection.head,
   );
   if (tableEdit) {
     applyFullDocumentEdit(
@@ -220,29 +223,67 @@ const handleEnter: Command = (view) => {
   return insertNewline(view);
 };
 
-const handleTab: Command = (view) => {
+const handleShiftEnter: Command = (view) => {
   if (view.composing) {
     return false;
   }
 
   const value = view.state.doc.toString();
   const selection = view.state.selection.main;
+  const tableEdit = insertLiveMarkdownTableLineBreak(
+    value,
+    parseLiveMarkdownTables(value),
+    selection.anchor,
+    selection.head,
+  );
+  if (!tableEdit) {
+    return false;
+  }
+
+  applyFullDocumentEdit(
+    view,
+    tableEdit.value,
+    tableEdit.selectionStart,
+    tableEdit.selectionEnd,
+    "input.table",
+  );
+
+  return true;
+};
+
+function applyTableNavigation(
+  view: EditorView,
+  navigation: LiveMarkdownTableNavigation,
+): boolean {
+  const value = view.state.doc.toString();
   const tableEdit = navigateLiveMarkdownTable(
     value,
     parseLiveMarkdownTables(value),
-    selection.from,
-    selection.to,
-    "next-cell",
+    view.state.selection.main.head,
+    navigation,
   );
-  if (tableEdit) {
-    applyFullDocumentEdit(
-      view,
-      tableEdit.value,
-      tableEdit.selectionStart,
-      tableEdit.selectionEnd,
-      "select.table",
-    );
+  if (!tableEdit) {
+    return false;
+  }
 
+  applyFullDocumentEdit(
+    view,
+    tableEdit.value,
+    tableEdit.selectionStart,
+    tableEdit.selectionEnd,
+    tableEdit.value === value ? "select.table" : "input.table",
+  );
+
+  return true;
+}
+
+const handleTab: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+  if (applyTableNavigation(view, "next-cell")) {
     return true;
   }
   if (adjustSelectedLines(view, false)) {
@@ -264,30 +305,29 @@ const handleShiftTab: Command = (view) => {
     return false;
   }
 
-  const value = view.state.doc.toString();
-  const selection = view.state.selection.main;
-  const tableEdit = navigateLiveMarkdownTable(
-    value,
-    parseLiveMarkdownTables(value),
-    selection.from,
-    selection.to,
-    "previous-cell",
-  );
-  if (tableEdit) {
-    applyFullDocumentEdit(
-      view,
-      tableEdit.value,
-      tableEdit.selectionStart,
-      tableEdit.selectionEnd,
-      "select.table",
-    );
-
+  if (applyTableNavigation(view, "previous-cell")) {
     return true;
   }
 
   adjustSelectedLines(view, true);
 
   return true;
+};
+
+const handleTableArrowDown: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  return applyTableNavigation(view, "down-row");
+};
+
+const handleTableArrowUp: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  return applyTableNavigation(view, "up-row");
 };
 
 const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
@@ -300,6 +340,21 @@ const insertLiteralApostrophe: Command = (view) => {
 
   view.dispatch(
     view.state.replaceSelection("'"),
+    {
+      scrollIntoView: true,
+      userEvent: "input.type",
+    },
+  );
+
+  return true;
+};
+const insertLiteralHyphen: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  view.dispatch(
+    view.state.replaceSelection("-"),
     {
       scrollIntoView: true,
       userEvent: "input.type",
@@ -456,8 +511,11 @@ onMounted(() => {
         Prec.high(keymap.of([
           { key: "ArrowDown", run: suggestionDown },
           { key: "ArrowUp", run: suggestionUp },
+          { key: "ArrowDown", run: handleTableArrowDown },
+          { key: "ArrowUp", run: handleTableArrowUp },
           { key: "Enter", run: acceptSuggestion },
           { key: "Escape", run: closeSuggestions },
+          { key: "Shift-Enter", run: handleShiftEnter },
           { key: "Enter", run: handleEnter },
           { key: "Tab", run: handleTab },
           { key: "Shift-Tab", run: handleShiftTab },
@@ -465,6 +523,7 @@ onMounted(() => {
           { key: "Mod-i", run: toggleItalic },
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "'", run: insertLiteralApostrophe },
+          { key: "-", run: insertLiteralHyphen },
           { key: "`", run: wrapSelectionAsInlineCode },
           { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
           {

@@ -5,11 +5,12 @@ import type {
 } from "./liveMarkdownTable";
 
 export type LiveMarkdownTableNavigation =
+  | "down-row"
   | "next-cell"
-  | "next-row"
-  | "previous-cell";
+  | "previous-cell"
+  | "up-row";
 
-export interface LiveMarkdownTableNavigationEdit {
+export interface LiveMarkdownTableEdit {
   value: string;
   selectionStart: number;
   selectionEnd: number;
@@ -22,48 +23,176 @@ type TableCellLocation =
 export function navigateLiveMarkdownTable(
   value: string,
   tables: readonly LiveMarkdownTable[],
-  selectionStart: number,
-  selectionEnd: number,
+  position: number,
   navigation: LiveMarkdownTableNavigation,
-): LiveMarkdownTableNavigationEdit | undefined {
-  const table = tableContainingSelection(tables, selectionStart, selectionEnd);
+): LiveMarkdownTableEdit | undefined {
+  const table = tableContainingPosition(tables, position);
   if (!table) {
     return undefined;
   }
 
-  const startLocation = locateTableCell(table, selectionStart);
-  const selectionLast = selectionEnd > selectionStart
-    ? selectionEnd - 1
-    : selectionEnd;
-  const endLocation = locateTableCell(table, selectionLast);
-  if (
-    !startLocation ||
-    !endLocation ||
-    !sameCellLocation(startLocation, endLocation)
-  ) {
+  const location = locateTableCell(table, position);
+  if (!location) {
     return undefined;
   }
 
-  const target = navigation === "next-row"
-    ? nextRowTarget(startLocation)
-    : adjacentCellTarget(table, startLocation, navigation === "previous-cell");
+  if (navigation === "down-row" || navigation === "up-row") {
+    return moveVertically(
+      value,
+      table,
+      location,
+      position,
+      navigation === "down-row",
+    );
+  }
+
+  const target = adjacentCellTarget(
+    table,
+    location,
+    navigation === "previous-cell",
+  );
 
   return moveToTableCell(value, table, target.rowIndex, target.columnIndex);
 }
 
-function tableContainingSelection(
+export function insertLiveMarkdownTableRow(
+  value: string,
   tables: readonly LiveMarkdownTable[],
-  selectionStart: number,
-  selectionEnd: number,
-): LiveMarkdownTable | undefined {
-  const from = Math.min(selectionStart, selectionEnd);
-  const to = Math.max(selectionStart, selectionEnd);
+  position: number,
+): LiveMarkdownTableEdit | undefined {
+  const table = tableContainingPosition(tables, position);
+  if (!table) {
+    return undefined;
+  }
 
+  const location = locateTableCell(table, position);
+  if (!location) {
+    return undefined;
+  }
+
+  const rowIndex = location.role === "delimiter" || location.rowIndex === 0
+    ? 0
+    : location.rowIndex;
+  const nextValue = insertEmptyTableRow(value, table, rowIndex);
+  const nextTable = reparsedTable(nextValue, table);
+  const targetCell = nextTable?.rows[rowIndex]?.cells[0];
+  if (!targetCell) {
+    return undefined;
+  }
+
+  return {
+    value: nextValue,
+    selectionStart: targetCell.from,
+    selectionEnd: targetCell.from,
+  };
+}
+
+export function insertLiveMarkdownTableLineBreak(
+  value: string,
+  tables: readonly LiveMarkdownTable[],
+  anchor: number,
+  head: number,
+): LiveMarkdownTableEdit | undefined {
+  const table = tableContainingPosition(tables, head);
+  if (!table) {
+    return undefined;
+  }
+
+  const location = locateTableCell(table, head);
+  if (!location || location.role !== "editable") {
+    return undefined;
+  }
+
+  const rows = [table.header, ...table.rows];
+  const cell = rows[location.rowIndex]?.cells[location.columnIndex];
+  if (!cell) {
+    return undefined;
+  }
+
+  const anchorLocation = locateTableCell(table, anchor);
+  const selectionStaysInCell = anchorLocation
+    && sameCellLocation(anchorLocation, location);
+  const selectionStart = selectionStaysInCell
+    ? clampToCell(Math.min(anchor, head), cell)
+    : clampToCell(head, cell);
+  const selectionEnd = selectionStaysInCell
+    ? clampToCell(Math.max(anchor, head), cell)
+    : selectionStart;
+  const lineBreak = "<br>";
+  const nextValue = `${value.slice(0, selectionStart)}${lineBreak}${
+    value.slice(selectionEnd)
+  }`;
+  const cursor = selectionStart + lineBreak.length;
+
+  return {
+    value: nextValue,
+    selectionStart: cursor,
+    selectionEnd: cursor,
+  };
+}
+
+function tableContainingPosition(
+  tables: readonly LiveMarkdownTable[],
+  position: number,
+): LiveMarkdownTable | undefined {
   return tables.find((table) => {
     const lastRow = table.rows.at(-1) ?? table.delimiter;
 
-    return from >= table.from && to <= lastRow.to;
+    return position >= table.from && position <= lastRow.to;
   });
+}
+
+function moveVertically(
+  value: string,
+  table: LiveMarkdownTable,
+  location: TableCellLocation,
+  position: number,
+  down: boolean,
+): LiveMarkdownTableEdit | undefined {
+  if (location.role === "delimiter") {
+    if (!down) {
+      return moveToTableCell(value, table, 0, location.columnIndex, 0);
+    }
+
+    return table.rows.length
+      ? moveToTableCell(value, table, 1, location.columnIndex, 0)
+      : moveBelowTable(value, table);
+  }
+
+  if (!down && location.rowIndex === 0) {
+    return undefined;
+  }
+  if (down && location.rowIndex === table.rows.length) {
+    return moveBelowTable(value, table);
+  }
+
+  const currentCell = tableCellAtLocation(table, location);
+  if (!currentCell) {
+    return undefined;
+  }
+
+  const targetRowIndex = location.rowIndex + (down ? 1 : -1);
+  const offset = Math.max(0, position - currentCell.from);
+
+  return moveToTableCell(
+    value,
+    table,
+    targetRowIndex,
+    location.columnIndex,
+    offset,
+  );
+}
+
+function tableCellAtLocation(
+  table: LiveMarkdownTable,
+  location: TableCellLocation,
+): LiveMarkdownTableRow["cells"][number] | undefined {
+  if (location.role === "delimiter") {
+    return table.delimiter.cells[location.columnIndex];
+  }
+
+  return [table.header, ...table.rows][location.rowIndex]
+    ?.cells[location.columnIndex];
 }
 
 function locateTableCell(
@@ -146,21 +275,13 @@ function adjacentCellTarget(
   };
 }
 
-function nextRowTarget(
-  location: TableCellLocation,
-): { rowIndex: number; columnIndex: number } {
-  return {
-    rowIndex: location.role === "delimiter" ? 1 : location.rowIndex + 1,
-    columnIndex: location.columnIndex,
-  };
-}
-
 function moveToTableCell(
   value: string,
   table: LiveMarkdownTable,
   rowIndex: number,
   columnIndex: number,
-): LiveMarkdownTableNavigationEdit | undefined {
+  selectionOffset?: number,
+): LiveMarkdownTableEdit | undefined {
   let nextValue = value;
   let nextTable = table;
   let editableRows = [nextTable.header, ...nextTable.rows];
@@ -194,11 +315,58 @@ function moveToTableCell(
     return undefined;
   }
 
+  const selectionStart = selectionOffset === undefined
+    ? targetCell.from
+    : Math.min(targetCell.from + selectionOffset, targetCell.to);
+  const selectionEnd = selectionOffset === undefined
+    ? targetCell.to
+    : selectionStart;
+
   return {
     value: nextValue,
-    selectionStart: targetCell.from,
-    selectionEnd: targetCell.to,
+    selectionStart,
+    selectionEnd,
   };
+}
+
+function moveBelowTable(
+  value: string,
+  table: LiveMarkdownTable,
+): LiveMarkdownTableEdit {
+  const lastRow = table.rows.at(-1) ?? table.delimiter;
+  if (lastRow.end > lastRow.to) {
+    return {
+      value,
+      selectionStart: lastRow.end,
+      selectionEnd: lastRow.end,
+    };
+  }
+
+  const nextValue = `${value}${preferredLineEnding(value, table)}`;
+
+  return {
+    value: nextValue,
+    selectionStart: nextValue.length,
+    selectionEnd: nextValue.length,
+  };
+}
+
+function insertEmptyTableRow(
+  value: string,
+  table: LiveMarkdownTable,
+  rowIndex: number,
+): string {
+  const nextRow = table.rows[rowIndex];
+  if (!nextRow) {
+    return appendEmptyTableRow(value, table);
+  }
+
+  const row = emptyTableRow(value, table);
+  const lineEnding = preferredLineEnding(value, table);
+
+  return `${value.slice(0, nextRow.from)}${row}${lineEnding}${
+    value.slice(nextRow.from)
+  }`;
 }
 
 function appendEmptyTableRow(
@@ -206,10 +374,7 @@ function appendEmptyTableRow(
   table: LiveMarkdownTable,
 ): string {
   const lastRow = table.rows.at(-1) ?? table.delimiter;
-  const row = formatTableRow(
-    Array.from({ length: table.columnCount }, () => ""),
-    value.slice(table.header.from, table.header.to),
-  );
+  const row = emptyTableRow(value, table);
   const existingLineEnding = value.slice(lastRow.to, lastRow.end);
   if (existingLineEnding) {
     return `${value.slice(0, lastRow.end)}${row}${existingLineEnding}${
@@ -220,6 +385,16 @@ function appendEmptyTableRow(
   return `${value.slice(0, lastRow.to)}${preferredLineEnding(value, table)}${
     row
   }${value.slice(lastRow.to)}`;
+}
+
+function emptyTableRow(
+  value: string,
+  table: LiveMarkdownTable,
+): string {
+  return formatTableRow(
+    Array.from({ length: table.columnCount }, () => ""),
+    value.slice(table.header.from, table.header.to),
+  );
 }
 
 function expandTableRow(
@@ -279,4 +454,11 @@ function reparsedTable(
   return parseLiveMarkdownTables(value).find((table) =>
     table.header.from === previous.header.from
   );
+}
+
+function clampToCell(
+  position: number,
+  cell: LiveMarkdownTableRow["cells"][number],
+): number {
+  return Math.max(cell.from, Math.min(position, cell.to));
 }
