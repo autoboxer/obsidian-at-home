@@ -48,8 +48,8 @@ interface HiddenSyntax extends LiveMarkdownRange {
 }
 
 interface LiveConstruct {
+  boundaryReveal: "construct" | "none" | "syntax";
   from: number;
-  revealAtSyntaxBoundaries: boolean;
   renderedDecorations: StoredDecoration[];
   to: number;
   syntax: HiddenSyntax[];
@@ -63,6 +63,8 @@ interface LiveMarkdownModel {
   constructs: LiveConstruct[];
   decorations: StoredDecoration[];
 }
+
+const LIST_INDENT_STEP_EM = 1.65;
 
 export const refreshLiveMarkdownEffect = StateEffect.define<null>();
 
@@ -312,17 +314,18 @@ function addBlockDecorations(
     return;
   }
   if (block.type === "task" && block.task && block.list) {
-    const markerSource = value.slice(block.task.marker.from, block.task.marker.to);
-    addConstruct(model, block.task.marker.from, block.task.marker.to, [{
-      ...block.task.marker,
+    const markerSource = value.slice(block.from, block.content.from);
+    addConstruct(model, block.from, block.content.from, [{
+      from: block.from,
+      to: block.content.from,
       widget: new TaskWidget(
         markerSource,
         block.task.checked,
         block.task.check.from,
-        block.task.marker.from,
-        block.task.marker.to,
+        block.from,
+        block.content.from,
       ),
-    }]);
+    }], [renderedListLineDecoration(block)], "none");
     if (block.task.checked && block.content.from < block.content.to) {
       addMarkDecoration(model, block.content, "live-task-content");
     }
@@ -330,17 +333,17 @@ function addBlockDecorations(
     return;
   }
   if (block.type === "list" && block.list) {
-    const markerSource = value.slice(block.list.marker.from, block.content.from);
-    addConstruct(model, block.list.marker.from, block.content.from, [{
-      from: block.list.marker.from,
+    const markerSource = value.slice(block.from, block.content.from);
+    addConstruct(model, block.from, block.content.from, [{
+      from: block.from,
       to: block.content.from,
       widget: new ListMarkerWidget(
         markerSource,
         renderedListMarker(block),
-        block.list.marker.from,
+        block.from,
         block.content.from,
       ),
-    }]);
+    }], [renderedListLineDecoration(block)], "none");
 
     return;
   }
@@ -553,7 +556,7 @@ function addTableRowDecorations(
     row.to,
     syntax,
     renderedDecorations,
-    false,
+    "construct",
   );
 }
 
@@ -856,7 +859,7 @@ function addConstruct(
   to: number,
   syntax: readonly HiddenSyntax[],
   renderedDecorations: readonly StoredDecoration[] = [],
-  revealAtSyntaxBoundaries = true,
+  boundaryReveal: LiveConstruct["boundaryReveal"] = "syntax",
 ): void {
   const nonemptySyntax = syntax.filter((range) => range.from < range.to);
   if (!nonemptySyntax.length) {
@@ -864,8 +867,8 @@ function addConstruct(
   }
 
   model.constructs.push({
+    boundaryReveal,
     from,
-    revealAtSyntaxBoundaries,
     renderedDecorations: [...renderedDecorations],
     to,
     syntax: nonemptySyntax,
@@ -888,6 +891,21 @@ function lineDecoration(
     from,
     to: from,
     decoration: Decoration.line({ class: className }),
+  };
+}
+
+function renderedListLineDecoration(block: LiveMarkdownBlock): StoredDecoration {
+  const indentation = ((block.list?.depth ?? 0) + 1) * LIST_INDENT_STEP_EM;
+
+  return {
+    from: block.from,
+    to: block.from,
+    decoration: Decoration.line({
+      attributes: {
+        style: `--live-list-content-indent: ${indentation}em`,
+      },
+      class: "is-rendered-list",
+    }),
   };
 }
 
@@ -929,16 +947,22 @@ function selectionRevealsConstruct(
   construct: LiveConstruct,
 ): boolean {
   if (selection.empty) {
-    return construct.syntax.some((syntax) => {
-      if (selection.head > syntax.from && selection.head < syntax.to) {
-        return true;
-      }
-      if (construct.revealAtSyntaxBoundaries) {
-        return selection.head === syntax.from || selection.head === syntax.to;
-      }
-
+    const insideSyntax = construct.syntax.some((syntax) =>
+      selection.head > syntax.from && selection.head < syntax.to
+    );
+    if (insideSyntax) {
+      return true;
+    }
+    if (construct.boundaryReveal === "syntax") {
+      return construct.syntax.some((syntax) =>
+        selection.head === syntax.from || selection.head === syntax.to
+      );
+    }
+    if (construct.boundaryReveal === "construct") {
       return selection.head === construct.from || selection.head === construct.to;
-    });
+    }
+
+    return false;
   }
 
   return construct.syntax.some((syntax) =>

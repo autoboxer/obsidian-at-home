@@ -14,6 +14,10 @@ export interface LiveMarkdownRange {
   to: number;
 }
 
+export interface LiveMarkdownTextEdit extends LiveMarkdownRange {
+  insert: string;
+}
+
 export interface LiveMarkdownTask {
   checked: boolean;
   marker: LiveMarkdownRange;
@@ -135,6 +139,39 @@ export function parseLiveMarkdownBlocks(value: string): LiveMarkdownBlock[] {
   arrangeListItems(blocks);
 
   return blocks;
+}
+
+export function normalizeOrderedListMarkers(
+  value: string,
+): { edits: LiveMarkdownTextEdit[]; value: string } {
+  const edits = parseLiveMarkdownBlocks(value).flatMap((block) => {
+    if (!block.list?.ordered) {
+      return [];
+    }
+    if (block.list.depth > 0) {
+      return [];
+    }
+
+    const marker = value.slice(block.list.marker.from, block.list.marker.to);
+    const delimiter = marker.at(-1);
+    const expected = `${block.list.number ?? 1}${delimiter}`;
+    if (marker === expected) {
+      return [];
+    }
+
+    return [{
+      from: block.list.marker.from,
+      to: block.list.marker.to,
+      insert: expected,
+    }];
+  });
+
+  let normalized = value;
+  for (const edit of [...edits].reverse()) {
+    normalized = `${normalized.slice(0, edit.from)}${edit.insert}${normalized.slice(edit.to)}`;
+  }
+
+  return { edits, value: normalized };
 }
 
 export function findLiveMarkdownBlock(
@@ -403,6 +440,8 @@ interface ListLevel {
   number?: number;
 }
 
+const MAX_ORDERED_LIST_NUMBER = 999_999_999;
+
 function arrangeListItems(blocks: readonly LiveMarkdownBlock[]): void {
   const levels: ListLevel[] = [];
 
@@ -427,15 +466,21 @@ function arrangeListItems(blocks: readonly LiveMarkdownBlock[]): void {
 
       levels.length = parentDepth + 1;
       depth = levels.length;
-      levels.push(createListLevel(list));
+      levels.push(createListLevel(list, depth));
     }
 
     let level = levels[depth]!;
     if (level.ordered !== list.ordered) {
-      level = createListLevel(list);
+      level = createListLevel(list, depth);
       levels[depth] = level;
     } else if (matchingLevel >= 0 && level.ordered) {
-      level.number = (level.number ?? 0) + 1;
+      const currentNumber = level.number ?? 0;
+      const nextNumber = currentNumber >= MAX_ORDERED_LIST_NUMBER
+        ? 1
+        : currentNumber + 1;
+      level.number = depth === 0
+        ? Math.max(nextNumber, list.number ?? 1)
+        : nextNumber;
     }
 
     list.depth = depth;
@@ -445,11 +490,13 @@ function arrangeListItems(blocks: readonly LiveMarkdownBlock[]): void {
   }
 }
 
-function createListLevel(list: LiveMarkdownList): ListLevel {
+function createListLevel(list: LiveMarkdownList, depth: number): ListLevel {
   return {
     indentation: list.indentation,
     ordered: list.ordered,
-    ...(list.ordered ? { number: list.number ?? 1 } : {}),
+    ...(list.ordered
+      ? { number: depth === 0 ? list.number ?? 1 : 1 }
+      : {}),
   };
 }
 

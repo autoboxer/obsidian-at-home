@@ -48,7 +48,7 @@ export class ListMarkerWidget extends WidgetType {
     marker.textContent = this.marker;
     control.append(prefix, marker);
     control.addEventListener("mousedown", (event) =>
-      revealWidgetSource(view, control, event, this.from, this.to)
+      revealWidgetSource(view, marker, event, this.from, this.to, true)
     );
 
     return control;
@@ -95,7 +95,7 @@ export class TaskWidget extends WidgetType {
       checkbox.append(createCheckIcon(document));
     }
     control.addEventListener("mousedown", (event) =>
-      revealWidgetSource(view, control, event, this.from, this.to)
+      revealWidgetSource(view, control, event, this.from, this.to, true)
     );
     checkbox.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -261,11 +261,16 @@ function revealWidgetSource(
   event: MouseEvent,
   from: number,
   to: number,
+  revealInside = false,
 ): void {
   event.preventDefault();
   event.stopPropagation();
   const bounds = element.getBoundingClientRect();
-  const position = event.clientX < bounds.left + bounds.width / 2 ? from : to;
+  const approachFromLeft = event.clientX < bounds.left + bounds.width / 2;
+  let position = approachFromLeft ? from : to;
+  if (revealInside && to - from > 1) {
+    position = approachFromLeft ? from + 1 : to - 1;
+  }
   view.dispatch({
     selection: { anchor: position },
     scrollIntoView: true,

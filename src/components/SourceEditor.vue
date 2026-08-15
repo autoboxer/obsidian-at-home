@@ -34,6 +34,7 @@ import {
   codeMirrorDocumentSearchExtension,
   useCodeMirrorDocumentSearch,
 } from "../composables/useCodeMirrorDocumentSearch";
+import { normalizeOrderedListMarkers } from "../lib/liveMarkdown";
 import {
   liveMarkdownExtension,
   refreshLiveMarkdownEffect,
@@ -52,6 +53,7 @@ import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { Extension, SelectionRange } from "@codemirror/state";
 import type { Command, ViewUpdate } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
+import type { LiveMarkdownTextEdit } from "../lib/liveMarkdown";
 import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
 
@@ -99,7 +101,8 @@ interface ListLine {
   delimiter: "." | ")";
   bullet: "-" | "+" | "*";
   spacing: string;
-  prefixLength: number;
+  contentOffset: number;
+  task: boolean;
 }
 
 interface TextEdit {
@@ -325,7 +328,42 @@ const wrapSelectionAsInlineCode: Command = (view) => {
   );
 };
 
-const selectRenderedListTextStart: Command = (view) => {
+const moveToRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, false);
+const selectRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, true);
+const revealRenderedListSourceFromRight: Command = (view) => {
+  if (view.composing || view.state.selection.ranges.length !== 1) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+  if (!selection.empty) {
+    return false;
+  }
+
+  const line = view.state.doc.lineAt(selection.head);
+  const textOffset = renderedListTextOffset(line.text);
+  if (textOffset === undefined) {
+    return false;
+  }
+
+  const textStart = line.from + textOffset;
+  if (selection.head !== textStart || textStart <= line.from) {
+    return false;
+  }
+
+  view.dispatch({
+    selection: EditorSelection.cursor(textStart - 1),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+
+  return true;
+};
+
+function setRenderedListTextStart(
+  view: EditorView,
+  extendSelection: boolean,
+): boolean {
   if (view.composing || view.state.selection.ranges.length !== 1) {
     return false;
   }
@@ -338,22 +376,32 @@ const selectRenderedListTextStart: Command = (view) => {
   }
 
   const textStart = line.from + textOffset;
+  if (selection.head < textStart) {
+    return false;
+  }
   if (
-    selection.head <= textStart ||
-    selection.from < textStart ||
-    previousLineBoundary(view, selection) >= textStart
+    selection.head > textStart
+    && previousLineBoundary(view, selection) > textStart
   ) {
     return false;
   }
+  if (
+    selection.head === textStart
+    && (extendSelection || selection.empty)
+  ) {
+    return true;
+  }
 
   view.dispatch({
-    selection: EditorSelection.range(selection.anchor, textStart),
+    selection: extendSelection
+      ? EditorSelection.range(selection.anchor, textStart)
+      : EditorSelection.cursor(textStart),
     scrollIntoView: true,
     userEvent: "select",
   });
 
   return true;
-};
+}
 
 onMounted(() => {
   const host = editorHost.value;
@@ -385,7 +433,7 @@ onMounted(() => {
         historyCompartment.of(history()),
         drawSelection(),
         dropCursor(),
-        EditorState.tabSize.of(2),
+        EditorState.tabSize.of(4),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
           "aria-label": "Markdown source",
@@ -418,8 +466,17 @@ onMounted(() => {
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "'", run: insertLiteralApostrophe },
           { key: "`", run: wrapSelectionAsInlineCode },
-          { key: "Home", shift: selectRenderedListTextStart },
-          { mac: "Cmd-ArrowLeft", shift: selectRenderedListTextStart },
+          { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
+          {
+            key: "Home",
+            run: moveToRenderedListTextStart,
+            shift: selectRenderedListTextStart,
+          },
+          {
+            mac: "Cmd-ArrowLeft",
+            run: moveToRenderedListTextStart,
+            shift: selectRenderedListTextStart,
+          },
         ])),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
@@ -472,6 +529,17 @@ onMounted(() => {
     positionCaptureEnabled = true;
     schedulePositionCapture(view);
   }
+  window.requestAnimationFrame(() => {
+    if (editorView.value !== view || !view.dom.isConnected) {
+      return;
+    }
+
+    const scrollLeft = view.scrollDOM.scrollLeft;
+    const scrollTop = view.scrollDOM.scrollTop;
+    view.focus();
+    view.scrollDOM.scrollLeft = scrollLeft;
+    view.scrollDOM.scrollTop = scrollTop;
+  });
 });
 
 onBeforeUnmount(() => {
@@ -974,17 +1042,17 @@ function handleSmartEnter(view: EditorView): boolean {
   }
 
   const item = matchEditableListLine(source);
-  if (!item || position < line.from + item.prefixLength) {
+  if (!item) {
     return false;
   }
 
-  const bodyStart = line.from + item.prefixLength;
-  const bodyBefore = value.slice(bodyStart, position);
-  const bodyAfter = value.slice(position, line.to);
+  const contentStart = line.from + item.contentOffset;
+  const insertionPosition = Math.max(position, contentStart);
+  const bodyBefore = value.slice(contentStart, insertionPosition);
+  const bodyAfter = value.slice(insertionPosition, line.to);
   const fullBody = `${bodyBefore}${bodyAfter}`;
-  const contentWithoutTask = fullBody.replace(/^\[[ xX]\][ \t]*/, "");
 
-  if (!contentWithoutTask.trim() && position === line.to) {
+  if (!fullBody.trim() && insertionPosition === line.to) {
     const replacement = item.indent;
     view.dispatch({
       changes: { from: line.from, to: line.to, insert: replacement },
@@ -999,14 +1067,26 @@ function handleSmartEnter(view: EditorView): boolean {
   const marker = item.ordered
     ? `${item.number >= 999_999_999 ? 1 : item.number + 1}${item.delimiter}`
     : item.bullet;
-  const taskPrefix = /^\[[ xX]\][ \t]+/.test(bodyBefore) ? "[ ] " : "";
+  const taskPrefix = item.task ? "[ ] " : "";
   const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
-  view.dispatch({
-    changes: { from: position, insert: `\n${continuation}` },
-    selection: EditorSelection.cursor(position + 1 + continuation.length),
-    scrollIntoView: true,
-    userEvent: "input",
-  });
+  const separatorLength = bodyAfter.match(/^[ \t]+/)?.[0].length ?? 0;
+  const next = `${value.slice(0, insertionPosition)}\n${continuation}${value.slice(
+    insertionPosition + separatorLength,
+  )}`;
+  const cursor = insertionPosition + 1 + continuation.length;
+  const normalized = item.ordered
+    ? normalizeOrderedListMarkers(next)
+    : { edits: [], value: next };
+  const normalizedCursor = mapPositionThroughLiveMarkdownEdits(
+    cursor,
+    normalized.edits,
+  );
+  applyFullDocumentEdit(
+    view,
+    normalized.value,
+    normalizedCursor,
+    normalizedCursor,
+  );
 
   return true;
 }
@@ -1019,6 +1099,8 @@ function matchEditableListLine(line: string): ListLine | undefined {
   const ordered = Boolean(match[2]);
   const markerLength = ordered ? match[2]!.length + 1 : 1;
   const spacing = match[5]!;
+  const listPrefixLength = match[1]!.length + markerLength + spacing.length;
+  const taskPrefix = match[6]!.match(/^\[[ xX]\][ \t]+/)?.[0];
 
   return {
     indent: match[1]!,
@@ -1027,7 +1109,8 @@ function matchEditableListLine(line: string): ListLine | undefined {
     delimiter: ordered ? match[3]! as "." | ")" : ".",
     bullet: ordered ? "-" : match[4]! as "-" | "+" | "*",
     spacing,
-    prefixLength: match[1]!.length + markerLength + spacing.length,
+    contentOffset: listPrefixLength + (taskPrefix?.length ?? 0),
+    task: Boolean(taskPrefix),
   };
 }
 
@@ -1037,11 +1120,7 @@ function renderedListTextOffset(line: string): number | undefined {
     return undefined;
   }
 
-  const taskPrefix = line
-    .slice(item.prefixLength)
-    .match(/^\[[ xX]\][ \t]+/)?.[0];
-
-  return item.prefixLength + (taskPrefix?.length ?? 0);
+  return item.contentOffset;
 }
 
 function previousLineBoundary(
@@ -1109,26 +1188,18 @@ function adjustSelectedLines(view: EditorView, outdent: boolean): boolean {
   const lastLine = view.state.doc.lineAt(effectiveEnd);
   const block = value.slice(firstLine.from, lastLine.to);
   const lines = block.split("\n");
+  const orderedListChanged = lines.some((line) =>
+    matchEditableListLine(line)?.ordered
+  );
   const edits: TextEdit[] = [];
   let sourceOffset = firstLine.from;
 
   const transformed = lines.map((line) => {
     if (!outdent) {
       edits.push({ start: sourceOffset, removed: 0, added: INDENT.length });
-      const orderedMarker = line.match(/^([ \t]*)(\d{1,9})([.)])/);
-      if (orderedMarker && orderedMarker[2]!.length !== 1) {
-        edits.push({
-          start: sourceOffset + orderedMarker[1]!.length,
-          removed: orderedMarker[2]!.length,
-          added: 1,
-        });
-      }
       sourceOffset += line.length + 1;
-      const indentedLine = orderedMarker
-        ? `${orderedMarker[1]}1${orderedMarker[3]}${line.slice(orderedMarker[0].length)}`
-        : line;
 
-      return `${INDENT}${indentedLine}`;
+      return `${INDENT}${line}`;
     }
 
     const removable = line.startsWith("\t") ? 1 : line.match(/^ {1,2}/)?.[0].length ?? 0;
@@ -1144,15 +1215,26 @@ function adjustSelectedLines(view: EditorView, outdent: boolean): boolean {
     return true;
   }
 
-  const next = `${value.slice(0, firstLine.from)}${transformed}${value.slice(lastLine.to)}`;
+  const adjusted = `${value.slice(0, firstLine.from)}${transformed}${value.slice(lastLine.to)}`;
   const mappedStart = mapPositionThroughEdits(selectionStart, edits);
   const mappedEnd = mapPositionThroughEdits(selectionEnd, edits);
+  const normalized = orderedListChanged
+    ? normalizeOrderedListMarkers(adjusted)
+    : { edits: [], value: adjusted };
+  const normalizedStart = mapPositionThroughLiveMarkdownEdits(
+    mappedStart,
+    normalized.edits,
+  );
+  const normalizedEnd = mapPositionThroughLiveMarkdownEdits(
+    mappedEnd,
+    normalized.edits,
+  );
   const backward = selection.anchor > selection.head;
   view.dispatch({
-    changes: minimalDocumentChange(value, next),
+    changes: minimalDocumentChange(value, normalized.value),
     selection: backward
-      ? EditorSelection.range(mappedEnd, mappedStart)
-      : EditorSelection.range(mappedStart, mappedEnd),
+      ? EditorSelection.range(normalizedEnd, normalizedStart)
+      : EditorSelection.range(normalizedStart, normalizedEnd),
     scrollIntoView: true,
     userEvent: "input.indent",
   });
@@ -1173,6 +1255,20 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
   }
 
   return position + delta;
+}
+
+function mapPositionThroughLiveMarkdownEdits(
+  position: number,
+  edits: readonly LiveMarkdownTextEdit[],
+): number {
+  return mapPositionThroughEdits(
+    position,
+    edits.map((edit) => ({
+      start: edit.from,
+      removed: edit.to - edit.from,
+      added: edit.insert.length,
+    })),
+  );
 }
 </script>
 
