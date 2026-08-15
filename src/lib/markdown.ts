@@ -69,9 +69,10 @@ interface ParsedMarkdownLink {
 }
 
 /**
- * Render the Markdown subset used by the app without permitting raw HTML,
- * scriptable URLs, or event-handler injection. The returned string is suitable
- * for Vue's `v-html`.
+ * Render the Markdown subset used by the app. Raw HTML is escaped except for a
+ * strict `<br>` line-break allowlist. Scriptable URLs and event-handler
+ * injection are not permitted, so the returned string is suitable for Vue's
+ * `v-html`.
  */
 export function renderMarkdown(
   markdown: string,
@@ -441,6 +442,13 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
     if (character === "\\" && /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(source[index + 1] ?? "")) {
       html += escapeHtml(source[index + 1]!);
       index += 1;
+      continue;
+    }
+
+    const lineBreakTag = source.slice(index).match(/^<br[ \t]*\/?>/i)?.[0];
+    if (lineBreakTag) {
+      html += "<br>";
+      index += lineBreakTag.length - 1;
       continue;
     }
 

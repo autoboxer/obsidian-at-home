@@ -338,6 +338,23 @@ export class EmptyTableCellWidget extends WidgetType {
   }
 }
 
+export class TableCellBreakWidget extends WidgetType {
+  eq(other: TableCellBreakWidget): boolean {
+    return other instanceof TableCellBreakWidget;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const lineBreak = view.dom.ownerDocument.createElement("br");
+    lineBreak.setAttribute("aria-hidden", "true");
+
+    return lineBreak;
+  }
+
+  get lineBreaks(): number {
+    return 1;
+  }
+}
+
 function codeLanguageLabel(language: string): string {
   return findCodeLanguageOption(language)?.label || language || "Plain text";
 }

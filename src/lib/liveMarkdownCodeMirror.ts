@@ -21,6 +21,7 @@ import {
   CodeFenceFooterWidget,
   CodeFenceHeaderWidget,
   EmptyTableCellWidget,
+  TableCellBreakWidget,
   TableDelimiterWidget,
 } from "./liveMarkdownRegionWidgets";
 import { parseLiveMarkdownTables } from "./liveMarkdownTable";
@@ -259,7 +260,7 @@ function parseLiveMarkdownModel(
       from: table.delimiter.from,
       to: table.delimiter.end,
     });
-    addTableDecorations(model, table);
+    addTableDecorations(model, state, table);
   }
 
   const markdownLinkRanges = supportedMarkdownLinkRanges(
@@ -469,9 +470,10 @@ function addMultilineMarkDecoration(
 
 function addTableDecorations(
   model: LiveMarkdownModel,
+  state: EditorState,
   table: LiveMarkdownTable,
 ): void {
-  addTableRowDecorations(model, table, table.header, "header", false);
+  addTableRowDecorations(model, state, table, table.header, "header", false);
 
   const delimiterLast = table.rows.length === 0;
   addConstruct(
@@ -499,6 +501,7 @@ function addTableDecorations(
   table.rows.forEach((row, index) => {
     addTableRowDecorations(
       model,
+      state,
       table,
       row,
       "body",
@@ -509,13 +512,17 @@ function addTableDecorations(
 
 function addTableRowDecorations(
   model: LiveMarkdownModel,
+  state: EditorState,
   table: LiveMarkdownTable,
   row: LiveMarkdownTableRow,
   role: "body" | "header",
   last: boolean,
 ): void {
   const cells = row.cells.slice(0, table.columnCount);
-  const syntax = tableRowSyntax(row, cells);
+  const syntax = [
+    ...tableRowSyntax(row, cells),
+    ...tableCellBreakSyntax(state, cells),
+  ].sort((left, right) => left.from - right.from || left.to - right.to);
   const classes = [
     "live-markdown-block",
     "is-table-row",
@@ -588,6 +595,59 @@ function tableRowSyntax(
   }
 
   return syntax;
+}
+
+function tableCellBreakSyntax(
+  state: EditorState,
+  cells: readonly LiveMarkdownTableRow["cells"][number][],
+): HiddenSyntax[] {
+  const syntax: HiddenSyntax[] = [];
+  const firstCell = cells[0];
+  const lastCell = cells.at(-1);
+  if (!firstCell || !lastCell) {
+    return syntax;
+  }
+
+  syntaxTree(state).iterate({
+    from: firstCell.from,
+    to: lastCell.to,
+    enter(reference) {
+      if (reference.name !== "HTMLTag") {
+        return undefined;
+      }
+
+      const cell = cells.find((candidate) =>
+        reference.from >= candidate.from && reference.to <= candidate.to
+      );
+      const source = state.sliceDoc(reference.from, reference.to);
+      if (
+        !cell ||
+        !/^<br[ \t]*\/?>$/i.test(source) ||
+        characterIsEscaped(cell.source, reference.from - cell.from)
+      ) {
+        return false;
+      }
+
+      syntax.push({
+        from: reference.from,
+        to: reference.to,
+        widget: new TableCellBreakWidget(),
+      });
+
+      return false;
+    },
+  });
+
+  return syntax;
+}
+
+function characterIsEscaped(value: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+
+  return backslashes % 2 === 1;
 }
 
 function tableCellClass(

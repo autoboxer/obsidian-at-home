@@ -47,7 +47,11 @@ import {
 } from "../lib/frontmatter";
 import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
 import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
-import { navigateLiveMarkdownTable } from "../lib/liveMarkdownTableNavigation";
+import {
+  insertLiveMarkdownTableLineBreak,
+  insertLiveMarkdownTableRow,
+  navigateLiveMarkdownTable,
+} from "../lib/liveMarkdownTableNavigation";
 import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { Extension, SelectionRange } from "@codemirror/state";
@@ -195,12 +199,10 @@ const handleEnter: Command = (view) => {
 
   const value = view.state.doc.toString();
   const selection = view.state.selection.main;
-  const tableEdit = navigateLiveMarkdownTable(
+  const tableEdit = insertLiveMarkdownTableRow(
     value,
     parseLiveMarkdownTables(value),
-    selection.from,
-    selection.to,
-    "next-row",
+    selection.head,
   );
   if (tableEdit) {
     applyFullDocumentEdit(
@@ -218,6 +220,34 @@ const handleEnter: Command = (view) => {
   }
 
   return insertNewline(view);
+};
+
+const handleShiftEnter: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  const value = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  const tableEdit = insertLiveMarkdownTableLineBreak(
+    value,
+    parseLiveMarkdownTables(value),
+    selection.anchor,
+    selection.head,
+  );
+  if (!tableEdit) {
+    return false;
+  }
+
+  applyFullDocumentEdit(
+    view,
+    tableEdit.value,
+    tableEdit.selectionStart,
+    tableEdit.selectionEnd,
+    "input.table",
+  );
+
+  return true;
 };
 
 const handleTab: Command = (view) => {
@@ -473,6 +503,7 @@ onMounted(() => {
           { key: "ArrowUp", run: suggestionUp },
           { key: "Enter", run: acceptSuggestion },
           { key: "Escape", run: closeSuggestions },
+          { key: "Shift-Enter", run: handleShiftEnter },
           { key: "Enter", run: handleEnter },
           { key: "Tab", run: handleTab },
           { key: "Shift-Tab", run: handleShiftTab },
