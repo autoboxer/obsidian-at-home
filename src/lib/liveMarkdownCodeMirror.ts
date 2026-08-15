@@ -51,8 +51,14 @@ interface LiveConstruct {
   boundaryReveal: "construct" | "none" | "syntax";
   from: number;
   renderedDecorations: StoredDecoration[];
+  revealWithinSyntax: boolean;
   to: number;
   syntax: HiddenSyntax[];
+}
+
+interface LiveConstructOptions {
+  boundaryReveal?: LiveConstruct["boundaryReveal"];
+  revealWithinSyntax?: boolean;
 }
 
 interface StoredDecoration extends LiveMarkdownRange {
@@ -325,7 +331,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)], "none");
+    }], [renderedListLineDecoration(block)], { boundaryReveal: "none" });
     if (block.task.checked && block.content.from < block.content.to) {
       addMarkDecoration(model, block.content, "live-task-content");
     }
@@ -343,7 +349,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)], "none");
+    }], [renderedListLineDecoration(block)], { boundaryReveal: "none" });
 
     return;
   }
@@ -556,7 +562,10 @@ function addTableRowDecorations(
     row.to,
     syntax,
     renderedDecorations,
-    "construct",
+    {
+      boundaryReveal: "construct",
+      revealWithinSyntax: false,
+    },
   );
 }
 
@@ -859,7 +868,7 @@ function addConstruct(
   to: number,
   syntax: readonly HiddenSyntax[],
   renderedDecorations: readonly StoredDecoration[] = [],
-  boundaryReveal: LiveConstruct["boundaryReveal"] = "syntax",
+  options: LiveConstructOptions = {},
 ): void {
   const nonemptySyntax = syntax.filter((range) => range.from < range.to);
   if (!nonemptySyntax.length) {
@@ -867,9 +876,10 @@ function addConstruct(
   }
 
   model.constructs.push({
-    boundaryReveal,
+    boundaryReveal: options.boundaryReveal ?? "syntax",
     from,
     renderedDecorations: [...renderedDecorations],
+    revealWithinSyntax: options.revealWithinSyntax ?? true,
     to,
     syntax: nonemptySyntax,
   });
@@ -950,7 +960,7 @@ function selectionRevealsConstruct(
     const insideSyntax = construct.syntax.some((syntax) =>
       selection.head > syntax.from && selection.head < syntax.to
     );
-    if (insideSyntax) {
+    if (insideSyntax && construct.revealWithinSyntax) {
       return true;
     }
     if (construct.boundaryReveal === "syntax") {

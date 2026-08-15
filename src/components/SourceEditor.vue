@@ -308,6 +308,21 @@ const insertLiteralApostrophe: Command = (view) => {
 
   return true;
 };
+const insertLiteralHyphen: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  view.dispatch(
+    view.state.replaceSelection("-"),
+    {
+      scrollIntoView: true,
+      userEvent: "input.type",
+    },
+  );
+
+  return true;
+};
 const wrapSelectionAsInlineCode: Command = (view) => {
   if (view.composing) {
     return false;
@@ -465,6 +480,7 @@ onMounted(() => {
           { key: "Mod-i", run: toggleItalic },
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "'", run: insertLiteralApostrophe },
+          { key: "-", run: insertLiteralHyphen },
           { key: "`", run: wrapSelectionAsInlineCode },
           { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
           {
