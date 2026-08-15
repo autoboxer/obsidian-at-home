@@ -48,8 +48,8 @@ interface HiddenSyntax extends LiveMarkdownRange {
 }
 
 interface LiveConstruct {
+  boundaryReveal: "construct" | "none" | "syntax";
   from: number;
-  revealAtSyntaxBoundaries: boolean;
   renderedDecorations: StoredDecoration[];
   to: number;
   syntax: HiddenSyntax[];
@@ -325,7 +325,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)]);
+    }], [renderedListLineDecoration(block)], "none");
     if (block.task.checked && block.content.from < block.content.to) {
       addMarkDecoration(model, block.content, "live-task-content");
     }
@@ -343,7 +343,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)]);
+    }], [renderedListLineDecoration(block)], "none");
 
     return;
   }
@@ -556,7 +556,7 @@ function addTableRowDecorations(
     row.to,
     syntax,
     renderedDecorations,
-    false,
+    "construct",
   );
 }
 
@@ -859,7 +859,7 @@ function addConstruct(
   to: number,
   syntax: readonly HiddenSyntax[],
   renderedDecorations: readonly StoredDecoration[] = [],
-  revealAtSyntaxBoundaries = true,
+  boundaryReveal: LiveConstruct["boundaryReveal"] = "syntax",
 ): void {
   const nonemptySyntax = syntax.filter((range) => range.from < range.to);
   if (!nonemptySyntax.length) {
@@ -867,8 +867,8 @@ function addConstruct(
   }
 
   model.constructs.push({
+    boundaryReveal,
     from,
-    revealAtSyntaxBoundaries,
     renderedDecorations: [...renderedDecorations],
     to,
     syntax: nonemptySyntax,
@@ -947,16 +947,22 @@ function selectionRevealsConstruct(
   construct: LiveConstruct,
 ): boolean {
   if (selection.empty) {
-    return construct.syntax.some((syntax) => {
-      if (selection.head > syntax.from && selection.head < syntax.to) {
-        return true;
-      }
-      if (construct.revealAtSyntaxBoundaries) {
-        return selection.head === syntax.from || selection.head === syntax.to;
-      }
-
+    const insideSyntax = construct.syntax.some((syntax) =>
+      selection.head > syntax.from && selection.head < syntax.to
+    );
+    if (insideSyntax) {
+      return true;
+    }
+    if (construct.boundaryReveal === "syntax") {
+      return construct.syntax.some((syntax) =>
+        selection.head === syntax.from || selection.head === syntax.to
+      );
+    }
+    if (construct.boundaryReveal === "construct") {
       return selection.head === construct.from || selection.head === construct.to;
-    });
+    }
+
+    return false;
   }
 
   return construct.syntax.some((syntax) =>

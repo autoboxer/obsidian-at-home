@@ -34,6 +34,7 @@ import {
   codeMirrorDocumentSearchExtension,
   useCodeMirrorDocumentSearch,
 } from "../composables/useCodeMirrorDocumentSearch";
+import { normalizeOrderedListMarkers } from "../lib/liveMarkdown";
 import {
   liveMarkdownExtension,
   refreshLiveMarkdownEffect,
@@ -52,6 +53,7 @@ import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { Extension, SelectionRange } from "@codemirror/state";
 import type { Command, ViewUpdate } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
+import type { LiveMarkdownTextEdit } from "../lib/liveMarkdown";
 import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
 
@@ -328,6 +330,35 @@ const wrapSelectionAsInlineCode: Command = (view) => {
 
 const moveToRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, false);
 const selectRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, true);
+const revealRenderedListSourceFromRight: Command = (view) => {
+  if (view.composing || view.state.selection.ranges.length !== 1) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+  if (!selection.empty) {
+    return false;
+  }
+
+  const line = view.state.doc.lineAt(selection.head);
+  const textOffset = renderedListTextOffset(line.text);
+  if (textOffset === undefined) {
+    return false;
+  }
+
+  const textStart = line.from + textOffset;
+  if (selection.head !== textStart || textStart <= line.from) {
+    return false;
+  }
+
+  view.dispatch({
+    selection: EditorSelection.cursor(textStart - 1),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+
+  return true;
+};
 
 function setRenderedListTextStart(
   view: EditorView,
@@ -435,6 +466,7 @@ onMounted(() => {
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "'", run: insertLiteralApostrophe },
           { key: "`", run: wrapSelectionAsInlineCode },
+          { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
           {
             key: "Home",
             run: moveToRenderedListTextStart,
@@ -1027,16 +1059,23 @@ function handleSmartEnter(view: EditorView): boolean {
   const taskPrefix = item.task ? "[ ] " : "";
   const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
   const separatorLength = bodyAfter.match(/^[ \t]+/)?.[0].length ?? 0;
-  view.dispatch({
-    changes: {
-      from: insertionPosition,
-      to: insertionPosition + separatorLength,
-      insert: `\n${continuation}`,
-    },
-    selection: EditorSelection.cursor(insertionPosition + 1 + continuation.length),
-    scrollIntoView: true,
-    userEvent: "input",
-  });
+  const next = `${value.slice(0, insertionPosition)}\n${continuation}${value.slice(
+    insertionPosition + separatorLength,
+  )}`;
+  const cursor = insertionPosition + 1 + continuation.length;
+  const normalized = item.ordered
+    ? normalizeOrderedListMarkers(next)
+    : { edits: [], value: next };
+  const normalizedCursor = mapPositionThroughLiveMarkdownEdits(
+    cursor,
+    normalized.edits,
+  );
+  applyFullDocumentEdit(
+    view,
+    normalized.value,
+    normalizedCursor,
+    normalizedCursor,
+  );
 
   return true;
 }
@@ -1138,26 +1177,18 @@ function adjustSelectedLines(view: EditorView, outdent: boolean): boolean {
   const lastLine = view.state.doc.lineAt(effectiveEnd);
   const block = value.slice(firstLine.from, lastLine.to);
   const lines = block.split("\n");
+  const orderedListChanged = lines.some((line) =>
+    matchEditableListLine(line)?.ordered
+  );
   const edits: TextEdit[] = [];
   let sourceOffset = firstLine.from;
 
   const transformed = lines.map((line) => {
     if (!outdent) {
       edits.push({ start: sourceOffset, removed: 0, added: INDENT.length });
-      const orderedMarker = line.match(/^([ \t]*)(\d{1,9})([.)])/);
-      if (orderedMarker && orderedMarker[2]!.length !== 1) {
-        edits.push({
-          start: sourceOffset + orderedMarker[1]!.length,
-          removed: orderedMarker[2]!.length,
-          added: 1,
-        });
-      }
       sourceOffset += line.length + 1;
-      const indentedLine = orderedMarker
-        ? `${orderedMarker[1]}1${orderedMarker[3]}${line.slice(orderedMarker[0].length)}`
-        : line;
 
-      return `${INDENT}${indentedLine}`;
+      return `${INDENT}${line}`;
     }
 
     const removable = line.startsWith("\t") ? 1 : line.match(/^ {1,2}/)?.[0].length ?? 0;
@@ -1173,15 +1204,26 @@ function adjustSelectedLines(view: EditorView, outdent: boolean): boolean {
     return true;
   }
 
-  const next = `${value.slice(0, firstLine.from)}${transformed}${value.slice(lastLine.to)}`;
+  const adjusted = `${value.slice(0, firstLine.from)}${transformed}${value.slice(lastLine.to)}`;
   const mappedStart = mapPositionThroughEdits(selectionStart, edits);
   const mappedEnd = mapPositionThroughEdits(selectionEnd, edits);
+  const normalized = orderedListChanged
+    ? normalizeOrderedListMarkers(adjusted)
+    : { edits: [], value: adjusted };
+  const normalizedStart = mapPositionThroughLiveMarkdownEdits(
+    mappedStart,
+    normalized.edits,
+  );
+  const normalizedEnd = mapPositionThroughLiveMarkdownEdits(
+    mappedEnd,
+    normalized.edits,
+  );
   const backward = selection.anchor > selection.head;
   view.dispatch({
-    changes: minimalDocumentChange(value, next),
+    changes: minimalDocumentChange(value, normalized.value),
     selection: backward
-      ? EditorSelection.range(mappedEnd, mappedStart)
-      : EditorSelection.range(mappedStart, mappedEnd),
+      ? EditorSelection.range(normalizedEnd, normalizedStart)
+      : EditorSelection.range(normalizedStart, normalizedEnd),
     scrollIntoView: true,
     userEvent: "input.indent",
   });
@@ -1202,6 +1244,20 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
   }
 
   return position + delta;
+}
+
+function mapPositionThroughLiveMarkdownEdits(
+  position: number,
+  edits: readonly LiveMarkdownTextEdit[],
+): number {
+  return mapPositionThroughEdits(
+    position,
+    edits.map((edit) => ({
+      start: edit.from,
+      removed: edit.to - edit.from,
+      added: edit.insert.length,
+    })),
+  );
 }
 </script>
 
