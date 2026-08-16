@@ -7,6 +7,7 @@ import {
 } from "@codemirror/view";
 import { documentSearchMatches } from "./codeMirrorDocumentSearch";
 import { highlightCodeRanges } from "./highlight";
+import { parsePairedInlineMarkup } from "./inlineMarkup";
 import { parseLiveMarkdownBlocks } from "./liveMarkdown";
 import { parseLiveMarkdownCodeFences } from "./liveMarkdownCode";
 import {
@@ -27,7 +28,12 @@ import {
 import { parseLiveMarkdownTables } from "./liveMarkdownTable";
 import { sanitizeLinkUrl } from "./markdown";
 import { parseWikiLinks } from "./wikiLinks";
-import type { EditorState, Extension, SelectionRange } from "@codemirror/state";
+import type {
+  EditorState,
+  Extension,
+  SelectionRange,
+  Text,
+} from "@codemirror/state";
 import type {
   DecorationSet,
   MouseSelectionStyle,
@@ -35,6 +41,7 @@ import type {
   WidgetType,
 } from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
+import type { InlineMarkupKind } from "./inlineMarkup";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
 import type {
@@ -74,6 +81,7 @@ interface StoredDecoration extends LiveMarkdownRange {
 interface InlineMarkupSpan extends LiveMarkdownRange {
   contentFrom: number;
   contentTo: number;
+  kind: InlineMarkupKind | "code";
   syntax: LiveMarkdownRange[];
 }
 
@@ -83,6 +91,7 @@ interface LiveMarkdownModel {
 }
 
 const LIST_INDENT_STEP_EM = 1.65;
+const inlineMarkupSpanCache = new WeakMap<Text, InlineMarkupSpan[]>();
 
 export const refreshLiveMarkdownEffect = StateEffect.define<null>();
 
@@ -358,11 +367,49 @@ function inlineMarkupSpans(
   from: number,
   to: number,
 ): InlineMarkupSpan[] {
+  const cached = inlineMarkupSpanCache.get(state.doc);
+  if (cached) {
+    return cached.filter((span) => span.from <= to && span.to >= from);
+  }
+
+  const value = state.doc.toString();
+  const blockExclusions = parseLiveMarkdownBlocks(value).flatMap((block) =>
+    block.type === "code" ||
+    block.type === "frontmatter" ||
+    block.type === "horizontal-rule"
+      ? [{ from: block.from, to: block.end }]
+      : block.syntax
+  );
+  const wikiExclusions = parseWikiLinks(value).map((link) => ({
+    from: link.index,
+    to: link.index + link.raw.length,
+  }));
+  const syntaxSpans = syntaxTreeInlineMarkupSpans(state).filter((span) =>
+    !rangeIsContainedByAny(span, blockExclusions) &&
+    !rangeOverlapsAny(span, wikiExclusions)
+  );
+  const spans: InlineMarkupSpan[] = [];
+
+  spans.push(
+    ...syntaxSpans,
+    ...pairedInlineMarkupSpans(
+      state,
+      value,
+      [...blockExclusions, ...wikiExclusions],
+      syntaxSpans,
+    ),
+  );
+  inlineMarkupSpanCache.set(state.doc, spans);
+
+  return spans.filter((span) => span.from <= to && span.to >= from);
+}
+
+function syntaxTreeInlineMarkupSpans(
+  state: EditorState,
+): InlineMarkupSpan[] {
   const spans: InlineMarkupSpan[] = [];
 
   syntaxTree(state).iterate({
-    from,
-    to,
     enter(reference) {
       const span = inlineMarkupSpan(reference, state);
       if (span) {
@@ -380,16 +427,20 @@ function inlineMarkupSpan(
   node: SyntaxNodeRef,
   state: EditorState,
 ): InlineMarkupSpan | undefined {
-  const markerName = node.name === "InlineCode"
-    ? "CodeMark"
-    : node.name === "StrongEmphasis" || node.name === "Emphasis"
-      ? "EmphasisMark"
-      : node.name === "Strikethrough" ? "StrikethroughMark" : undefined;
-  if (!markerName) {
+  const markup = node.name === "InlineCode"
+    ? { kind: "code" as const, markerName: "CodeMark" }
+    : node.name === "StrongEmphasis"
+      ? { kind: "strong" as const, markerName: "EmphasisMark" }
+      : node.name === "Emphasis"
+        ? { kind: "emphasis" as const, markerName: "EmphasisMark" }
+        : node.name === "Strikethrough"
+          ? { kind: "strikethrough" as const, markerName: "StrikethroughMark" }
+          : undefined;
+  if (!markup) {
     return undefined;
   }
 
-  const markers = node.node.getChildren(markerName);
+  const markers = node.node.getChildren(markup.markerName);
   const opening = markers[0];
   const closing = markers.at(-1);
   if (!opening || !closing || opening === closing || opening.to > closing.from) {
@@ -422,8 +473,80 @@ function inlineMarkupSpan(
     to: node.to,
     contentFrom,
     contentTo,
+    kind: markup.kind,
     syntax,
   };
+}
+
+function pairedInlineMarkupSpans(
+  state: EditorState,
+  value: string,
+  excludedRanges: readonly LiveMarkdownRange[],
+  syntaxSpans: readonly InlineMarkupSpan[],
+): InlineMarkupSpan[] {
+  const protectedRanges = [
+    ...excludedRanges,
+    ...inlineMarkupSyntaxExclusions(state),
+  ];
+
+  return parsePairedInlineMarkup(value, protectedRanges)
+    .map((span): InlineMarkupSpan => ({
+      contentFrom: span.contentFrom,
+      contentTo: span.contentTo,
+      from: span.from,
+      kind: span.kind,
+      syntax: [
+        { from: span.from, to: span.contentFrom },
+        { from: span.contentTo, to: span.to },
+      ],
+      to: span.to,
+    }))
+    .filter((span) => !syntaxSpans.some((syntaxSpan) =>
+      inlineMarkupSpansMatch(span, syntaxSpan) || rangesCross(span, syntaxSpan)
+    ));
+}
+
+function inlineMarkupSyntaxExclusions(
+  state: EditorState,
+): LiveMarkdownRange[] {
+  const exclusions: LiveMarkdownRange[] = [];
+
+  syntaxTree(state).iterate({
+    enter(reference) {
+      if (
+        reference.name === "Autolink" ||
+        reference.name === "Escape" ||
+        reference.name === "HTMLTag" ||
+        reference.name === "Image" ||
+        reference.name === "InlineCode"
+      ) {
+        exclusions.push({ from: reference.from, to: reference.to });
+
+        return false;
+      }
+      if (reference.name !== "Link") {
+        return undefined;
+      }
+
+      const labelClosing = reference.node.getChildren("LinkMark")[1];
+      exclusions.push(labelClosing
+        ? { from: labelClosing.from, to: reference.to }
+        : { from: reference.from, to: reference.to });
+
+      return undefined;
+    },
+  });
+
+  return exclusions;
+}
+
+function inlineMarkupSpansMatch(
+  left: InlineMarkupSpan,
+  right: InlineMarkupSpan,
+): boolean {
+  return left.from === right.from &&
+    left.to === right.to &&
+    left.kind === right.kind;
 }
 
 function inlineMarkupSpanIsRevealed(
@@ -509,12 +632,18 @@ function parseLiveMarkdownModel(
     options,
     wikiResolutionVersion,
   );
+  const inlineMarkupExcludedRanges = [
+    ...excludedRanges,
+    ...wikiRanges,
+    ...blocks.flatMap((block) => block.syntax),
+  ];
   addInlineDecorations(
     model,
     state,
     value,
     excludedRanges,
     wikiRanges,
+    inlineMarkupExcludedRanges,
   );
 
   return model;
@@ -975,7 +1104,10 @@ function addInlineDecorations(
   value: string,
   excludedRanges: readonly LiveMarkdownRange[],
   wikiRanges: readonly LiveMarkdownRange[],
+  inlineMarkupExcludedRanges: readonly LiveMarkdownRange[],
 ): void {
+  const syntaxSpans: InlineMarkupSpan[] = [];
+
   syntaxTree(state).iterate({
     enter(reference) {
       const node = reference;
@@ -997,14 +1129,10 @@ function addInlineDecorations(
       if (rangeOverlapsAny(range, wikiRanges)) {
         return undefined;
       }
-      if (node.name === "StrongEmphasis") {
-        addInlineMarkupDecoration(model, node, state, "is-strong");
-      } else if (node.name === "Emphasis") {
-        addInlineMarkupDecoration(model, node, state, "is-emphasis");
-      } else if (node.name === "Strikethrough") {
-        addInlineMarkupDecoration(model, node, state, "is-strikethrough");
-      } else if (node.name === "InlineCode") {
-        addInlineMarkupDecoration(model, node, state, "is-code");
+      const span = inlineMarkupSpan(node, state);
+      if (span) {
+        syntaxSpans.push(span);
+        addInlineMarkupDecoration(model, span);
       } else if (
         node.name === "Autolink" ||
         node.name === "Link"
@@ -1015,24 +1143,29 @@ function addInlineDecorations(
       return undefined;
     },
   });
+
+  const pairedSpans = pairedInlineMarkupSpans(
+    state,
+    value,
+    inlineMarkupExcludedRanges,
+    syntaxSpans,
+  );
+  inlineMarkupSpanCache.set(state.doc, [...syntaxSpans, ...pairedSpans]);
+
+  for (const span of pairedSpans) {
+    addInlineMarkupDecoration(model, span);
+  }
 }
 
 function addInlineMarkupDecoration(
   model: LiveMarkdownModel,
-  node: SyntaxNodeRef,
-  state: EditorState,
-  className: string,
+  span: InlineMarkupSpan,
 ): void {
-  const span = inlineMarkupSpan(node, state);
-  if (!span) {
-    return;
-  }
-
   addConstruct(model, span.from, span.to, span.syntax);
   addMarkDecoration(
     model,
     { from: span.contentFrom, to: span.contentTo },
-    `live-inline-segment ${className}`,
+    `live-inline-segment is-${span.kind}`,
   );
 }
 
@@ -1242,6 +1375,21 @@ function rangesOverlap(
   second: LiveMarkdownRange,
 ): boolean {
   return first.from < second.to && first.to > second.from;
+}
+
+function rangesCross(
+  first: LiveMarkdownRange,
+  second: LiveMarkdownRange,
+): boolean {
+  return (
+    first.from < second.from &&
+    second.from < first.to &&
+    first.to < second.to
+  ) || (
+    second.from < first.from &&
+    first.from < second.to &&
+    second.to < first.to
+  );
 }
 
 function unwrapLinkTitle(value: string): string {
