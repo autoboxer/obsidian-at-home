@@ -1,6 +1,7 @@
 import type { Note } from "../types";
 import { leadingFrontmatterEnd } from "./frontmatter";
 import { highlightCode } from "./highlight";
+import { findClosingInlineMarkupDelimiter } from "./inlineMarkup";
 import { parseWikiLinkAt } from "./wikiLinks";
 
 export interface MarkdownRenderOptions {
@@ -506,7 +507,12 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
       ? "**"
       : source.startsWith("__", index) ? "__" : undefined;
     if (strongDelimiter) {
-      const close = findClosingDelimiter(source, strongDelimiter, index + 2);
+      const close = findClosingInlineMarkupDelimiter(
+        source,
+        strongDelimiter,
+        index,
+        index + strongDelimiter.length,
+      );
       if (close > index + 2) {
         const inner = source.slice(index + 2, close);
         html += `<strong>${renderInline(inner, context, depth + 1)}</strong>`;
@@ -516,7 +522,12 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
     }
 
     if (source.startsWith("~~", index)) {
-      const close = findClosingDelimiter(source, "~~", index + 2);
+      const close = findClosingInlineMarkupDelimiter(
+        source,
+        "~~",
+        index,
+        index + 2,
+      );
       if (close > index + 2) {
         html += `<del>${renderInline(source.slice(index + 2, close), context, depth + 1)}</del>`;
         index = close + 1;
@@ -530,7 +541,12 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
         /[\p{L}\p{N}]/u.test(source[index + 1] ?? "");
       const close = isIntrawordUnderscore
         ? -1
-        : findClosingDelimiter(source, character, index + 1);
+        : findClosingInlineMarkupDelimiter(
+          source,
+          character,
+          index,
+          index + 1,
+        );
       if (close > index + 1) {
         html += `<em>${renderInline(source.slice(index + 1, close), context, depth + 1)}</em>`;
         index = close;
@@ -613,22 +629,6 @@ function parseMarkdownLink(
     html: `<a href="${escapeHtml(safeUrl)}"${titleAttribute}${targetAttributes}>${labelHtml}</a>`,
     end: destinationEnd,
   };
-}
-
-function findClosingDelimiter(source: string, delimiter: string, start: number): number {
-  let cursor = start;
-  while (cursor < source.length) {
-    const index = source.indexOf(delimiter, cursor);
-    if (index < 0) {
-      return -1;
-    }
-    if (source[index - 1] !== "\\") {
-      return index;
-    }
-    cursor = index + delimiter.length;
-  }
-
-  return -1;
 }
 
 function findUnescaped(source: string, needle: string, start: number): number {
