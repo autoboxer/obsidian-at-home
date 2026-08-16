@@ -1,3 +1,5 @@
+import { characterIsEscaped } from "./inlineMarkup";
+
 export interface MarkdownSelectionEdit {
   value: string;
   selectionStart: number;
@@ -82,6 +84,42 @@ export function wrapInlineCode(
     `${delimiter}${padding}`,
     `${padding}${delimiter}`,
   );
+}
+
+export function wrapMarkdownLink(
+  value: string,
+  start: number,
+  end: number,
+): MarkdownSelectionEdit {
+  const selected = value.slice(start, end);
+  const label = escapeMarkdownLinkLabel(selected);
+  const replacement = `[${label}]()`;
+  const cursor = selected
+    ? start + replacement.length - 1
+    : start + 1;
+
+  return {
+    value: `${value.slice(0, start)}${replacement}${value.slice(end)}`,
+    selectionStart: cursor,
+    selectionEnd: cursor,
+  };
+}
+
+function escapeMarkdownLinkLabel(value: string): string {
+  let escaped = "";
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (
+      (character === "[" || character === "]")
+      && !characterIsEscaped(value, index)
+    ) {
+      escaped += "\\";
+    }
+    escaped += character;
+  }
+
+  return escaped;
 }
 
 function wrapSelection(

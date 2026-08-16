@@ -57,7 +57,11 @@ import {
   navigateLiveMarkdownTable,
   type LiveMarkdownTableNavigation,
 } from "../lib/liveMarkdownTableNavigation";
-import { toggleInlineFormatting, wrapInlineCode } from "../lib/markdownFormatting";
+import {
+  toggleInlineFormatting,
+  wrapInlineCode,
+  wrapMarkdownLink,
+} from "../lib/markdownFormatting";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import type { Extension, SelectionRange } from "@codemirror/state";
 import type { Command, ViewUpdate } from "@codemirror/view";
@@ -371,6 +375,22 @@ const wrapSelectionAsInlineCode: Command = (view) => {
     ),
   );
 };
+const wrapSelectionAsMarkdownLink: Command = (view) => {
+  if (view.composing) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+
+  return applyMarkdownSelectionEdit(
+    view,
+    wrapMarkdownLink(
+      view.state.doc.toString(),
+      selection.from,
+      selection.to,
+    ),
+  );
+};
 
 const moveToRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, false);
 const selectRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, true);
@@ -511,6 +531,7 @@ onMounted(() => {
           { key: "Shift-Tab", run: handleShiftTab },
           { key: "Mod-b", run: toggleBold },
           { key: "Mod-i", run: toggleItalic },
+          { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
           { key: "Mod-Shift-x", run: toggleStrikethrough },
           { key: "'", run: insertLiteralApostrophe },
           { key: "-", run: insertLiteralHyphen },

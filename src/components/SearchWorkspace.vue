@@ -13,6 +13,9 @@ import type { SearchScope } from "../types";
 import AppIcon from "./AppIcon.vue";
 
 const input = ref<HTMLInputElement>();
+const commandKey = /Macintosh|Mac OS|iPhone|iPad|iPod/.test(navigator.userAgent)
+  ? "⌘"
+  : "Ctrl";
 const searchScopes: Array<{ id: SearchScope; label: string }> = [
   { id: "all", label: "Everywhere" },
   { id: "titles", label: "Titles" },
@@ -169,7 +172,7 @@ function formatDate(timestamp: number): string {
           spellcheck="false"
         />
         <button v-if="query" type="button" aria-label="Clear search" @click="clearSearch"><AppIcon name="x" :size="15" /></button>
-        <span v-else class="search-quick-hint">Quick search <kbd>⌘ K</kbd></span>
+        <span v-else class="search-quick-hint">Quick search <kbd>{{ commandKey }} O</kbd></span>
       </div>
 
       <div class="search-controls">

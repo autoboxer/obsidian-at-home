@@ -26,7 +26,7 @@ const shortcutGroups: ShortcutGroup[] = [
     id: "workspace",
     title: "Workspace",
     shortcuts: [
-      { label: "Quick search", keys: [commandKey, "K"] },
+      { label: "Quick search", keys: [commandKey, "O"] },
       { label: "Create a note", keys: [commandKey, "N"] },
       { label: "Open templates", keys: [commandKey, "Shift", "T"] },
       { label: "Toggle the vault panel", keys: [commandKey, "\\"] },
@@ -40,6 +40,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: "Toggle bold", keys: [commandKey, "B"] },
       { label: "Toggle italic", keys: [commandKey, "I"] },
       { label: "Toggle strikethrough", keys: [commandKey, "Shift", "X"] },
+      { label: "Create a Markdown link", keys: [commandKey, "K"] },
       { label: "Wrap as inline code", detail: "With text selected", keys: ["Backtick"] },
       { label: "Find in the current note", keys: [commandKey, "F"] },
       { label: "Next find result", detail: "While find is open", keys: ["Tab"] },

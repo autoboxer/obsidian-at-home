@@ -90,12 +90,13 @@ For a broader syntax reference, see the [CommonMark Markdown Reference](https://
 
 ## Useful shortcuts
 
-- **⌘/Ctrl K** — search notes
+- **⌘/Ctrl O** — search notes
 - **⌘/Ctrl N** — create a note
 - **⌘/Ctrl Shift T** — open templates
 - **⌘/Ctrl + backslash** — toggle the vault panel
 - **⌘/Ctrl B** — toggle bold text
 - **⌘/Ctrl I** — toggle italic text
+- **⌘/Ctrl K** — create a Markdown link
 - **⌘/Ctrl Shift X** — toggle strikethrough text
 - **⌘/Ctrl F** — find text in the current note; use Tab or Shift+Tab to move through matches
 - **Select text, then press Backtick** — wrap it as inline code
