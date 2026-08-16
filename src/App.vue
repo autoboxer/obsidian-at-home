@@ -75,7 +75,7 @@ function handleKeyboard(event: KeyboardEvent): void {
   const isEditing = target instanceof HTMLElement
     && target.matches("input, textarea, select, [contenteditable='true']");
   const appShortcut = (
-    modifier && ["k", "n", "\\"].includes(key)
+    modifier && ["n", "o", "\\"].includes(key)
     || modifier && event.shiftKey && key === "t"
     || !modifier && !isEditing && key === "/"
   );
@@ -105,7 +105,7 @@ function handleKeyboard(event: KeyboardEvent): void {
     return;
   }
 
-  if (modifier && key === "k") {
+  if (modifier && key === "o") {
     event.preventDefault();
     if (uiState.commandOpen) {
       uiState.commandOpen = false;
