@@ -82,7 +82,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
   openLink: [href: string];
-  openWiki: [target: string];
+  openWiki: [target: string, heading?: string];
   "update:modelValue": [value: string];
 }>();
 
@@ -736,9 +736,46 @@ function openLiveMarkdownLink(href: string): void {
   emit("openLink", href);
 }
 
-function openLiveMarkdownWikiLink(target: string): void {
-  emit("openWiki", target);
+function openLiveMarkdownWikiLink(target: string, heading?: string): void {
+  emit("openWiki", target, heading);
 }
+
+function focusDocumentOffset(offset: number): boolean {
+  const view = editorView.value;
+  if (!view || !Number.isFinite(offset)) {
+    return false;
+  }
+
+  if (viewportRestoreFrame !== undefined) {
+    window.cancelAnimationFrame(viewportRestoreFrame);
+    viewportRestoreFrame = undefined;
+  }
+
+  const bodyStart = markdownBodyStart(
+    frontmatterPrefix,
+    view.state.doc.toString(),
+  );
+  const position = Math.min(
+    view.state.doc.length,
+    Math.max(0, Math.trunc(offset) - bodyStart),
+  );
+
+  positionCaptureEnabled = true;
+  view.dispatch({
+    selection: EditorSelection.cursor(position),
+    effects: EditorView.scrollIntoView(position, {
+      y: "start",
+      yMargin: VIEWPORT_ANCHOR_MARGIN,
+    }),
+    userEvent: "select",
+  });
+  view.focus();
+  schedulePositionCapture(view);
+
+  return true;
+}
+
+defineExpose({ focusDocumentOffset });
 
 function normalizeInlineLinkTarget(value: string): string {
   return normalizeWikiTarget(value)

@@ -6,6 +6,7 @@ import {
   ViewPlugin,
 } from "@codemirror/view";
 import { documentSearchMatches } from "./codeMirrorDocumentSearch";
+import { parseMarkdownHeadingTarget } from "./headingLinks";
 import { highlightCodeRanges } from "./highlight";
 import { parsePairedInlineMarkup } from "./inlineMarkup";
 import { parseLiveMarkdownBlocks } from "./liveMarkdown";
@@ -52,7 +53,7 @@ import type {
 
 export interface LiveMarkdownOptions {
   readonly openLink: (href: string) => void;
-  readonly openWiki: (target: string) => void;
+  readonly openWiki: (target: string, heading?: string) => void;
   readonly wikiLinkIsResolved: (target: string) => boolean;
 }
 
@@ -196,13 +197,13 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
           return false;
         }
 
-        if (!window.__TAURI__) {
-          return false;
-        }
-
         const rawHref = link.dataset.liveHref ?? "";
         const href = rawHref.startsWith("//") ? `https:${rawHref}` : rawHref;
-        if (/^(?:https?|mailto):/i.test(href)) {
+        if (parseMarkdownHeadingTarget(rawHref)) {
+          this.options.openLink(rawHref);
+        } else if (!window.__TAURI__) {
+          return false;
+        } else if (/^(?:https?|mailto):/i.test(href)) {
           this.options.openLink(href);
         }
 
@@ -217,7 +218,8 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
           return false;
         }
 
-        if (window.__TAURI__) {
+        const rawHref = link.dataset.liveHref ?? "";
+        if (window.__TAURI__ || parseMarkdownHeadingTarget(rawHref)) {
           return true;
         }
 
