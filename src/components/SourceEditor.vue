@@ -34,6 +34,10 @@ import {
   codeMirrorDocumentSearchExtension,
   useCodeMirrorDocumentSearch,
 } from "../composables/useCodeMirrorDocumentSearch";
+import {
+  insertLiteralApostrophe,
+  literalApostropheExtension,
+} from "../lib/codeMirrorApostrophe";
 import { normalizeOrderedListMarkers } from "../lib/liveMarkdown";
 import {
   liveMarkdownExtension,
@@ -333,21 +337,6 @@ const handleTableArrowUp: Command = (view) => {
 const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
 const toggleItalic: Command = (view) => toggleSelectionFormatting(view, "*", ["_"]);
 const toggleStrikethrough: Command = (view) => toggleSelectionFormatting(view, "~~");
-const insertLiteralApostrophe: Command = (view) => {
-  if (view.composing) {
-    return false;
-  }
-
-  view.dispatch(
-    view.state.replaceSelection("'"),
-    {
-      scrollIntoView: true,
-      userEvent: "input.type",
-    },
-  );
-
-  return true;
-};
 const insertLiteralHyphen: Command = (view) => {
   if (view.composing) {
     return false;
@@ -502,6 +491,7 @@ onMounted(() => {
           completeHTMLTags: false,
           pasteURLAsLink: false,
         }),
+        literalApostropheExtension,
         liveMarkdownExtension({
           openLink: openLiveMarkdownLink,
           openWiki: openLiveMarkdownWikiLink,
