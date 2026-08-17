@@ -2,6 +2,10 @@
 import appIcon from "../assets/app-icon.png";
 import { computed, ref } from "vue";
 import {
+  formatCommandShortcut,
+  shortcutCommandKey,
+} from "../lib/keyboard";
+import {
   MAX_ZOOM,
   MIN_ZOOM,
   openSearchWorkspace,
@@ -23,6 +27,10 @@ const primaryTools: Array<{ id: ToolView; label: string; icon: string; shortcut?
 
 const zoomMenuOpen = ref(false);
 const zoomPercent = computed(() => Math.round(uiState.zoom * 100));
+const commandKey = shortcutCommandKey();
+const zoomInShortcut = formatCommandShortcut("+");
+const zoomOutShortcut = formatCommandShortcut("−");
+const zoomResetShortcut = formatCommandShortcut("0");
 
 function selectTool(tool: ToolView): void {
   if (tool === "search") {
@@ -75,7 +83,7 @@ function handleZoomFocusOut(event: FocusEvent): void {
         :class="{ active: zoomMenuOpen || uiState.zoom !== 1 }"
         :aria-expanded="zoomMenuOpen"
         :aria-label="`Zoom controls. Current zoom ${zoomPercent}%`"
-        :title="`Zoom ${zoomPercent}% · ⌘+ / ⌘− / ⌘0`"
+        :title="`Zoom ${zoomPercent}% · ${zoomInShortcut} / ${zoomOutShortcut} / ${zoomResetShortcut}`"
         @click="zoomMenuOpen = !zoomMenuOpen"
       >
         <AppIcon name="zoom-in" :size="18" />
@@ -84,17 +92,17 @@ function handleZoomFocusOut(event: FocusEvent): void {
         <div v-if="zoomMenuOpen" class="rail-zoom-popover">
           <span>App zoom</span>
           <div class="rail-zoom-actions">
-            <button type="button" :disabled="uiState.zoom <= MIN_ZOOM" aria-label="Zoom out" title="Zoom out · ⌘−" @click="zoomOut">
+            <button type="button" :disabled="uiState.zoom <= MIN_ZOOM" aria-label="Zoom out" :title="`Zoom out · ${zoomOutShortcut}`" @click="zoomOut">
               <AppIcon name="minus" :size="14" />
             </button>
-            <button type="button" aria-label="Reset zoom" title="Reset zoom · ⌘0" @click="resetZoom">
+            <button type="button" aria-label="Reset zoom" :title="`Reset zoom · ${zoomResetShortcut}`" @click="resetZoom">
               {{ zoomPercent }}%
             </button>
-            <button type="button" :disabled="uiState.zoom >= MAX_ZOOM" aria-label="Zoom in" title="Zoom in · ⌘+" @click="zoomIn">
+            <button type="button" :disabled="uiState.zoom >= MAX_ZOOM" aria-label="Zoom in" :title="`Zoom in · ${zoomInShortcut}`" @click="zoomIn">
               <AppIcon name="plus" :size="14" />
             </button>
           </div>
-          <small>⌘/Ctrl + · − · 0</small>
+          <small>{{ commandKey }} + · − · 0</small>
         </div>
       </Transition>
     </div>

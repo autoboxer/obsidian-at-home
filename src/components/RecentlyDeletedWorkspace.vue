@@ -144,6 +144,7 @@ function loadMore(): void {
           v-if="recentlyDeletedNotes.length"
           type="button"
           class="secondary-button recently-deleted-empty-button"
+          data-recovery-action="empty"
           :disabled="recentlyDeletedState.busy"
           @click="emptyRecentlyDeleted"
         >
@@ -228,6 +229,7 @@ function loadMore(): void {
                 class="secondary-button recently-deleted-delete-button"
                 :disabled="recentlyDeletedState.busy"
                 :aria-label="`Permanently delete ${displayTitle(entry)}`"
+                data-recovery-action="delete"
                 @click="permanentlyDelete(entry)"
               >
                 <AppIcon name="trash" :size="14" />
@@ -242,6 +244,7 @@ function loadMore(): void {
         v-if="visibleEntries.length < recentlyDeletedNotes.length"
         type="button"
         class="secondary-button recently-deleted-load-more"
+        data-recovery-action="load-more"
         :disabled="recentlyDeletedState.busy"
         @click="loadMore"
       >

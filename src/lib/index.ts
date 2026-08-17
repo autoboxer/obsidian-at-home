@@ -1,6 +1,7 @@
 export * from "./documentSearch";
 export * from "./frontmatter";
 export * from "./headingLinks";
+export * from "./keyboard";
 export * from "./liveMarkdown";
 export * from "./liveMarkdownCode";
 export * from "./liveMarkdownTable";

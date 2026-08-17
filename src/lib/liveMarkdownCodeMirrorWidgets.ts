@@ -207,6 +207,7 @@ export class WikiLinkWidget extends WidgetType {
     link.className = [
       "live-inline-segment",
       "is-wiki-link",
+      ...(this.heading ? ["is-heading-link"] : []),
       this.resolved ? "is-resolved" : "is-unresolved",
     ].join(" ");
     link.href = "#";

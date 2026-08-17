@@ -6,6 +6,7 @@ import {
   findMarkdownHeading,
   parseMarkdownHeadingTarget,
 } from "../lib/headingLinks";
+import { formatCommandShortcut } from "../lib/keyboard";
 import { resolveWikiLink } from "../lib/wikiLinks";
 import {
   editorPositionVaultId,
@@ -37,6 +38,7 @@ import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
 import SourceEditor from "./SourceEditor.vue";
 
+const createNoteShortcut = formatCommandShortcut("N");
 const tagInputOpen = ref(false);
 const tagInput = ref("");
 const tagField = ref<HTMLInputElement>();
@@ -335,10 +337,17 @@ watch(tagInput, () => {
         >
           <AppIcon name="sidebar" :size="17" />
         </button>
-        <div v-if="activeNote" class="note-navigation" role="group" aria-label="Note history">
+        <div
+          v-if="activeNote"
+          class="note-navigation"
+          data-ui-region="note-history"
+          role="group"
+          aria-label="Note history"
+        >
           <button
             class="icon-button subtle"
             type="button"
+            data-note-action="navigate-back"
             :disabled="!canNavigateBack"
             :title="backNavigationLabel"
             :aria-label="backNavigationLabel"
@@ -349,6 +358,7 @@ watch(tagInput, () => {
           <button
             class="icon-button subtle"
             type="button"
+            data-note-action="navigate-forward"
             :disabled="!canNavigateForward"
             :title="forwardNavigationLabel"
             :aria-label="forwardNavigationLabel"
@@ -363,7 +373,7 @@ watch(tagInput, () => {
               type="button"
               class="icon-button subtle"
               aria-label="Create note"
-              title="Create note · ⌘N"
+              :title="`Create note · ${createNoteShortcut}`"
               @click="createNote()"
             >
               <AppIcon name="file-plus" :size="15" />
@@ -433,6 +443,7 @@ watch(tagInput, () => {
           v-if="hasFrontmatter || uiState.frontmatterVisible"
           class="icon-button frontmatter-toggle"
           type="button"
+          data-note-action="toggle-frontmatter"
           :class="{ active: uiState.frontmatterVisible }"
           :aria-label="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
           :title="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"

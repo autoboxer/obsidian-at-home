@@ -76,7 +76,7 @@ Press Enter at the end of a list item to continue the list. Press Tab or Shift+T
 | CSS snippets | Customize the interface |
 | Obsidian transfer | Copy notes into or out of the current vault |
 
-Inside a table, press Tab or Shift+Tab to move between cells. Press Enter to move down the current column. Moving beyond the final row creates another row.
+Inside a table, press Tab or Shift+Tab to move between cells. Enter inserts a row below the current row and moves to its first cell; Shift+Enter adds a line break inside a cell. Use Up Arrow or Down Arrow to move within a column. Down Arrow from the final row exits below the table.
 
 ### 5. Quotes and code blocks
 
@@ -100,12 +100,12 @@ For a broader syntax reference, see the [CommonMark Markdown Reference](https://
 - **⌘/Ctrl O** — search notes
 - **⌘/Ctrl N** — create a note
 - **⌘/Ctrl Shift T** — open templates
-- **⌘/Ctrl + backslash** — toggle the vault panel
+- **⌘/Ctrl Backslash** — toggle the vault panel
 - **⌘/Ctrl B** — toggle bold text
 - **⌘/Ctrl I** — toggle italic text
 - **⌘/Ctrl K** — create a Markdown link
 - **⌘/Ctrl Shift X** — toggle strikethrough text
-- **⌘/Ctrl F** — find text in the current note; use Tab or Shift+Tab to move through matches
+- **⌘/Ctrl F** — find text in the current note; use Tab/Shift+Tab, Enter/Shift+Enter, or F3/Shift+F3 to move through matches
 - **Select text, then press Backtick** — wrap it as inline code
 
 Open **Keyboard shortcuts** from the bottom of the activity rail for the complete reference.

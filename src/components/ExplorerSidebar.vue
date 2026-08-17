@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { formatCommandShortcut } from "../lib/keyboard";
 import {
   createFolder,
   createNote,
@@ -21,6 +22,7 @@ import AppIcon from "./AppIcon.vue";
 import VaultTreeFolder from "./VaultTreeFolder.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
 
+const createNoteShortcut = formatCommandShortcut("N");
 const folderInputOpen = ref(false);
 const folderName = ref("");
 const folderField = ref<HTMLInputElement>();
@@ -285,7 +287,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
     </label>
 
     <div class="explorer-create-actions">
-      <button type="button" class="explorer-create-button" title="New note · ⌘N" @click="createNote()">
+      <button type="button" class="explorer-create-button" :title="`New note · ${createNoteShortcut}`" @click="createNote()">
         <span><AppIcon name="file-plus" :size="15" /></span>
         New note
       </button>
@@ -343,7 +345,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
         <div class="section-label">
           <span id="vault-tree-heading">Files</span>
           <div class="section-label-actions">
-            <button type="button" aria-label="New note" title="New note · ⌘N" @click="createNote()">
+            <button type="button" aria-label="New note" :title="`New note · ${createNoteShortcut}`" @click="createNote()">
               <AppIcon name="file-plus" :size="14" />
             </button>
             <button type="button" aria-label="New folder" title="New folder" @click="openFolderInput">
