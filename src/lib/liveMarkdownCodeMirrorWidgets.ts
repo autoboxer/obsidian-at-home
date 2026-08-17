@@ -182,7 +182,7 @@ export class WikiLinkWidget extends WidgetType {
     private readonly heading: string | undefined,
     private readonly embedded: boolean,
     private readonly resolved: boolean,
-    private readonly openWiki: (target: string) => void,
+    private readonly openWiki: (target: string, heading?: string) => void,
     private readonly from: number,
     private readonly to: number,
     private readonly resolutionVersion: number,
@@ -227,8 +227,8 @@ export class WikiLinkWidget extends WidgetType {
       event.preventDefault();
       event.stopPropagation();
       const target = this.target.trim();
-      if (target) {
-        this.openWiki(target);
+      if (target || this.heading) {
+        this.openWiki(target, this.heading);
       }
     });
 

@@ -3,6 +3,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { computed, nextTick, ref, watch } from "vue";
 import { leadingFrontmatterEnd } from "../lib/frontmatter";
 import {
+  findMarkdownHeading,
+  parseMarkdownHeadingTarget,
+} from "../lib/headingLinks";
+import { resolveWikiLink } from "../lib/wikiLinks";
+import {
   editorPositionVaultId,
   getNoteEditorPosition,
   setNoteEditorPosition,
@@ -21,6 +26,7 @@ import {
   navigateBack,
   navigateForward,
   notify,
+  selectNote,
   togglePinned,
   uiState,
   updateNote,
@@ -40,6 +46,9 @@ const quickFolderOpen = ref(false);
 const quickFolderName = ref("");
 const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
+const sourceEditor = ref<{
+  focusDocumentOffset: (offset: number) => boolean;
+}>();
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
 const positionVaultId = computed(() => editorPositionVaultId(vaultSession.backend, vaultSession.path));
@@ -123,11 +132,57 @@ function rememberEditorPosition(
 }
 
 async function openRenderedLink(href: string): Promise<void> {
+  const headingTarget = parseMarkdownHeadingTarget(href);
+  if (headingTarget) {
+    await openHeadingLink(headingTarget.noteTarget, headingTarget.heading);
+
+    return;
+  }
+
   try {
     await openUrl(href);
   } catch {
     notify("Could not open that link", "warning");
   }
+}
+
+async function openWikiLink(target: string, heading?: string): Promise<void> {
+  if (!heading) {
+    createLinkedNote(target);
+
+    return;
+  }
+
+  await openHeadingLink(target, heading);
+}
+
+async function openHeadingLink(target: string, heading: string): Promise<void> {
+  const note = resolveWikiLink(target, vaultState.notes, activeNote.value);
+  if (!note) {
+    notify(`Could not find note “${linkedNoteLabel(target)}”`, "warning");
+
+    return;
+  }
+
+  const match = findMarkdownHeading(note.content, heading);
+  if (!match) {
+    notify(`Could not find heading “${heading}” in “${note.title}”`, "warning");
+
+    return;
+  }
+
+  if (note.id !== activeNote.value?.id) {
+    selectNote(note.id);
+    await nextTick();
+  }
+
+  if (!sourceEditor.value?.focusDocumentOffset(match.contentFrom)) {
+    notify("Could not move to that heading", "warning");
+  }
+}
+
+function linkedNoteLabel(target: string): string {
+  return target.trim().replace(/\.md$/i, "") || "current note";
 }
 
 function setFolder(event: Event): void {
@@ -485,6 +540,7 @@ watch(tagInput, () => {
         <div class="editor-canvas" data-editor-pane="live">
           <SourceEditor
             :key="editorKey"
+            ref="sourceEditor"
             :initial-position="savedEditorPosition(activeNote.id, activeNote.content)"
             :model-value="activeNote.content"
             :note-id="activeNote.id"
@@ -493,7 +549,7 @@ watch(tagInput, () => {
             :vault-id="positionVaultId"
             @editor-position="rememberEditorPosition"
             @open-link="openRenderedLink"
-            @open-wiki="createLinkedNote"
+            @open-wiki="openWikiLink"
             @update:model-value="setContent"
           />
         </div>

@@ -1,5 +1,6 @@
 import type { Note } from "../types";
 import { leadingFrontmatterEnd } from "./frontmatter";
+import { markdownHeadingSlug } from "./headingLinks";
 import { highlightCode } from "./highlight";
 import { findClosingInlineMarkupDelimiter } from "./inlineMarkup";
 import { parseWikiLinkAt } from "./wikiLinks";
@@ -296,7 +297,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
       const level = heading[1]!.length;
       const text = heading[2]!.replace(/[\t ]+#+[\t ]*$/, "");
       const prefix = context.options.headingIdPrefix ?? "";
-      const slug = slugifyHeading(text);
+      const slug = markdownHeadingSlug(text);
       const id = `${prefix}${slug}`;
 
       if (context.options.collapsibleHeadings) {
@@ -889,17 +890,4 @@ function tableAlignment(value: string): "left" | "center" | "right" | undefined 
 
 function alignmentClass(value: ReturnType<typeof tableAlignment>): string {
   return value ? ` class="align-${value}"` : "";
-}
-
-function slugifyHeading(value: string): string {
-  const slug = value
-    .replace(/!?(?:\[\[)([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g, "$2$1")
-    .replace(/[`*_~]/g, "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-
-  return slug || "section";
 }

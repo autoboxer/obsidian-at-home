@@ -44,6 +44,13 @@ Start headings with \`#\` through \`######\`. Use \`**bold**\`, \`*italic*\`, \`
 
 Type \`[[\` to search for another note and insert a wiki link. The right panel lists outgoing links and backlinks. Standard links use \`[label](https://example.com)\`.
 
+Add a heading after \`#\` to jump directly to a section. For example, [jump to Useful shortcuts](#useful-shortcuts) in this note. The supported forms are:
+
+- \`[[#Useful shortcuts]]\` or \`[Useful shortcuts](#useful-shortcuts)\` for the current note
+- \`[[Project plan#Next steps]]\` or \`[Next steps](Project%20plan.md#next-steps)\` for another note
+
+A target can use the visible heading text or its lowercase, hyphenated slug. Matching ignores case and accents. When duplicate headings share a target, the first one in the note is used. A missing note or heading shows a warning without creating a note.
+
 ### 3. Lists and tasks
 
 - Bulleted item

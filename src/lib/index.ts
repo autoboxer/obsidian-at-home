@@ -1,5 +1,6 @@
 export * from "./documentSearch";
 export * from "./frontmatter";
+export * from "./headingLinks";
 export * from "./liveMarkdown";
 export * from "./liveMarkdownCode";
 export * from "./liveMarkdownTable";

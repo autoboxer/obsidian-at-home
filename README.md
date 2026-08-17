@@ -30,7 +30,7 @@ This is not a complete Obsidian replacement: cloud sync, attachments, graph view
 - Return to each note's cursor and scroll position, even after restarting the app.
 - Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
 - Personalize the app with light and dark themes, bundled typefaces, or fonts installed on your computer.
-- Link notes with `[[wiki links]]` and browse outgoing links and backlinks.
+- Link notes or jump directly to headings with wiki or Markdown links, then browse outgoing links and backlinks.
 - Search titles, content, folders, and tags, or jump to a note with the quick switcher.
 - Use freeform tags, favorites, and reusable templates.
 - Modify the UI with [CSS snippets](docs/css-snippets.md).
