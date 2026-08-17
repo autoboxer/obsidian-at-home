@@ -337,10 +337,17 @@ watch(tagInput, () => {
         >
           <AppIcon name="sidebar" :size="17" />
         </button>
-        <div v-if="activeNote" class="note-navigation" role="group" aria-label="Note history">
+        <div
+          v-if="activeNote"
+          class="note-navigation"
+          data-ui-region="note-history"
+          role="group"
+          aria-label="Note history"
+        >
           <button
             class="icon-button subtle"
             type="button"
+            data-note-action="navigate-back"
             :disabled="!canNavigateBack"
             :title="backNavigationLabel"
             :aria-label="backNavigationLabel"
@@ -351,6 +358,7 @@ watch(tagInput, () => {
           <button
             class="icon-button subtle"
             type="button"
+            data-note-action="navigate-forward"
             :disabled="!canNavigateForward"
             :title="forwardNavigationLabel"
             :aria-label="forwardNavigationLabel"
@@ -435,6 +443,7 @@ watch(tagInput, () => {
           v-if="hasFrontmatter || uiState.frontmatterVisible"
           class="icon-button frontmatter-toggle"
           type="button"
+          data-note-action="toggle-frontmatter"
           :class="{ active: uiState.frontmatterVisible }"
           :aria-label="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
           :title="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"

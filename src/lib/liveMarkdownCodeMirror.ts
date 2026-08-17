@@ -1220,13 +1220,18 @@ function addMarkdownLinkDecoration(
     },
   ]);
   if (labelOpening.to < labelClosing.from) {
+    const className = href
+      ? [
+          "live-inline-segment",
+          "is-link",
+          ...(parseMarkdownHeadingTarget(href) ? ["is-heading-link"] : []),
+        ].join(" ")
+      : "live-inline-segment is-unsafe-link";
     model.decorations.push({
       from: labelOpening.to,
       to: labelClosing.from,
       decoration: Decoration.mark({
-        class: href
-          ? "live-inline-segment is-link"
-          : "live-inline-segment is-unsafe-link",
+        class: className,
         ...(href
           ? {
               attributes,

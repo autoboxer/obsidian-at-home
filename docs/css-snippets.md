@@ -26,6 +26,12 @@ Use a view selector when a style should apply only while that screen is open.
 | `[data-ui-region="activity-rail"]` | Left navigation |
 | `[data-ui-region="vault-panel"]` | Vault and files panel |
 | `[data-ui-region="editor"]` | Note editor |
+| `[data-ui-region="note-history"]` | Back and Forward controls |
+| `[data-ui-region="recently-deleted"]` | Recently Deleted workspace |
+| `[data-ui-region="recently-deleted-header"]` | Recently Deleted header |
+| `[data-ui-region="recently-deleted-list"]` | Recently Deleted list |
+| `[data-ui-region="recently-deleted-note"]` | Deleted note card |
+| `[data-ui-region="recently-deleted-actions"]` | Deleted note actions |
 | `[data-ui-region="note-title"]` | Note title field |
 | `[data-ui-region="document-search"]` | Find-in-note bar |
 | `[data-ui-region="context-panel"]` | Links and note details |
@@ -49,6 +55,7 @@ The context panel also exposes `[data-context-view="links"]` and `[data-context-
 | Selector | Target |
 | --- | --- |
 | `[data-editor-view="live"]` | Unified editor view |
+| `[data-note-view="recently-deleted"]` | Recently Deleted note view |
 | `[data-editor-pane="live"]` | Unified note pane |
 | `[data-context-view="links"]` | Links context tab |
 | `[data-context-view="info"]` | Info context tab |
@@ -65,6 +72,18 @@ CodeMirror owns the editor's text, formatting, caret, and layout in one surface.
   --source-editor-line-height: calc(var(--note-font-size) * 1.85);
 }
 ```
+
+## Actions
+
+| Selector | Action |
+| --- | --- |
+| `[data-note-action="navigate-back"]` | Back through note history |
+| `[data-note-action="navigate-forward"]` | Forward through note history |
+| `[data-note-action="toggle-frontmatter"]` | Show or hide note frontmatter |
+| `[data-recovery-action="restore"]` | Restore a deleted note |
+| `[data-recovery-action="delete"]` | Permanently delete one note |
+| `[data-recovery-action="empty"]` | Empty Recently Deleted |
+| `[data-recovery-action="load-more"]` | Load more deleted notes |
 
 ## Common interface elements
 
@@ -103,15 +122,26 @@ The live editor applies formatting directly inside `.source-textarea`. Scope sty
 
 | Selector | Target |
 | --- | --- |
+| `.live-markdown-block.is-heading` | All headings |
 | `.live-markdown-block.heading-level-1` | Level-one headings |
+| `.live-inline-segment.is-link` | Markdown links |
 | `.live-inline-segment.is-wiki-link` | Wiki links |
+| `.live-inline-segment.is-heading-link` | Links to note headings |
 | `.live-inline-segment.is-wiki-link.is-unresolved` | Unresolved wiki links |
+| `.live-inline-segment.is-strong` | Bold text |
+| `.live-inline-segment.is-emphasis` | Italic text |
+| `.live-inline-segment.is-strikethrough` | Strikethrough text |
+| `.live-inline-segment.is-code` | Inline code |
 | `.live-markdown-block.is-blockquote` | Blockquotes |
+| `.live-markdown-block.is-list` | List items |
+| `.live-list-marker` | List bullets and numbers |
 | `.live-markdown-block.is-code-content` | Code block content |
 | `.live-markdown-block.is-table-row` | Table rows |
+| `.live-table-cell` | Table cells |
 | `.live-markdown-block.is-task` | Tasks |
 | `.live-task-checkbox` | Task checkboxes |
 | `.live-code-language-button` | Code language control |
+| `.live-code-language-picker` | Code language menu |
 | `.is-code-content .hljs-keyword` | Highlighted keywords |
 
 ## Theme variables

@@ -178,6 +178,7 @@ async function closeReference(): Promise<void> {
               <code>[data-ui-region="activity-rail"]</code><span>Left navigation</span>
               <code>[data-ui-region="vault-panel"]</code><span>Vault and files panel</span>
               <code>[data-ui-region="editor"]</code><span>Note editor</span>
+              <code>[data-ui-region="note-history"]</code><span>Back and Forward controls</span>
               <code>[data-ui-region="recently-deleted"]</code><span>Recently Deleted workspace</span>
               <code>[data-ui-region="recently-deleted-header"]</code><span>Recently Deleted header</span>
               <code>[data-ui-region="recently-deleted-list"]</code><span>Recently Deleted list</span>
@@ -218,6 +219,19 @@ async function closeReference(): Promise<void> {
           </details>
 
           <details>
+            <summary>Actions</summary>
+            <div class="snippet-reference-grid">
+              <code>[data-note-action="navigate-back"]</code><span>Back through note history</span>
+              <code>[data-note-action="navigate-forward"]</code><span>Forward through note history</span>
+              <code>[data-note-action="toggle-frontmatter"]</code><span>Show or hide note frontmatter</span>
+              <code>[data-recovery-action="restore"]</code><span>Restore a deleted note</span>
+              <code>[data-recovery-action="delete"]</code><span>Permanently delete one note</span>
+              <code>[data-recovery-action="empty"]</code><span>Empty Recently Deleted</span>
+              <code>[data-recovery-action="load-more"]</code><span>Load more deleted notes</span>
+            </div>
+          </details>
+
+          <details>
             <summary>Common interface elements</summary>
             <div class="snippet-reference-grid">
               <code>.rail-button</code><span>Navigation buttons</span>
@@ -242,15 +256,26 @@ async function closeReference(): Promise<void> {
           <details>
             <summary>Live Markdown</summary>
             <div class="snippet-reference-grid">
+              <code>.live-markdown-block.is-heading</code><span>All headings</span>
               <code>.live-markdown-block.heading-level-1</code><span>Level-one headings</span>
+              <code>.live-inline-segment.is-link</code><span>Markdown links</span>
               <code>.live-inline-segment.is-wiki-link</code><span>Wiki links</span>
+              <code>.live-inline-segment.is-heading-link</code><span>Links to note headings</span>
               <code>.live-inline-segment.is-wiki-link.is-unresolved</code><span>Unresolved wiki links</span>
+              <code>.live-inline-segment.is-strong</code><span>Bold text</span>
+              <code>.live-inline-segment.is-emphasis</code><span>Italic text</span>
+              <code>.live-inline-segment.is-strikethrough</code><span>Strikethrough text</span>
+              <code>.live-inline-segment.is-code</code><span>Inline code</span>
               <code>.live-markdown-block.is-blockquote</code><span>Blockquotes</span>
+              <code>.live-markdown-block.is-list</code><span>List items</span>
+              <code>.live-list-marker</code><span>List bullets and numbers</span>
               <code>.live-markdown-block.is-code-content</code><span>Code block content</span>
               <code>.live-markdown-block.is-table-row</code><span>Table rows</span>
+              <code>.live-table-cell</code><span>Table cells</span>
               <code>.live-markdown-block.is-task</code><span>Tasks</span>
               <code>.live-task-checkbox</code><span>Task checkboxes</span>
               <code>.live-code-language-button</code><span>Code language control</span>
+              <code>.live-code-language-picker</code><span>Code language menu</span>
               <code>.is-code-content .hljs-keyword</code><span>Highlighted keywords</span>
             </div>
           </details>
