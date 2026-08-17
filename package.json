@@ -1,7 +1,7 @@
 {
   "name": "obsidian-at-home",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A local-only desktop app for writing, organizing, and linking Markdown notes.",
   "type": "module",
   "scripts": {
