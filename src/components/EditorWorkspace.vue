@@ -6,6 +6,7 @@ import {
   findMarkdownHeading,
   parseMarkdownHeadingTarget,
 } from "../lib/headingLinks";
+import { formatCommandShortcut } from "../lib/keyboard";
 import { resolveWikiLink } from "../lib/wikiLinks";
 import {
   editorPositionVaultId,
@@ -37,6 +38,7 @@ import type { NoteEditorPosition } from "../types";
 import AppIcon from "./AppIcon.vue";
 import SourceEditor from "./SourceEditor.vue";
 
+const createNoteShortcut = formatCommandShortcut("N");
 const tagInputOpen = ref(false);
 const tagInput = ref("");
 const tagField = ref<HTMLInputElement>();
@@ -363,7 +365,7 @@ watch(tagInput, () => {
               type="button"
               class="icon-button subtle"
               aria-label="Create note"
-              title="Create note · ⌘N"
+              :title="`Create note · ${createNoteShortcut}`"
               @click="createNote()"
             >
               <AppIcon name="file-plus" :size="15" />

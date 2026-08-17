@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref } from "vue";
+import { shortcutCommandKey } from "../lib/keyboard";
 import AppIcon from "./AppIcon.vue";
 
 interface Shortcut {
@@ -18,9 +19,7 @@ const referenceOpen = ref(false);
 const referenceButton = ref<HTMLButtonElement>();
 const closeButton = ref<HTMLButtonElement>();
 const referenceDialog = ref<HTMLElement>();
-const commandKey = /Macintosh|Mac OS|iPhone|iPad|iPod/.test(navigator.userAgent)
-  ? "⌘"
-  : "Ctrl";
+const commandKey = shortcutCommandKey();
 const shortcutGroups: ShortcutGroup[] = [
   {
     id: "workspace",
@@ -43,14 +42,17 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: "Create a Markdown link", keys: [commandKey, "K"] },
       { label: "Wrap as inline code", detail: "With text selected", keys: ["Backtick"] },
       { label: "Find in the current note", keys: [commandKey, "F"] },
-      { label: "Next find result", detail: "While find is open", keys: ["Tab"] },
-      { label: "Previous find result", detail: "While find is open", keys: ["Shift", "Tab"] },
+      { label: "Next find result", detail: "Find field: Enter also works. Anywhere: F3", keys: ["Tab"] },
+      { label: "Previous find result", detail: "Find field: Shift+Enter also works. Anywhere: Shift+F3", keys: ["Shift", "Tab"] },
       { label: "Indent", detail: "Current list item or selected lines", keys: ["Tab"] },
       { label: "Outdent", detail: "Current list item or selected lines", keys: ["Shift", "Tab"] },
       { label: "Continue a list", detail: "Also completes an opening code fence", keys: ["Enter"] },
       { label: "Move to the next table cell", detail: "Creates a row after the final cell", keys: ["Tab"] },
       { label: "Move to the previous table cell", keys: ["Shift", "Tab"] },
-      { label: "Move down a table column", detail: "Creates a row at the table boundary", keys: ["Enter"] },
+      { label: "Insert a table row", detail: "Below the current row; moves to its first cell", keys: ["Enter"] },
+      { label: "Add a line break in a table cell", keys: ["Shift", "Enter"] },
+      { label: "Move up a table column", keys: ["↑"] },
+      { label: "Move down a table column", detail: "Exits below the final row", keys: ["↓"] },
     ],
   },
   {

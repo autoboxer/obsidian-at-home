@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { searchNotes } from "../lib";
+import { searchNotes, shortcutCommandKey } from "../lib";
 import {
   folderNameMap,
   folderPath,
@@ -13,9 +13,7 @@ import type { SearchScope } from "../types";
 import AppIcon from "./AppIcon.vue";
 
 const input = ref<HTMLInputElement>();
-const commandKey = /Macintosh|Mac OS|iPhone|iPad|iPod/.test(navigator.userAgent)
-  ? "⌘"
-  : "Ctrl";
+const commandKey = shortcutCommandKey();
 const searchScopes: Array<{ id: SearchScope; label: string }> = [
   { id: "all", label: "Everywhere" },
   { id: "titles", label: "Titles" },
