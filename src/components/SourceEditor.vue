@@ -44,6 +44,7 @@ import {
   liveMarkdownExtension,
   refreshLiveMarkdownEffect,
 } from "../lib/liveMarkdownCodeMirror";
+import { liveMarkdownDocumentModel } from "../lib/liveMarkdownDocumentModel";
 import {
   joinLeadingFrontmatter,
   leadingFrontmatterEnd,
@@ -55,6 +56,8 @@ import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import {
   insertLiveMarkdownTableLineBreak,
   insertLiveMarkdownTableRow,
+  isLiveMarkdownTableCellBoundary,
+  moveAcrossLiveMarkdownTableCellBoundary,
   navigateLiveMarkdownTable,
   type LiveMarkdownTableNavigation,
 } from "../lib/liveMarkdownTableNavigation";
@@ -213,7 +216,7 @@ const handleEnter: Command = (view) => {
   const selection = view.state.selection.main;
   const tableEdit = insertLiveMarkdownTableRow(
     value,
-    parseLiveMarkdownTables(value),
+    liveMarkdownDocumentModel(view.state).tables,
     selection.head,
   );
   if (tableEdit) {
@@ -243,7 +246,7 @@ const handleShiftEnter: Command = (view) => {
   const selection = view.state.selection.main;
   const tableEdit = insertLiveMarkdownTableLineBreak(
     value,
-    parseLiveMarkdownTables(value),
+    liveMarkdownDocumentModel(view.state).tables,
     selection.anchor,
     selection.head,
   );
@@ -269,7 +272,7 @@ function applyTableNavigation(
   const value = view.state.doc.toString();
   const tableEdit = navigateLiveMarkdownTable(
     value,
-    parseLiveMarkdownTables(value),
+    liveMarkdownDocumentModel(view.state).tables,
     view.state.selection.main.head,
     navigation,
   );
@@ -340,6 +343,135 @@ const handleTableArrowUp: Command = (view) => {
 
   return applyTableNavigation(view, "up-row");
 };
+
+function atTableCellBoundary(
+  view: EditorView,
+  boundary: "end" | "start",
+): boolean {
+  if (view.composing) {
+    return false;
+  }
+
+  const tables = liveMarkdownDocumentModel(view.state).tables;
+
+  return view.state.selection.ranges.some((range) =>
+    range.empty && isLiveMarkdownTableCellBoundary(
+      tables,
+      range.head,
+      boundary,
+    )
+  );
+}
+
+const protectTableCellStart: Command = (view) =>
+  atTableCellBoundary(view, "start");
+const protectTableCellEnd: Command = (view) =>
+  atTableCellBoundary(view, "end");
+
+function deleteToTableCellLineBoundary(
+  view: EditorView,
+  boundary: "end" | "start",
+): boolean {
+  if (
+    view.composing ||
+    view.state.readOnly ||
+    view.state.selection.ranges.some((range) => !range.empty)
+  ) {
+    return false;
+  }
+
+  const tables = liveMarkdownDocumentModel(view.state).tables;
+  const bounds = view.state.selection.ranges.map((range) =>
+    liveMarkdownTableCellTextBounds(tables, range.head)
+  );
+  if (bounds.every((cell) => !cell)) {
+    return false;
+  }
+
+  const forward = boundary === "end";
+  const changes = view.state.changeByRange((range) => {
+    let target = view.moveToLineBoundary(range, forward).head;
+    target = forward
+      ? (range.head < target
+        ? target
+        : Math.min(view.state.doc.length, range.head + 1))
+      : (range.head > target ? target : Math.max(0, range.head - 1));
+
+    const cell = liveMarkdownTableCellTextBounds(tables, range.head);
+    if (cell) {
+      target = forward
+        ? Math.max(range.head, Math.min(target, cell.to))
+        : Math.min(range.head, Math.max(target, cell.from));
+    }
+
+    const from = Math.min(range.head, target);
+    const to = Math.max(range.head, target);
+
+    return from === to
+      ? { range }
+      : {
+        changes: { from, to },
+        range: EditorSelection.cursor(from, forward ? 1 : -1),
+      };
+  });
+
+  if (!changes.changes.empty) {
+    view.dispatch(
+      changes,
+      {
+        scrollIntoView: true,
+        userEvent: forward ? "delete.forward" : "delete.backward",
+      },
+    );
+  }
+
+  return true;
+}
+
+const deleteToTableCellTextStart: Command = (view) =>
+  deleteToTableCellLineBoundary(view, "start");
+const deleteToTableCellTextEnd: Command = (view) =>
+  deleteToTableCellLineBoundary(view, "end");
+
+function moveAcrossTableCellBoundary(
+  view: EditorView,
+  direction: "left" | "right",
+): boolean {
+  if (view.composing || view.state.selection.ranges.length !== 1) {
+    return false;
+  }
+
+  const selection = view.state.selection.main;
+  if (!selection.empty) {
+    return false;
+  }
+
+  const value = view.state.doc.toString();
+  const target = moveAcrossLiveMarkdownTableCellBoundary(
+    value,
+    liveMarkdownDocumentModel(view.state).tables,
+    selection.head,
+    direction,
+  );
+  if (!target) {
+    return false;
+  }
+
+  view.dispatch({
+    selection: EditorSelection.create([
+      EditorSelection.cursor(target.position, target.assoc),
+    ]),
+    scrollIntoView: true,
+    userEvent: "select.table",
+  });
+
+  return true;
+}
+
+const moveAcrossTableCellLeft: Command = (view) =>
+  moveAcrossTableCellBoundary(view, "left");
+const moveAcrossTableCellRight: Command = (view) =>
+  moveAcrossTableCellBoundary(view, "right");
 
 const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
 const toggleItalic: Command = (view) => toggleSelectionFormatting(view, "*", ["_"]);
@@ -532,6 +664,22 @@ onMounted(() => {
           { key: "Enter", run: handleEnter },
           { key: "Tab", run: handleTab },
           { key: "Shift-Tab", run: handleShiftTab },
+          { key: "Backspace", run: protectTableCellStart },
+          { key: "Delete", run: protectTableCellEnd },
+          {
+            key: "Mod-Backspace",
+            mac: "Alt-Backspace",
+            run: protectTableCellStart,
+          },
+          {
+            key: "Mod-Delete",
+            mac: "Alt-Delete",
+            run: protectTableCellEnd,
+          },
+          { mac: "Mod-Backspace", run: deleteToTableCellTextStart },
+          { mac: "Mod-Delete", run: deleteToTableCellTextEnd },
+          { key: "ArrowLeft", run: moveAcrossTableCellLeft },
+          { key: "ArrowRight", run: moveAcrossTableCellRight },
           { key: "Mod-b", run: toggleBold },
           { key: "Mod-i", run: toggleItalic },
           { key: "Mod-k", run: wrapSelectionAsMarkdownLink },

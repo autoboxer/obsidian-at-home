@@ -16,6 +16,14 @@ export interface LiveMarkdownTableEdit {
   selectionEnd: number;
 }
 
+export type LiveMarkdownTableCellBoundary = "end" | "start";
+export type LiveMarkdownTableHorizontalDirection = "left" | "right";
+
+export interface LiveMarkdownTableCursorTarget {
+  assoc: -1 | 1;
+  position: number;
+}
+
 type TableCellLocation =
   | { columnIndex: number; role: "delimiter" }
   | { columnIndex: number; rowIndex: number; role: "editable" };
@@ -131,6 +139,79 @@ export function insertLiveMarkdownTableLineBreak(
   };
 }
 
+export function isLiveMarkdownTableCellBoundary(
+  tables: readonly LiveMarkdownTable[],
+  position: number,
+  boundary: LiveMarkdownTableCellBoundary,
+): boolean {
+  return tables.some((table) =>
+    [table.header, ...table.rows].some((row) =>
+      row.cells.slice(0, table.columnCount).some((cell) =>
+        boundary === "start"
+          ? position === cell.editableFrom
+          : position === cell.to || position === cell.editableTo
+      )
+    )
+  );
+}
+
+export function moveAcrossLiveMarkdownTableCellBoundary(
+  value: string,
+  tables: readonly LiveMarkdownTable[],
+  position: number,
+  direction: LiveMarkdownTableHorizontalDirection,
+): LiveMarkdownTableCursorTarget | undefined {
+  const table = tableContainingPosition(tables, position);
+  if (!table) {
+    return undefined;
+  }
+
+  const location = locateTableCell(table, position);
+  if (!location || location.role !== "editable") {
+    return undefined;
+  }
+
+  const row = [table.header, ...table.rows][location.rowIndex];
+  const cell = row?.cells[location.columnIndex];
+  if (!row || !cell) {
+    return undefined;
+  }
+
+  if (direction === "right") {
+    const paddingFrom = trailingTableCellPaddingFrom(value, cell);
+    if (
+      position !== cell.editableTo &&
+      (paddingFrom === undefined || position !== paddingFrom)
+    ) {
+      return undefined;
+    }
+
+    const nextCell = row.cells[location.columnIndex + 1];
+
+    return nextCell
+      ? { assoc: 1, position: nextCell.from }
+      : {
+        assoc: -1,
+        position: paddingFrom ?? cell.to,
+      };
+  }
+
+  if (position !== cell.from && position !== cell.editableFrom) {
+    return undefined;
+  }
+
+  const previousCell = row.cells[location.columnIndex - 1];
+  if (!previousCell) {
+    return { assoc: 1, position: cell.from };
+  }
+
+  return {
+    assoc: -1,
+    position: trailingTableCellPaddingFrom(value, previousCell) ??
+      previousCell.editableTo,
+  };
+}
+
 function tableContainingPosition(
   tables: readonly LiveMarkdownTable[],
   position: number,
@@ -172,7 +253,7 @@ function moveVertically(
   }
 
   const targetRowIndex = location.rowIndex + (down ? 1 : -1);
-  const offset = Math.max(0, position - currentCell.from);
+  const offset = Math.max(0, position - currentCell.editableFrom);
 
   return moveToTableCell(
     value,
@@ -234,7 +315,7 @@ function cellIndexAtPosition(
   position: number,
   columnCount: number,
 ): number {
-  const cellIndex = row.cells.findIndex((cell) => position <= cell.to);
+  const cellIndex = row.cells.findIndex((cell) => position <= cell.editableTo);
   const nearestIndex = cellIndex < 0 ? row.cells.length - 1 : cellIndex;
 
   return Math.max(0, Math.min(nearestIndex, columnCount - 1));
@@ -317,7 +398,10 @@ function moveToTableCell(
 
   const selectionStart = selectionOffset === undefined
     ? targetCell.from
-    : Math.min(targetCell.from + selectionOffset, targetCell.to);
+    : Math.min(
+      targetCell.editableFrom + selectionOffset,
+      targetCell.editableTo,
+    );
   const selectionEnd = selectionOffset === undefined
     ? targetCell.to
     : selectionStart;
@@ -460,5 +544,22 @@ function clampToCell(
   position: number,
   cell: LiveMarkdownTableRow["cells"][number],
 ): number {
-  return Math.max(cell.from, Math.min(position, cell.to));
+  return Math.max(
+    cell.editableFrom,
+    Math.min(position, cell.editableTo),
+  );
+}
+
+function trailingTableCellPaddingFrom(
+  value: string,
+  cell: LiveMarkdownTableRow["cells"][number],
+): number | undefined {
+  if (
+    cell.to >= cell.editableTo ||
+    !/\s/.test(value[cell.editableTo - 1] ?? "")
+  ) {
+    return undefined;
+  }
+
+  return cell.editableTo - 1;
 }

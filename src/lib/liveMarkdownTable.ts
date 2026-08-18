@@ -4,6 +4,10 @@ import type { LiveMarkdownBlock } from "./liveMarkdown";
 export type LiveMarkdownTableAlignment = "center" | "left" | "right";
 
 export interface LiveMarkdownTableCell {
+  // Editable bounds keep trailing padding available for ordinary typing. The
+  // semantic bounds below continue to exclude Markdown cell padding.
+  editableFrom: number;
+  editableTo: number;
   from: number;
   to: number;
   source: string;
@@ -142,10 +146,13 @@ function parseTableRow(
 
   const cells = cellRanges.map((range) => {
     const trimmed = trimCellRange(line.source, range);
+    const editable = trimCellLeadingPadding(line.source, range);
     const absoluteFrom = line.from + trimmed.from;
     const absoluteTo = line.from + trimmed.to;
 
     return {
+      editableFrom: line.from + editable.from,
+      editableTo: line.from + editable.to,
       from: absoluteFrom,
       to: absoluteTo,
       source: line.source.slice(trimmed.from, trimmed.to),
@@ -194,6 +201,18 @@ function trimCellRange(
     const insertionPoint = Math.min(originalFrom + 1, range.to);
 
     return { from: insertionPoint, to: insertionPoint };
+  }
+
+  return { from, to };
+}
+
+function trimCellLeadingPadding(
+  source: string,
+  range: { from: number; to: number },
+): { from: number; to: number } {
+  let { from, to } = range;
+  if (from < to && /\s/.test(source[from]!)) {
+    from += 1;
   }
 
   return { from, to };
