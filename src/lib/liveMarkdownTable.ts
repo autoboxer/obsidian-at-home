@@ -88,12 +88,52 @@ export function parseLiveMarkdownTables(
   return tables;
 }
 
+export function isLiveMarkdownTableDelimiterCandidate(
+  value: string,
+  from: number,
+  to: number,
+  lines?: readonly LiveMarkdownBlock[],
+): boolean {
+  if (from < 0 || to <= from || to > value.length) {
+    return false;
+  }
+  if (!/^-{2,}$/.test(value.slice(from, to))) {
+    return false;
+  }
+
+  const documentLines = lines ?? parseLiveMarkdownBlocks(value);
+  const delimiterIndex = documentLines.findIndex((line) =>
+    from >= line.from && to <= line.to
+  );
+  if (delimiterIndex <= 0) {
+    return false;
+  }
+
+  const delimiterLine = documentLines[delimiterIndex]!;
+  const headerLine = documentLines[delimiterIndex - 1]!;
+  if (
+    !lineCanStartTable(headerLine) ||
+    !lineCanBeTableDelimiterCandidate(delimiterLine) ||
+    !/^[\t |:-]+$/.test(delimiterLine.source)
+  ) {
+    return false;
+  }
+
+  const header = parseTableRow(headerLine);
+
+  return !!header && header.cells.length >= 2;
+}
+
 function lineCanBelongToTable(line: LiveMarkdownBlock): boolean {
   return line.type !== "code" && line.type !== "frontmatter";
 }
 
 function lineCanStartTable(line: LiveMarkdownBlock): boolean {
   return line.type === "text";
+}
+
+function lineCanBeTableDelimiterCandidate(line: LiveMarkdownBlock): boolean {
+  return line.type === "text" || line.type === "horizontal-rule";
 }
 
 function parseTableRow(

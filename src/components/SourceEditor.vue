@@ -39,6 +39,7 @@ import {
   insertLiteralApostrophe,
   literalApostropheExtension,
 } from "../lib/codeMirrorApostrophe";
+import { tableDelimiterHyphenExtension } from "../lib/codeMirrorTableDelimiter";
 import { normalizeOrderedListMarkers } from "../lib/liveMarkdown";
 import {
   liveMarkdownExtension,
@@ -647,6 +648,7 @@ onMounted(() => {
           pasteURLAsLink: false,
         }),
         literalApostropheExtension,
+        tableDelimiterHyphenExtension,
         liveMarkdownExtension({
           openLink: openLiveMarkdownLink,
           openWiki: openLiveMarkdownWikiLink,
