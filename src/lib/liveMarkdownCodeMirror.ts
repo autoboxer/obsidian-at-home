@@ -41,7 +41,7 @@ import type {
   ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import type { SyntaxNodeRef } from "@lezer/common";
+import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import type { InlineMarkupKind } from "./inlineMarkup";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
@@ -581,6 +581,7 @@ function parseLiveMarkdownModel(
   wikiResolutionVersion = 0,
 ): LiveMarkdownModel {
   const value = state.doc.toString();
+  const tree = syntaxTree(state);
   const blocks = parseLiveMarkdownBlocks(value);
   const codeFences = parseLiveMarkdownCodeFences(value);
   const codeLines = new Set(
@@ -593,6 +594,7 @@ function parseLiveMarkdownModel(
     decorations: [],
   };
   const excludedRanges: LiveMarkdownRange[] = [];
+  let renderedQuotePrefix: { depth: number; source: string } | undefined;
 
   for (const block of blocks) {
     if (
@@ -607,7 +609,33 @@ function parseLiveMarkdownModel(
       continue;
     }
 
-    addBlockDecorations(model, block, value);
+    // The line model only sees literal `>` prefixes. The Markdown tree owns
+    // container semantics, including unmarked lazy paragraph continuations.
+    const literalQuoteDepth = block.quote?.depth ?? 0;
+    const quoteDepth = Math.max(
+      literalQuoteDepth,
+      blockquoteDepthAt(tree, block.from),
+    );
+    if (!quoteDepth) {
+      renderedQuotePrefix = undefined;
+    } else if (literalQuoteDepth === quoteDepth) {
+      // Keep partially marked lines from replacing the full-width prefix that
+      // deeper lazy continuations reuse.
+      renderedQuotePrefix = {
+        depth: quoteDepth,
+        source: value.slice(block.from, block.content.from),
+      };
+    }
+
+    addBlockDecorations(
+      model,
+      block,
+      value,
+      quoteDepth,
+      renderedQuotePrefix?.depth === quoteDepth
+        ? renderedQuotePrefix.source
+        : undefined,
+    );
   }
 
   for (const fence of codeFences) {
@@ -655,16 +683,24 @@ function addBlockDecorations(
   model: LiveMarkdownModel,
   block: LiveMarkdownBlock,
   value: string,
+  quoteDepth = block.quote?.depth ?? 0,
+  quotePrefix?: string,
 ): void {
-  const classes = ["live-markdown-block", `is-${block.type}`];
+  const classes = [
+    "live-markdown-block",
+    `is-${quoteDepth ? "blockquote" : block.type}`,
+  ];
   if (block.headingLevel) {
     classes.push(`heading-level-${block.headingLevel}`);
   }
   if (block.list) {
     classes.push(`list-depth-${block.list.depth % 3}`);
   }
-  if (block.quote) {
-    classes.push(`quote-depth-${Math.min(block.quote.depth, 3)}`);
+  if (quoteDepth) {
+    classes.push(`quote-depth-${Math.min(quoteDepth, 3)}`);
+    if (!block.quote) {
+      classes.push("is-blockquote-continuation");
+    }
   }
   if (block.task?.checked) {
     classes.push("is-checked");
@@ -720,18 +756,50 @@ function addBlockDecorations(
     return;
   }
   if (block.type === "blockquote" && block.quote) {
-    const prefix = value.slice(block.from, block.content.from);
+    const prefix = quotePrefix ?? value.slice(block.from, block.content.from);
     addConstruct(model, block.from, block.content.from, [{
       from: block.from,
       to: block.content.from,
       widget: new QuoteMarkerWidget(
         prefix,
-        block.quote.depth,
+        quoteDepth,
         block.from,
         block.content.from,
       ),
     }]);
+
+    return;
   }
+  if (quoteDepth) {
+    const prefix = quotePrefix ?? "> ".repeat(quoteDepth);
+    model.decorations.push({
+      from: block.from,
+      to: block.from,
+      decoration: Decoration.widget({
+        side: -1,
+        widget: new QuoteMarkerWidget(
+          prefix,
+          quoteDepth,
+          block.from,
+          block.from,
+        ),
+      }),
+    });
+  }
+}
+
+function blockquoteDepthAt(tree: Tree, position: number): number {
+  let depth = 0;
+  let node: SyntaxNode | null = tree.resolve(position, 1);
+
+  while (node) {
+    if (node.name === "Blockquote") {
+      depth += 1;
+    }
+    node = node.parent;
+  }
+
+  return depth;
 }
 
 function addCodeFenceDecorations(
