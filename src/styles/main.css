@@ -2154,6 +2154,12 @@ pre {
   min-height: 0;
 }
 
+.source-editor.is-render-pending > * {
+  /* Retain layout so CodeMirror can measure and parse the restored viewport. */
+  opacity: 0;
+  pointer-events: none;
+}
+
 .source-editor .cm-editor {
   background: transparent;
   color: #d4cfda;
