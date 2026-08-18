@@ -14,6 +14,7 @@ import {
   insertNewline,
 } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { syntaxTreeAvailable } from "@codemirror/language";
 import {
   Annotation,
   Compartment,
@@ -88,6 +89,7 @@ const emit = defineEmits<{
 
 const editorHost = ref<HTMLElement>();
 const editorView = shallowRef<EditorView>();
+const editorRenderReady = ref(false);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const externalUpdate = Annotation.define<boolean>();
@@ -105,6 +107,7 @@ let removePositionCapture: (() => boolean) | undefined;
 let viewportRestoreFrame: number | undefined;
 
 const positionCaptureKey = {};
+const renderReadyKey = {};
 const viewportRestoreKey = {};
 
 interface ListLine {
@@ -576,6 +579,7 @@ onMounted(() => {
             updateSuggestions(update.view);
             schedulePositionCapture(update.view);
           }
+          scheduleEditorRenderReady(update.view);
         }),
       ],
     }),
@@ -598,6 +602,7 @@ onMounted(() => {
   } else {
     positionCaptureEnabled = true;
     schedulePositionCapture(view);
+    scheduleEditorRenderReady(view);
   }
   window.requestAnimationFrame(() => {
     if (editorView.value !== view || !view.dom.isConnected) {
@@ -1021,6 +1026,31 @@ function schedulePositionCapture(view: EditorView): void {
   });
 }
 
+function scheduleEditorRenderReady(view: EditorView): void {
+  if (editorRenderReady.value || !positionCaptureEnabled) {
+    return;
+  }
+
+  // Keep the mounted editor measurable while CodeMirror finishes parsing the
+  // restored viewport, then expose the completed rendering in a single frame.
+  view.requestMeasure({
+    key: renderReadyKey,
+    read: (measuredView) => syntaxTreeAvailable(
+      measuredView.state,
+      measuredView.viewport.to,
+    ),
+    write: (ready, measuredView) => {
+      if (ready && editorView.value === measuredView) {
+        const scrollLeft = measuredView.scrollDOM.scrollLeft;
+        const scrollTop = measuredView.scrollDOM.scrollTop;
+        editorRenderReady.value = true;
+        measuredView.scrollDOM.scrollLeft = scrollLeft;
+        measuredView.scrollDOM.scrollTop = scrollTop;
+      }
+    },
+  });
+}
+
 function captureEditorPosition(view: EditorView): NoteEditorPosition {
   const selection = view.state.selection.main;
   const bodyStart = markdownBodyStart(
@@ -1095,6 +1125,7 @@ function scheduleViewportRestore(
         measuredView.scrollDOM.scrollTop = top;
         positionCaptureEnabled = true;
         schedulePositionCapture(measuredView);
+        scheduleEditorRenderReady(measuredView);
       },
     });
   });
@@ -1377,13 +1408,37 @@ function mapPositionThroughLiveMarkdownEdits(
     })),
   );
 }
+
+function blockPendingEditorInteraction(event: Event): void {
+  if (!editorRenderReady.value) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}
+
+function handleSourceEditorKeydown(event: KeyboardEvent): void {
+  if (!editorRenderReady.value) {
+    blockPendingEditorInteraction(event);
+
+    return;
+  }
+
+  handleDocumentSearchKeydown(event);
+}
 </script>
 
 <template>
   <div
     class="source-editor"
-    :class="{ 'is-searching': documentSearchOpen }"
-    @keydown.capture="handleDocumentSearchKeydown"
+    :class="{
+      'is-render-pending': !editorRenderReady,
+      'is-searching': documentSearchOpen,
+    }"
+    :aria-busy="!editorRenderReady"
+    @beforeinput.capture="blockPendingEditorInteraction"
+    @compositionstart.capture="blockPendingEditorInteraction"
+    @keydown.capture="handleSourceEditorKeydown"
+    @paste.capture="blockPendingEditorInteraction"
   >
     <div ref="editorHost" class="code-mirror-host" />
 
