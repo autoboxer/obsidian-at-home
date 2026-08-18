@@ -24,6 +24,11 @@ export interface LiveMarkdownTableCursorTarget {
   position: number;
 }
 
+export interface LiveMarkdownTableCellTextBounds {
+  from: number;
+  to: number;
+}
+
 type TableCellLocation =
   | { columnIndex: number; role: "delimiter" }
   | { columnIndex: number; rowIndex: number; role: "editable" };
@@ -210,6 +215,25 @@ export function moveAcrossLiveMarkdownTableCellBoundary(
     position: trailingTableCellPaddingFrom(value, previousCell) ??
       previousCell.editableTo,
   };
+}
+
+export function liveMarkdownTableCellTextBounds(
+  tables: readonly LiveMarkdownTable[],
+  position: number,
+): LiveMarkdownTableCellTextBounds | undefined {
+  const table = tableContainingPosition(tables, position);
+  if (!table) {
+    return undefined;
+  }
+
+  const location = locateTableCell(table, position);
+  if (!location || location.role !== "editable") {
+    return undefined;
+  }
+
+  const cell = tableCellAtLocation(table, location);
+
+  return cell ? { from: cell.from, to: cell.to } : undefined;
 }
 
 function tableContainingPosition(

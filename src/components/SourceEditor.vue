@@ -24,6 +24,7 @@ import {
   Transaction,
 } from "@codemirror/state";
 import {
+  Direction,
   drawSelection,
   dropCursor,
   EditorView,
@@ -53,11 +54,11 @@ import {
   splitLeadingFrontmatter,
 } from "../lib/frontmatter";
 import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
-import { parseLiveMarkdownTables } from "../lib/liveMarkdownTable";
 import {
   insertLiveMarkdownTableLineBreak,
   insertLiveMarkdownTableRow,
   isLiveMarkdownTableCellBoundary,
+  liveMarkdownTableCellTextBounds,
   moveAcrossLiveMarkdownTableCellBoundary,
   navigateLiveMarkdownTable,
   type LiveMarkdownTableNavigation,
@@ -474,6 +475,118 @@ const moveAcrossTableCellLeft: Command = (view) =>
 const moveAcrossTableCellRight: Command = (view) =>
   moveAcrossTableCellBoundary(view, "right");
 
+function setTableCellTextBoundary(
+  view: EditorView,
+  boundary: "end" | "start",
+  extend: boolean,
+): boolean {
+  if (view.composing) {
+    return false;
+  }
+
+  const tables = liveMarkdownDocumentModel(view.state).tables;
+  const ranges: SelectionRange[] = [];
+  for (const range of view.state.selection.ranges) {
+    const bounds = liveMarkdownTableCellTextBounds(tables, range.head);
+    if (!bounds) {
+      return false;
+    }
+    if (extend) {
+      const anchorBounds = liveMarkdownTableCellTextBounds(
+        tables,
+        range.anchor,
+      );
+      if (
+        !anchorBounds ||
+        anchorBounds.from !== bounds.from ||
+        anchorBounds.to !== bounds.to
+      ) {
+        return false;
+      }
+    }
+
+    const forward = boundary === "end";
+    const line = view.lineBlockAt(range.head);
+    // Keep any native boundary inside rendered cell content, but clamp raw
+    // row boundaries so hidden table syntax never enters the selection.
+    let nativeTarget = view.moveToLineBoundary(range, forward);
+    if (
+      nativeTarget.head === range.head &&
+      nativeTarget.head !== (forward ? line.to : line.from)
+    ) {
+      nativeTarget = view.moveToLineBoundary(range, forward, false);
+    }
+
+    const position = Math.max(
+      bounds.from,
+      Math.min(nativeTarget.head, bounds.to),
+    );
+    let assoc = nativeTarget.assoc;
+    if (bounds.from === bounds.to) {
+      assoc = forward ? -1 : 1;
+    } else if (position === bounds.from) {
+      assoc = 1;
+    } else if (position === bounds.to) {
+      assoc = -1;
+    }
+
+    ranges.push(extend
+      ? EditorSelection.range(
+        range.anchor,
+        position,
+        nativeTarget.goalColumn,
+        nativeTarget.bidiLevel ?? undefined,
+        assoc,
+      )
+      : EditorSelection.cursor(position, assoc));
+  }
+
+  const selection = EditorSelection.create(
+    ranges,
+    view.state.selection.mainIndex,
+  );
+  if (!selection.eq(view.state.selection, true)) {
+    view.dispatch({
+      selection,
+      scrollIntoView: true,
+      userEvent: "select.table",
+    });
+  }
+
+  return true;
+}
+
+const moveToTableCellTextStart: Command = (view) =>
+  setTableCellTextBoundary(view, "start", false);
+const selectToTableCellTextStart: Command = (view) =>
+  setTableCellTextBoundary(view, "start", true);
+const moveToTableCellTextEnd: Command = (view) =>
+  setTableCellTextBoundary(view, "end", false);
+const selectToTableCellTextEnd: Command = (view) =>
+  setTableCellTextBoundary(view, "end", true);
+
+function setTableCellHorizontalBoundary(
+  view: EditorView,
+  direction: "left" | "right",
+  extend: boolean,
+): boolean {
+  const leftToStart = view.textDirectionAt(
+    view.state.selection.main.head,
+  ) === Direction.LTR;
+  const boundary = (direction === "left") === leftToStart ? "start" : "end";
+
+  return setTableCellTextBoundary(view, boundary, extend);
+}
+
+const moveToTableCellTextLeft: Command = (view) =>
+  setTableCellHorizontalBoundary(view, "left", false);
+const selectToTableCellTextLeft: Command = (view) =>
+  setTableCellHorizontalBoundary(view, "left", true);
+const moveToTableCellTextRight: Command = (view) =>
+  setTableCellHorizontalBoundary(view, "right", false);
+const selectToTableCellTextRight: Command = (view) =>
+  setTableCellHorizontalBoundary(view, "right", true);
+
 const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
 const toggleItalic: Command = (view) => toggleSelectionFormatting(view, "*", ["_"]);
 const toggleStrikethrough: Command = (view) => toggleSelectionFormatting(view, "~~");
@@ -682,6 +795,26 @@ onMounted(() => {
           { mac: "Mod-Delete", run: deleteToTableCellTextEnd },
           { key: "ArrowLeft", run: moveAcrossTableCellLeft },
           { key: "ArrowRight", run: moveAcrossTableCellRight },
+          {
+            key: "Home",
+            run: moveToTableCellTextStart,
+            shift: selectToTableCellTextStart,
+          },
+          {
+            key: "End",
+            run: moveToTableCellTextEnd,
+            shift: selectToTableCellTextEnd,
+          },
+          {
+            mac: "Cmd-ArrowLeft",
+            run: moveToTableCellTextLeft,
+            shift: selectToTableCellTextLeft,
+          },
+          {
+            mac: "Cmd-ArrowRight",
+            run: moveToTableCellTextRight,
+            shift: selectToTableCellTextRight,
+          },
           { key: "Mod-b", run: toggleBold },
           { key: "Mod-i", run: toggleItalic },
           { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
