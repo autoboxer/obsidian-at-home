@@ -2797,8 +2797,8 @@ pre {
 
 .live-task-checkbox {
   position: absolute;
-  top: 50%;
-  left: calc(var(--live-list-content-indent) - 1.25em);
+  top: calc(var(--source-editor-line-height) / 2);
+  left: calc(var(--live-list-content-indent) - 1.4em);
   display: grid;
   width: 1em;
   height: 1em;
