@@ -75,6 +75,7 @@ interface LiveConstruct {
   boundaryReveal: "construct" | "none" | "syntax";
   from: number;
   renderedDecorations: StoredDecoration[];
+  revealWhenSelectedWithin: boolean;
   revealWithinSyntax: boolean;
   to: number;
   syntax: HiddenSyntax[];
@@ -83,6 +84,7 @@ interface LiveConstruct {
 interface LiveConstructOptions {
   atomicRanges?: readonly LiveMarkdownRange[];
   boundaryReveal?: LiveConstruct["boundaryReveal"];
+  revealWhenSelectedWithin?: boolean;
   revealWithinSyntax?: boolean;
 }
 
@@ -104,6 +106,10 @@ interface LiveMarkdownModel {
 
 const LIST_INDENT_STEP_EM = 1.65;
 const inlineMarkupSpanCache = new WeakMap<Text, InlineMarkupSpan[]>();
+const inlineMarkupFirstClick = new WeakMap<
+  EditorView,
+  { x: number; y: number }
+>();
 
 export const refreshLiveMarkdownEffect = StateEffect.define<null>();
 
@@ -303,9 +309,39 @@ export function liveMarkdownExtension(options: LiveMarkdownOptions): Extension {
     liveMarkdownDocumentModelField,
     liveMarkdownHeadingFoldingExtension(options.documentId),
     tableCellCaretAssociation,
+    boundarySelectionRendering,
     liveMarkdownPlugin.of(options),
     EditorView.mouseSelectionStyle.of(inlineMarkupMouseSelection),
   ];
+}
+
+const boundarySelectionRendering = EditorView.editorAttributes.compute(
+  [liveMarkdownDocumentModelField, "selection"],
+  (state): Record<string, string> => selectionNeedsDrawnHighlight(state)
+    ? { class: "live-drawn-boundary-selection" }
+    : {},
+);
+
+function selectionNeedsDrawnHighlight(state: EditorState): boolean {
+  const selectedLineBoundaries = new Set<number>();
+  for (const range of state.selection.ranges) {
+    if (range.empty) {
+      continue;
+    }
+    for (const endpoint of [range.from, range.to]) {
+      if (state.doc.lineAt(endpoint).from === endpoint) {
+        selectedLineBoundaries.add(endpoint);
+      }
+    }
+  }
+  if (!selectedLineBoundaries.size) {
+    return false;
+  }
+
+  return liveMarkdownDocumentModel(state).blocks.some((block) =>
+    (block.type === "list" || block.type === "task") &&
+    selectedLineBoundaries.has(block.from)
+  );
 }
 
 function inlineMarkupMouseSelection(
@@ -314,12 +350,35 @@ function inlineMarkupMouseSelection(
 ): MouseSelectionStyle | null {
   if (
     event.button !== 0 ||
-    event.detail !== 1 ||
     event.altKey ||
     event.ctrlKey ||
     event.metaKey
   ) {
+    inlineMarkupFirstClick.delete(view);
     return null;
+  }
+
+  if (event.detail === 2) {
+    const firstClick = inlineMarkupFirstClick.get(view);
+    inlineMarkupFirstClick.delete(view);
+    const samePosition = firstClick !== undefined &&
+      Math.abs(firstClick.x - event.clientX) <= 4 &&
+      Math.abs(firstClick.y - event.clientY) <= 4;
+    const range = samePosition
+      ? inlineMarkupDoubleClickRange(view, event)
+      : undefined;
+    return range ? fixedMouseSelection(view, range) : null;
+  }
+  if (event.detail !== 1) {
+    inlineMarkupFirstClick.delete(view);
+    return null;
+  }
+
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest(".live-inline-segment")) {
+    inlineMarkupFirstClick.set(view, { x: event.clientX, y: event.clientY });
+  } else {
+    inlineMarkupFirstClick.delete(view);
   }
 
   let startSelection = view.state.selection;
@@ -365,14 +424,88 @@ function inlineMarkupMouseSelection(
   };
 }
 
+function inlineMarkupDoubleClickRange(
+  view: EditorView,
+  event: MouseEvent,
+): SelectionRange | undefined {
+  const native = view.posAndSideAtCoords({
+    x: event.clientX,
+    y: event.clientY,
+  }, false);
+  const line = view.state.doc.lineAt(native.pos);
+  // The first click may reveal a span's delimiters and move them under the
+  // pointer. Resolve the second click from the source span so the resulting
+  // word range is independent of that intervening render.
+  const spans = inlineMarkupSpans(view.state, line.from, line.to)
+    .filter((span) => native.pos >= span.from && native.pos <= span.to)
+    .sort((left, right) =>
+      (left.to - left.from) - (right.to - right.from)
+    );
+
+  for (const span of spans) {
+    const probe = Math.max(
+      span.contentFrom,
+      Math.min(native.pos, span.contentTo),
+    );
+    const word = view.state.wordAt(probe) ??
+      (probe > span.contentFrom ? view.state.wordAt(probe - 1) : null);
+    if (!word) {
+      continue;
+    }
+
+    const from = Math.max(word.from, span.contentFrom);
+    const to = Math.min(word.to, span.contentTo);
+    if (from < to) {
+      return EditorSelection.range(from, to, undefined, undefined, -1);
+    }
+  }
+
+  return undefined;
+}
+
+function fixedMouseSelection(
+  view: EditorView,
+  initialRange: SelectionRange,
+): MouseSelectionStyle {
+  let startSelection = view.state.selection;
+  let range = initialRange;
+
+  return {
+    get(_currentEvent, extend, multiple) {
+      if (extend) {
+        return startSelection.replaceRange(
+          startSelection.main.extend(range.from, range.to, range.assoc),
+        );
+      }
+      if (multiple) {
+        return startSelection.addRange(range);
+      }
+
+      return EditorSelection.create([range]);
+    },
+    update(update) {
+      if (!update.docChanged) {
+        return false;
+      }
+
+      range = range.map(update.changes);
+      startSelection = startSelection.map(update.changes);
+
+      return false;
+    },
+  };
+}
+
 function inlineMarkupPointerPosition(
   view: EditorView,
   event: MouseEvent,
 ): { assoc: -1 | 1; pos: number } {
-  const native = tableCellPointerPosition(view, event) ?? view.posAndSideAtCoords({
-    x: event.clientX,
-    y: event.clientY,
-  }, false);
+  const native = listBoundaryPointerPosition(view, event) ??
+    tableCellPointerPosition(view, event) ??
+    view.posAndSideAtCoords({
+      x: event.clientX,
+      y: event.clientY,
+    }, false);
   const line = view.state.doc.lineAt(native.pos);
   let opening: number | undefined;
   let closing: number | undefined;
@@ -429,6 +562,96 @@ function inlineMarkupPointerPosition(
   }
 
   return native;
+}
+
+function listBoundaryPointerPosition(
+  view: EditorView,
+  event: MouseEvent,
+): { assoc: -1 | 1; pos: number } | undefined {
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest(".live-task-checkbox")) {
+    return undefined;
+  }
+
+  const line = target?.closest<HTMLElement>(".cm-line.is-rendered-list") ??
+    [...view.contentDOM.querySelectorAll<HTMLElement>(
+      ".cm-line.is-rendered-list",
+    )].find((candidate) => {
+      const bounds = candidate.getBoundingClientRect();
+      return event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+    });
+  if (!line) {
+    return undefined;
+  }
+
+  const linePosition = view.posAtDOM(line, 0);
+  const sourceLine = view.state.doc.lineAt(linePosition);
+  const block = liveMarkdownDocumentModel(view.state).blocks.find((candidate) =>
+    candidate.from === sourceLine.from &&
+    (candidate.type === "list" || candidate.type === "task")
+  );
+  if (!block) {
+    return undefined;
+  }
+
+  const control = line.querySelector<HTMLElement>(
+    block.type === "task" ? ".live-task-checkbox" : ".live-list-marker",
+  );
+  if (!control) {
+    return undefined;
+  }
+
+  const controlBounds = renderedListControlBounds(control, block.type);
+  const lineBounds = line.getBoundingClientRect();
+  const lineHeight = Number.parseFloat(getComputedStyle(line).lineHeight);
+  const firstLineBottom = Number.isFinite(lineHeight)
+    ? lineBounds.top + lineHeight
+    : controlBounds.bottom;
+  if (
+    event.clientY < lineBounds.top ||
+    event.clientY > firstLineBottom
+  ) {
+    return undefined;
+  }
+
+  const contentStart = view.coordsAtPos(block.content.from, 1);
+  const contentBounds = view.contentDOM.getBoundingClientRect();
+  let position: number;
+  let assoc: -1 | 1;
+  if (
+    event.clientX >= contentBounds.left &&
+    event.clientX < controlBounds.left
+  ) {
+    position = block.from;
+    assoc = -1;
+  } else if (
+    contentStart &&
+    event.clientX > controlBounds.right &&
+    event.clientX <= contentStart.left
+  ) {
+    position = block.content.from;
+    assoc = 1;
+  } else {
+    return undefined;
+  }
+
+  return { assoc, pos: position };
+}
+
+function renderedListControlBounds(
+  control: HTMLElement,
+  blockType: LiveMarkdownBlock["type"],
+): DOMRect {
+  const text = control.firstChild;
+  if (blockType === "task" || !text) {
+    return control.getBoundingClientRect();
+  }
+
+  const range = control.ownerDocument.createRange();
+  range.selectNodeContents(control);
+  const bounds = range.getBoundingClientRect();
+
+  return bounds.width ? bounds : control.getBoundingClientRect();
 }
 
 function tableCellPointerPosition(
@@ -847,7 +1070,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)], { boundaryReveal: "none" });
+    }], [renderedListLineDecoration(block)], { boundaryReveal: "construct" });
     if (block.task.checked && block.content.from < block.content.to) {
       addMarkDecoration(model, block.content, "live-task-content");
     }
@@ -865,7 +1088,7 @@ function addBlockDecorations(
         block.from,
         block.content.from,
       ),
-    }], [renderedListLineDecoration(block)], { boundaryReveal: "none" });
+    }], [renderedListLineDecoration(block)], { boundaryReveal: "construct" });
 
     return;
   }
@@ -1367,7 +1590,10 @@ function addInlineMarkupDecoration(
   model: LiveMarkdownModel,
   span: InlineMarkupSpan,
 ): void {
-  addConstruct(model, span.from, span.to, span.syntax);
+  addConstruct(model, span.from, span.to, span.syntax, [], {
+    boundaryReveal: "construct",
+    revealWhenSelectedWithin: true,
+  });
   addMarkDecoration(
     model,
     { from: span.contentFrom, to: span.contentTo },
@@ -1422,7 +1648,10 @@ function addMarkdownLinkDecoration(
       from: labelClosing.from,
       to: autolink ? labelClosing.to : node.to,
     },
-  ]);
+  ], [], {
+    boundaryReveal: "construct",
+    revealWhenSelectedWithin: true,
+  });
   if (labelOpening.to < labelClosing.from) {
     const className = href
       ? [
@@ -1465,6 +1694,7 @@ function addConstruct(
     boundaryReveal: options.boundaryReveal ?? "syntax",
     from,
     renderedDecorations: [...renderedDecorations],
+    revealWhenSelectedWithin: options.revealWhenSelectedWithin ?? false,
     revealWithinSyntax: options.revealWithinSyntax ?? true,
     to,
     syntax: nonemptySyntax,
@@ -1559,6 +1789,14 @@ function selectionRevealsConstruct(
     }
 
     return false;
+  }
+
+  if (
+    construct.revealWhenSelectedWithin &&
+    selection.from >= construct.from &&
+    selection.to <= construct.to
+  ) {
+    return true;
   }
 
   return construct.syntax.some((syntax) =>
