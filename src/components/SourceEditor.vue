@@ -12,6 +12,7 @@ import {
   history,
   historyKeymap,
   insertNewline,
+  isolateHistory,
 } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTreeAvailable } from "@codemirror/language";
@@ -55,6 +56,7 @@ import {
 } from "../lib/frontmatter";
 import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
 import {
+  deleteEmptyLiveMarkdownTableRow,
   insertLiveMarkdownTableLineBreak,
   insertLiveMarkdownTableRow,
   isLiveMarkdownTableCellBoundary,
@@ -346,6 +348,45 @@ const handleTableArrowUp: Command = (view) => {
   return applyTableNavigation(view, "up-row");
 };
 
+const deleteEmptyTableRow: Command = (view) => {
+  if (
+    view.composing ||
+    view.state.readOnly ||
+    view.state.selection.ranges.length !== 1 ||
+    !view.state.selection.main.empty
+  ) {
+    return false;
+  }
+
+  const value = view.state.doc.toString();
+  const tableEdit = deleteEmptyLiveMarkdownTableRow(
+    value,
+    liveMarkdownDocumentModel(view.state).tables,
+    view.state.selection.main.head,
+  );
+  if (!tableEdit) {
+    return false;
+  }
+
+  const selection = EditorSelection.cursor(tableEdit.selectionStart, -1);
+  view.dispatch({
+    annotations: isolateHistory.of("full"),
+    changes: minimalDocumentChange(value, tableEdit.value),
+    selection,
+    scrollIntoView: true,
+    userEvent: "delete.backward",
+  });
+  // CodeMirror stores the selection before a history change by default. Add
+  // the intentional post-change caret so redo returns to the editable cell
+  // boundary rather than mapping the old row position onto a hidden pipe.
+  view.dispatch({
+    selection,
+    userEvent: "select.table",
+  });
+
+  return true;
+};
+
 function atTableCellBoundary(
   view: EditorView,
   boundary: "end" | "start",
@@ -369,6 +410,29 @@ const protectTableCellStart: Command = (view) =>
   atTableCellBoundary(view, "start");
 const protectTableCellEnd: Command = (view) =>
   atTableCellBoundary(view, "end");
+
+function protectTableCellSelectionBoundary(
+  view: EditorView,
+  direction: "left" | "right",
+): boolean {
+  if (view.composing) {
+    return false;
+  }
+
+  const tables = liveMarkdownDocumentModel(view.state).tables;
+
+  return view.state.selection.ranges.some((range) => {
+    const leftToStart = view.textDirectionAt(range.head) === Direction.LTR;
+    const boundary = (direction === "left") === leftToStart ? "start" : "end";
+
+    return isLiveMarkdownTableCellBoundary(tables, range.head, boundary);
+  });
+}
+
+const protectTableCellSelectionLeft: Command = (view) =>
+  protectTableCellSelectionBoundary(view, "left");
+const protectTableCellSelectionRight: Command = (view) =>
+  protectTableCellSelectionBoundary(view, "right");
 
 function deleteToTableCellLineBoundary(
   view: EditorView,
@@ -780,6 +844,7 @@ onMounted(() => {
           { key: "Enter", run: handleEnter },
           { key: "Tab", run: handleTab },
           { key: "Shift-Tab", run: handleShiftTab },
+          { key: "Backspace", run: deleteEmptyTableRow },
           { key: "Backspace", run: protectTableCellStart },
           { key: "Delete", run: protectTableCellEnd },
           {
@@ -794,8 +859,16 @@ onMounted(() => {
           },
           { mac: "Mod-Backspace", run: deleteToTableCellTextStart },
           { mac: "Mod-Delete", run: deleteToTableCellTextEnd },
-          { key: "ArrowLeft", run: moveAcrossTableCellLeft },
-          { key: "ArrowRight", run: moveAcrossTableCellRight },
+          {
+            key: "ArrowLeft",
+            run: moveAcrossTableCellLeft,
+            shift: protectTableCellSelectionLeft,
+          },
+          {
+            key: "ArrowRight",
+            run: moveAcrossTableCellRight,
+            shift: protectTableCellSelectionRight,
+          },
           {
             key: "Home",
             run: moveToTableCellTextStart,
