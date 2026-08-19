@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { writeText as writeNativeClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import type {
   ExportResult,
   ImportResult,
@@ -15,6 +16,19 @@ import type {
 } from "../types";
 
 export const isTauri = (): boolean => Boolean(window.__TAURI__?.core?.invoke);
+
+export async function writeClipboardText(value: string): Promise<void> {
+  if (isTauri()) {
+    await writeNativeClipboardText(value);
+
+    return;
+  }
+
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard access is unavailable in this browser.");
+  }
+  await navigator.clipboard.writeText(value);
+}
 
 export async function applyAppZoom(scaleFactor: number): Promise<void> {
   if (isTauri()) {

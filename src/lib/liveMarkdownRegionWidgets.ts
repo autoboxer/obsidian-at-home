@@ -4,10 +4,13 @@ import {
   CODE_LANGUAGE_OPTIONS,
   findCodeLanguageOption,
 } from "./highlight";
+import { writeClipboardText } from "../services/native";
 import type { CodeLanguageOption } from "./highlight";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
 
 export class CodeFenceHeaderWidget extends WidgetType {
+  private resetCopyStatusTimer: number | undefined;
+
   constructor(
     private readonly fence: LiveMarkdownCodeFence,
     private readonly from: number,
@@ -18,6 +21,7 @@ export class CodeFenceHeaderWidget extends WidgetType {
 
   eq(other: CodeFenceHeaderWidget): boolean {
     return this.fence.language === other.fence.language &&
+      this.fence.code === other.fence.code &&
       this.fence.info.from === other.fence.info.from &&
       this.fence.info.to === other.fence.info.to &&
       this.fence.languageRange?.from === other.fence.languageRange?.from &&
@@ -31,6 +35,8 @@ export class CodeFenceHeaderWidget extends WidgetType {
     const root = document.createElement("span");
     const button = document.createElement("button");
     const label = document.createElement("span");
+    const copyButton = document.createElement("button");
+    const copyLabel = document.createElement("span");
     const picker = document.createElement("span");
     const searchLabel = document.createElement("label");
     const search = document.createElement("input");
@@ -52,6 +58,14 @@ export class CodeFenceHeaderWidget extends WidgetType {
     button.setAttribute("aria-expanded", "false");
     label.textContent = codeLanguageLabel(this.fence.language);
     button.append(label, createChevronIcon(document));
+
+    copyButton.type = "button";
+    copyButton.className = "live-code-copy-button";
+    copyButton.setAttribute("aria-label", "Copy code");
+    copyButton.title = "Copy code";
+    copyLabel.setAttribute("aria-live", "polite");
+    copyLabel.textContent = "Copy";
+    copyButton.append(createCopyIcon(document), copyLabel);
 
     picker.className = "live-code-language-picker";
     picker.hidden = true;
@@ -79,6 +93,34 @@ export class CodeFenceHeaderWidget extends WidgetType {
       if (restoreFocus) {
         button.focus();
       }
+    };
+
+    const setCopyStatus = (
+      status: "idle" | "copied" | "failed",
+    ): void => {
+      const copied = status === "copied";
+      const failed = status === "failed";
+      const description = copied
+        ? "Copied code"
+        : failed ? "Copy code failed" : "Copy code";
+      copyButton.dataset.status = status;
+      copyButton.setAttribute("aria-label", description);
+      copyButton.title = description;
+      copyLabel.textContent = copied ? "Copied" : failed ? "Failed" : "Copy";
+      copyButton.replaceChildren(
+        copied ? createCheckIcon(document) : createCopyIcon(document),
+        copyLabel,
+      );
+    };
+
+    const scheduleCopyStatusReset = (): void => {
+      if (this.resetCopyStatusTimer !== undefined) {
+        window.clearTimeout(this.resetCopyStatusTimer);
+      }
+      this.resetCopyStatusTimer = window.setTimeout(() => {
+        this.resetCopyStatusTimer = undefined;
+        setCopyStatus("idle");
+      }, 1800);
     };
 
     const setActiveOption = (index: number): void => {
@@ -181,6 +223,22 @@ export class CodeFenceHeaderWidget extends WidgetType {
       resetOptions();
       search.focus();
     });
+    copyButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    copyButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closePicker();
+      try {
+        await writeClipboardText(this.fence.code);
+        setCopyStatus("copied");
+      } catch {
+        setCopyStatus("failed");
+      }
+      scheduleCopyStatusReset();
+    });
     search.addEventListener("input", resetOptions);
     search.addEventListener("keydown", (event) => {
       if (event.isComposing) {
@@ -222,10 +280,16 @@ export class CodeFenceHeaderWidget extends WidgetType {
     });
 
     picker.append(searchLabel, options);
-    root.append(button, picker);
+    root.append(button, copyButton, picker);
     renderLanguageOptions();
 
     return root;
+  }
+
+  destroy(): void {
+    if (this.resetCopyStatusTimer !== undefined) {
+      window.clearTimeout(this.resetCopyStatusTimer);
+    }
   }
 }
 
@@ -392,6 +456,14 @@ function createSearchIcon(document: Document): SVGSVGElement {
 
 function createCheckIcon(document: Document): SVGSVGElement {
   return createIcon(document, "m5 12 4 4L19 6", 12);
+}
+
+function createCopyIcon(document: Document): SVGSVGElement {
+  return createIcon(
+    document,
+    "M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2M10 8h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z",
+    11,
+  );
 }
 
 function createIcon(

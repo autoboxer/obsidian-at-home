@@ -2539,6 +2539,7 @@ pre {
 
 .source-editor .cm-line.live-markdown-block.is-code-opening:has(.live-code-header-widget) {
   position: relative;
+  display: flex;
   min-height: var(--code-fence-spacing);
   height: var(--code-fence-spacing);
   padding: 0;
@@ -2588,15 +2589,17 @@ pre {
 }
 
 .live-code-header-widget {
-  position: absolute;
+  position: sticky;
   z-index: 6;
-  top: -4px;
   right: 0.55em;
   display: flex;
   width: min(300px, calc(100% - 1.1em));
   min-width: 0;
   height: 0;
   justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+  transform: translateY(-4px);
 }
 
 .live-code-footer-widget {
@@ -2681,7 +2684,8 @@ pre {
   height: 1px;
 }
 
-.live-code-language-button {
+.live-code-language-button,
+.live-code-copy-button {
   display: inline-flex;
   height: 18px;
   align-items: center;
@@ -2699,15 +2703,25 @@ pre {
 }
 
 .live-code-language-button:hover,
-.live-code-language-button[aria-expanded="true"] {
+.live-code-language-button[aria-expanded="true"],
+.live-code-copy-button:hover {
   border-color: var(--border);
   background: var(--surface-control-hover);
   color: var(--text-soft);
 }
 
-.live-code-language-button:focus-visible {
+.live-code-language-button:focus-visible,
+.live-code-copy-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
+}
+
+.live-code-copy-button[data-status="copied"] {
+  color: var(--violet-bright);
+}
+
+.live-code-copy-button[data-status="failed"] {
+  color: var(--red);
 }
 
 .live-code-language-picker {
