@@ -1,5 +1,10 @@
 import { syntaxTree } from "@codemirror/language";
-import { EditorSelection, RangeSet, StateEffect } from "@codemirror/state";
+import {
+  EditorSelection,
+  EditorState,
+  RangeSet,
+  StateEffect,
+} from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -9,8 +14,12 @@ import { documentSearchMatches } from "./codeMirrorDocumentSearch";
 import { parseMarkdownHeadingTarget } from "./headingLinks";
 import { highlightCodeRanges } from "./highlight";
 import { parsePairedInlineMarkup } from "./inlineMarkup";
-import { parseLiveMarkdownBlocks } from "./liveMarkdown";
 import { parseLiveMarkdownCodeFences } from "./liveMarkdownCode";
+import {
+  liveMarkdownDocumentModel,
+  liveMarkdownDocumentModelField,
+  liveMarkdownDocumentModelForText,
+} from "./liveMarkdownDocumentModel";
 import {
   HorizontalRuleWidget,
   ListMarkerWidget,
@@ -26,11 +35,9 @@ import {
   TableCellBreakWidget,
   TableDelimiterWidget,
 } from "./liveMarkdownRegionWidgets";
-import { parseLiveMarkdownTables } from "./liveMarkdownTable";
 import { sanitizeLinkUrl } from "./markdown";
 import { parseWikiLinks } from "./wikiLinks";
 import type {
-  EditorState,
   Extension,
   SelectionRange,
   Text,
@@ -62,6 +69,7 @@ interface HiddenSyntax extends LiveMarkdownRange {
 }
 
 interface LiveConstruct {
+  atomicRanges: LiveMarkdownRange[];
   boundaryReveal: "construct" | "none" | "syntax";
   from: number;
   renderedDecorations: StoredDecoration[];
@@ -71,6 +79,7 @@ interface LiveConstruct {
 }
 
 interface LiveConstructOptions {
+  atomicRanges?: readonly LiveMarkdownRange[];
   boundaryReveal?: LiveConstruct["boundaryReveal"];
   revealWithinSyntax?: boolean;
 }
@@ -171,6 +180,12 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
           decorations.push(decoration.range(from, to));
         }
 
+        for (const range of construct.atomicRanges) {
+          atomicRanges.push(
+            Decoration.mark({}).range(range.from, range.to),
+          );
+        }
+
         for (const syntax of construct.syntax) {
           decorations.push(
             Decoration.replace({
@@ -234,8 +249,57 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
   },
 );
 
+const tableCellCaretAssociation = EditorState.transactionFilter.of(
+  (transaction) => {
+    if (!transaction.selection && !transaction.docChanged) {
+      return transaction;
+    }
+
+    const documentModel = transaction.docChanged
+      ? liveMarkdownDocumentModelForText(transaction.newDoc)
+      : liveMarkdownDocumentModel(transaction.startState);
+    const ranges = transaction.newSelection.ranges.map((range) => {
+      if (
+        !range.empty ||
+        range.assoc < 0 ||
+        !documentModel.tableCellCaretEnds.has(range.head)
+      ) {
+        return range;
+      }
+
+      return EditorSelection.cursor(
+        // At the end of a flex cell, the right-hand coordinates are the cell
+        // wall. Associate the caret with its text so CodeMirror uses the
+        // actual insertion coordinates on the left.
+        range.head,
+        -1,
+        range.bidiLevel ?? undefined,
+        range.goalColumn,
+      );
+    });
+    if (ranges.every((range, index) =>
+      range === transaction.newSelection.ranges[index]
+    )) {
+      return transaction;
+    }
+
+    return [
+      transaction,
+      {
+        selection: EditorSelection.create(
+          ranges,
+          transaction.newSelection.mainIndex,
+        ),
+        sequential: true,
+      },
+    ];
+  },
+);
+
 export function liveMarkdownExtension(options: LiveMarkdownOptions): Extension {
   return [
+    liveMarkdownDocumentModelField,
+    tableCellCaretAssociation,
     liveMarkdownPlugin.of(options),
     EditorView.mouseSelectionStyle.of(inlineMarkupMouseSelection),
   ];
@@ -302,7 +366,7 @@ function inlineMarkupPointerPosition(
   view: EditorView,
   event: MouseEvent,
 ): { assoc: -1 | 1; pos: number } {
-  const native = view.posAndSideAtCoords({
+  const native = tableCellPointerPosition(view, event) ?? view.posAndSideAtCoords({
     x: event.clientX,
     y: event.clientY,
   }, false);
@@ -364,6 +428,48 @@ function inlineMarkupPointerPosition(
   return native;
 }
 
+function tableCellPointerPosition(
+  view: EditorView,
+  event: MouseEvent,
+): { assoc: -1 | 1; pos: number } | undefined {
+  if (!(event.target instanceof Element)) {
+    return undefined;
+  }
+
+  const cellElement = event.target.closest<HTMLElement>(
+    ".live-table-cell[data-column-index]",
+  );
+  if (!cellElement || !view.dom.contains(cellElement)) {
+    return undefined;
+  }
+
+  const columnIndex = Number(cellElement.dataset.columnIndex);
+  if (!Number.isInteger(columnIndex)) {
+    return undefined;
+  }
+
+  const native = view.posAndSideAtCoords({
+    x: event.clientX,
+    y: event.clientY,
+  }, false);
+  const cell = liveMarkdownDocumentModel(view.state).tables.flatMap((table) =>
+    [table.header, ...table.rows].map((row) =>
+      native.pos >= row.from && native.pos <= row.to
+        ? row.cells[columnIndex]
+        : undefined
+    )
+  ).find((candidate) => candidate !== undefined);
+  if (
+    !cell ||
+    native.pos < cell.to ||
+    view.state.sliceDoc(cell.to, cell.editableTo).trim()
+  ) {
+    return undefined;
+  }
+
+  return { pos: cell.to, assoc: -1 };
+}
+
 function inlineMarkupSpans(
   state: EditorState,
   from: number,
@@ -375,12 +481,18 @@ function inlineMarkupSpans(
   }
 
   const value = state.doc.toString();
-  const blockExclusions = parseLiveMarkdownBlocks(value).flatMap((block) =>
-    block.type === "code" ||
-    block.type === "frontmatter" ||
-    block.type === "horizontal-rule"
-      ? [{ from: block.from, to: block.end }]
-      : block.syntax
+  const blockExclusions = liveMarkdownDocumentModel(state).blocks.flatMap(
+    (block) => {
+      if (
+        block.type === "code" ||
+        block.type === "frontmatter" ||
+        block.type === "horizontal-rule"
+      ) {
+        return [{ from: block.from, to: block.end }];
+      }
+
+      return block.syntax;
+    },
   );
   const wikiExclusions = parseWikiLinks(value).map((link) => ({
     from: link.index,
@@ -582,12 +694,11 @@ function parseLiveMarkdownModel(
 ): LiveMarkdownModel {
   const value = state.doc.toString();
   const tree = syntaxTree(state);
-  const blocks = parseLiveMarkdownBlocks(value);
+  const { blocks, tables } = liveMarkdownDocumentModel(state);
   const codeFences = parseLiveMarkdownCodeFences(value);
   const codeLines = new Set(
     codeFences.flatMap((fence) => fence.lineNumbers),
   );
-  const tables = parseLiveMarkdownTables(value, blocks);
   const tableLines = new Set(tables.flatMap((table) => table.lineNumbers));
   const model: LiveMarkdownModel = {
     constructs: [],
@@ -974,18 +1085,19 @@ function addTableRowDecorations(
       table.alignments[index],
       cellLast,
     );
-    if (cell && cell.from < cell.to) {
+    if (cell && cell.editableFrom < cell.editableTo) {
       renderedDecorations.push({
-        from: cell.from,
-        to: cell.to,
+        from: cell.editableFrom,
+        to: cell.editableTo,
         decoration: Decoration.mark({
           attributes: { "data-column-index": String(index) },
-          class: className,
+          class: [className, ...(!cell.source ? ["is-empty"] : [])]
+            .join(" "),
           inclusive: true,
         }),
       });
     } else {
-      const position = cell?.from ?? row.to;
+      const position = cell?.editableFrom ?? row.to;
       renderedDecorations.push({
         from: position,
         to: position,
@@ -1004,10 +1116,27 @@ function addTableRowDecorations(
     syntax,
     renderedDecorations,
     {
+      atomicRanges: tableCellTrailingPadding(state, cells),
       boundaryReveal: "construct",
       revealWithinSyntax: false,
     },
   );
+}
+
+function tableCellTrailingPadding(
+  state: EditorState,
+  cells: readonly LiveMarkdownTableRow["cells"][number][],
+): LiveMarkdownRange[] {
+  return cells.flatMap((cell) => {
+    if (
+      cell.to >= cell.editableTo ||
+      !/\s/.test(state.sliceDoc(cell.editableTo - 1, cell.editableTo))
+    ) {
+      return [];
+    }
+
+    return [{ from: cell.editableTo - 1, to: cell.editableTo }];
+  });
 }
 
 function tableRowSyntax(
@@ -1018,10 +1147,10 @@ function tableRowSyntax(
   let cursor = row.from;
 
   for (const cell of cells) {
-    if (cursor < cell.from) {
-      syntax.push({ from: cursor, to: cell.from });
+    if (cursor < cell.editableFrom) {
+      syntax.push({ from: cursor, to: cell.editableFrom });
     }
-    cursor = Math.max(cursor, cell.to);
+    cursor = Math.max(cursor, cell.editableTo);
   }
   if (cursor < row.to) {
     syntax.push({ from: cursor, to: row.to });
@@ -1042,21 +1171,25 @@ function tableCellBreakSyntax(
   }
 
   syntaxTree(state).iterate({
-    from: firstCell.from,
-    to: lastCell.to,
+    from: firstCell.editableFrom,
+    to: lastCell.editableTo,
     enter(reference) {
       if (reference.name !== "HTMLTag") {
         return undefined;
       }
 
       const cell = cells.find((candidate) =>
-        reference.from >= candidate.from && reference.to <= candidate.to
+        reference.from >= candidate.editableFrom &&
+        reference.to <= candidate.editableTo
       );
       const source = state.sliceDoc(reference.from, reference.to);
       if (
         !cell ||
         !/^<br[ \t]*\/?>$/i.test(source) ||
-        characterIsEscaped(cell.source, reference.from - cell.from)
+        characterIsEscaped(
+          state.sliceDoc(cell.editableFrom, cell.editableTo),
+          reference.from - cell.editableFrom,
+        )
       ) {
         return false;
       }
@@ -1325,6 +1458,7 @@ function addConstruct(
   }
 
   model.constructs.push({
+    atomicRanges: [...(options.atomicRanges ?? [])],
     boundaryReveal: options.boundaryReveal ?? "syntax",
     from,
     renderedDecorations: [...renderedDecorations],

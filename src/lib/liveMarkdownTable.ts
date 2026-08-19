@@ -4,6 +4,10 @@ import type { LiveMarkdownBlock } from "./liveMarkdown";
 export type LiveMarkdownTableAlignment = "center" | "left" | "right";
 
 export interface LiveMarkdownTableCell {
+  // Editable bounds keep trailing padding available for ordinary typing. The
+  // semantic bounds below continue to exclude Markdown cell padding.
+  editableFrom: number;
+  editableTo: number;
   from: number;
   to: number;
   source: string;
@@ -84,12 +88,52 @@ export function parseLiveMarkdownTables(
   return tables;
 }
 
+export function isLiveMarkdownTableDelimiterCandidate(
+  value: string,
+  from: number,
+  to: number,
+  lines?: readonly LiveMarkdownBlock[],
+): boolean {
+  if (from < 0 || to <= from || to > value.length) {
+    return false;
+  }
+  if (!/^-{2,}$/.test(value.slice(from, to))) {
+    return false;
+  }
+
+  const documentLines = lines ?? parseLiveMarkdownBlocks(value);
+  const delimiterIndex = documentLines.findIndex((line) =>
+    from >= line.from && to <= line.to
+  );
+  if (delimiterIndex <= 0) {
+    return false;
+  }
+
+  const delimiterLine = documentLines[delimiterIndex]!;
+  const headerLine = documentLines[delimiterIndex - 1]!;
+  if (
+    !lineCanStartTable(headerLine) ||
+    !lineCanBeTableDelimiterCandidate(delimiterLine) ||
+    !/^[\t |:-]+$/.test(delimiterLine.source)
+  ) {
+    return false;
+  }
+
+  const header = parseTableRow(headerLine);
+
+  return !!header && header.cells.length >= 2;
+}
+
 function lineCanBelongToTable(line: LiveMarkdownBlock): boolean {
   return line.type !== "code" && line.type !== "frontmatter";
 }
 
 function lineCanStartTable(line: LiveMarkdownBlock): boolean {
   return line.type === "text";
+}
+
+function lineCanBeTableDelimiterCandidate(line: LiveMarkdownBlock): boolean {
+  return line.type === "text" || line.type === "horizontal-rule";
 }
 
 function parseTableRow(
@@ -142,10 +186,13 @@ function parseTableRow(
 
   const cells = cellRanges.map((range) => {
     const trimmed = trimCellRange(line.source, range);
+    const editable = trimCellLeadingPadding(line.source, range);
     const absoluteFrom = line.from + trimmed.from;
     const absoluteTo = line.from + trimmed.to;
 
     return {
+      editableFrom: line.from + editable.from,
+      editableTo: line.from + editable.to,
       from: absoluteFrom,
       to: absoluteTo,
       source: line.source.slice(trimmed.from, trimmed.to),
@@ -194,6 +241,18 @@ function trimCellRange(
     const insertionPoint = Math.min(originalFrom + 1, range.to);
 
     return { from: insertionPoint, to: insertionPoint };
+  }
+
+  return { from, to };
+}
+
+function trimCellLeadingPadding(
+  source: string,
+  range: { from: number; to: number },
+): { from: number; to: number } {
+  let { from, to } = range;
+  if (from < to && /\s/.test(source[from]!)) {
+    from += 1;
   }
 
   return { from, to };
