@@ -1,4 +1,5 @@
 import { EditorView, WidgetType } from "@codemirror/view";
+import type { Rect } from "@codemirror/view";
 import type { LiveMarkdownBlock } from "./liveMarkdown";
 
 const UNORDERED_LIST_MARKERS = ["•", "◦", "▪"] as const;
@@ -35,6 +36,10 @@ export class ListMarkerWidget extends WidgetType {
       this.to === other.to;
   }
 
+  coordsAt(dom: HTMLElement, pos: number, side: number): Rect | null {
+    return listControlCoordinates(dom, pos, side);
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const document = view.dom.ownerDocument;
     const control = document.createElement("span");
@@ -48,7 +53,7 @@ export class ListMarkerWidget extends WidgetType {
     marker.textContent = this.marker;
     control.append(prefix, marker);
     control.addEventListener("mousedown", (event) =>
-      revealWidgetSource(view, marker, event, this.from, this.to, true)
+      revealWidgetSource(view, marker, event, this.from, this.to)
     );
 
     return control;
@@ -74,6 +79,10 @@ export class TaskWidget extends WidgetType {
       this.to === other.to;
   }
 
+  coordsAt(dom: HTMLElement, pos: number, side: number): Rect | null {
+    return listControlCoordinates(dom, pos, side);
+  }
+
   toDOM(view: EditorView): HTMLElement {
     const document = view.dom.ownerDocument;
     const control = document.createElement("span");
@@ -95,7 +104,7 @@ export class TaskWidget extends WidgetType {
       checkbox.append(createCheckIcon(document));
     }
     control.addEventListener("mousedown", (event) =>
-      revealWidgetSource(view, control, event, this.from, this.to, true)
+      revealWidgetSource(view, control, event, this.from, this.to)
     );
     checkbox.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -262,22 +271,76 @@ function revealWidgetSource(
   event: MouseEvent,
   from: number,
   to: number,
-  revealInside = false,
 ): void {
   event.preventDefault();
   event.stopPropagation();
   const bounds = element.getBoundingClientRect();
   const approachFromLeft = event.clientX < bounds.left + bounds.width / 2;
-  let position = approachFromLeft ? from : to;
-  if (revealInside && to - from > 1) {
-    position = approachFromLeft ? from + 1 : to - 1;
-  }
+  const position = approachFromLeft ? from : to;
   view.dispatch({
     selection: { anchor: position },
     scrollIntoView: true,
     userEvent: "select.pointer",
   });
   view.focus();
+}
+
+function listControlCoordinates(
+  dom: HTMLElement,
+  pos: number,
+  side: number,
+): Rect | null {
+  if (pos > 0) {
+    return null;
+  }
+
+  const line = dom.closest<HTMLElement>(".cm-line");
+  if (!line) {
+    return null;
+  }
+
+  const lineBounds = line.getBoundingClientRect();
+  const strongSide = Math.abs(side) > 1;
+  const horizontalBounds = strongSide
+    ? dom.closest(".cm-content")?.getBoundingClientRect() ?? lineBounds
+    : lineBounds;
+  const lineHeight = Number.parseFloat(
+    dom.ownerDocument.defaultView?.getComputedStyle(line).lineHeight ?? "",
+  );
+  const lineBottom = Number.isFinite(lineHeight)
+    ? Math.min(lineBounds.bottom, lineBounds.top + lineHeight)
+    : lineBounds.bottom;
+  // Drawn selections otherwise fill the leading gap above this widget line,
+  // leaving a thin strip beside the selected list item.
+  const lineTop = strongSide
+    ? previousLineTextBottom(line, lineBounds.top)
+    : lineBounds.top;
+
+  return {
+    left: horizontalBounds.left,
+    right: horizontalBounds.left,
+    top: Math.min(lineTop, lineBottom),
+    bottom: lineBottom,
+  };
+}
+
+function previousLineTextBottom(
+  line: HTMLElement,
+  fallback: number,
+): number {
+  const previousLine = line.previousElementSibling;
+  if (!(previousLine instanceof HTMLElement)) {
+    return fallback;
+  }
+
+  const range = line.ownerDocument.createRange();
+  range.selectNodeContents(previousLine);
+  const bottoms = [...range.getClientRects()]
+    .filter((bounds) => bounds.width > 0 && bounds.height > 0)
+    .map((bounds) => bounds.bottom)
+    .filter((bottom) => bottom <= fallback + 0.5);
+
+  return bottoms.length ? Math.max(...bottoms) : fallback;
 }
 
 function createCheckIcon(document: Document): SVGSVGElement {

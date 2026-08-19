@@ -2287,9 +2287,23 @@ pre {
   border-left-color: var(--editor-text);
 }
 
-.source-editor .cm-selectionBackground,
-.source-editor .cm-content ::selection {
+.source-editor .cm-selectionBackground {
+  background: transparent !important;
+}
+
+.source-editor .cm-editor .cm-content::selection,
+.source-editor .cm-editor .cm-content ::selection {
   background: var(--selection-bg) !important;
+}
+
+.source-editor .cm-editor.live-drawn-boundary-selection .cm-selectionBackground {
+  background: var(--selection-bg) !important;
+}
+
+.source-editor .cm-editor.live-drawn-boundary-selection .cm-content::selection,
+.source-editor .cm-editor.live-drawn-boundary-selection .cm-content ::selection {
+  background: transparent !important;
+  color: inherit !important;
 }
 
 .document-search-match {
