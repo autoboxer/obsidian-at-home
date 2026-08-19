@@ -1,11 +1,10 @@
 import {
-  EditorSelection,
   StateEffect,
   StateField,
   Transaction,
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import type { EditorState, Extension, Text } from "@codemirror/state";
+import type { EditorSelection, Extension, Text } from "@codemirror/state";
 import type { Command } from "@codemirror/view";
 
 const STRAIGHT_APOSTROPHE = "'";
@@ -99,13 +98,11 @@ function preserveLiteralApostrophes(
 
   const defaultTransaction = insert();
   const correctedText = corrected.join("");
-  const selection = correctedApostropheSelection(
-    view.state,
-    defaultTransaction.newSelection,
-    from,
-    to,
-    correctedText.length,
-  );
+  const restoresExistingText = correctedText === view.state.sliceDoc(from, to);
+  // Smart punctuation may rewrite a completed word behind the actual caret.
+  const selection = restoresExistingText
+    ? view.state.selection
+    : defaultTransaction.newSelection;
   const userEvent =
     defaultTransaction.annotation(Transaction.userEvent) ?? "input.type";
   const addToHistory = defaultTransaction.annotation(Transaction.addToHistory);
@@ -127,29 +124,6 @@ function preserveLiteralApostrophes(
   });
 
   return true;
-}
-
-function correctedApostropheSelection(
-  state: EditorState,
-  selection: EditorSelection,
-  from: number,
-  to: number,
-  insertedLength: number,
-): EditorSelection {
-  const current = state.selection.main;
-  const replacementEnd = from + insertedLength;
-  if (
-    state.selection.ranges.length !== 1 ||
-    !current.empty ||
-    current.head !== to ||
-    !selection.main.empty ||
-    selection.main.head < from ||
-    selection.main.head >= replacementEnd
-  ) {
-    return selection;
-  }
-
-  return selection.replaceRange(EditorSelection.cursor(replacementEnd));
 }
 
 function literalApostropheIsPending(
