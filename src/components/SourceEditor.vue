@@ -10,6 +10,7 @@ import {
 import {
   defaultKeymap,
   history,
+  historyField,
   historyKeymap,
   insertNewline,
   isolateHistory,
@@ -55,6 +56,10 @@ import {
   splitLeadingFrontmatter,
 } from "../lib/frontmatter";
 import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
+import {
+  openNoteEditorHistory,
+  type NoteEditorHistorySnapshot,
+} from "../stores/editorHistories";
 import {
   deleteEmptyLiveMarkdownTableRow,
   insertLiveMarkdownTableLineBreak,
@@ -111,6 +116,7 @@ let frontmatterLineOffset = 0;
 let frontmatterPrefix = "";
 let positionCaptureEnabled = false;
 let removePositionCapture: (() => boolean) | undefined;
+let closeEditorHistory: ReturnType<typeof openNoteEditorHistory>["close"] | undefined;
 let viewportRestoreFrame: number | undefined;
 
 const positionCaptureKey = {};
@@ -797,149 +803,186 @@ onMounted(() => {
     editableDocument.body.length,
     editableDocument.bodyStart,
   );
+  const extensions: Extension[] = [
+    lineNumbersCompartment.of(editorLineNumbers(frontmatterLineOffset)),
+    highlightSpecialChars(),
+    historyCompartment.of(history()),
+    drawSelection(),
+    dropCursor(),
+    EditorState.tabSize.of(4),
+    EditorView.lineWrapping,
+    EditorView.contentAttributes.of({
+      "aria-label": "Markdown source",
+      autocapitalize: "sentences",
+      class: "source-textarea",
+      spellcheck: "true",
+    }),
+    markdown({
+      addKeymap: false,
+      base: markdownLanguage,
+      completeHTMLTags: false,
+      pasteURLAsLink: false,
+    }),
+    literalApostropheExtension,
+    tableDelimiterHyphenExtension,
+    liveMarkdownExtension({
+      documentId: `${props.vaultId}\u0000${props.noteId}`,
+      openLink: openLiveMarkdownLink,
+      openWiki: openLiveMarkdownWikiLink,
+      wikiLinkIsResolved: inlineWikiLinkIsResolved,
+    }),
+    codeMirrorDocumentSearchExtension,
+    Prec.high(keymap.of([
+      { key: "ArrowDown", run: suggestionDown },
+      { key: "ArrowUp", run: suggestionUp },
+      { key: "ArrowDown", run: handleTableArrowDown },
+      { key: "ArrowUp", run: handleTableArrowUp },
+      { key: "Enter", run: acceptSuggestion },
+      { key: "Escape", run: closeSuggestions },
+      { key: "Shift-Enter", run: handleShiftEnter },
+      { key: "Enter", run: handleEnter },
+      { key: "Tab", run: handleTab },
+      { key: "Shift-Tab", run: handleShiftTab },
+      { key: "Backspace", run: deleteEmptyTableRow },
+      { key: "Backspace", run: protectTableCellStart },
+      { key: "Delete", run: protectTableCellEnd },
+      {
+        key: "Mod-Backspace",
+        mac: "Alt-Backspace",
+        run: protectTableCellStart,
+      },
+      {
+        key: "Mod-Delete",
+        mac: "Alt-Delete",
+        run: protectTableCellEnd,
+      },
+      { mac: "Mod-Backspace", run: deleteToTableCellTextStart },
+      { mac: "Mod-Delete", run: deleteToTableCellTextEnd },
+      {
+        key: "ArrowLeft",
+        run: moveAcrossTableCellLeft,
+        shift: protectTableCellSelectionLeft,
+      },
+      {
+        key: "ArrowRight",
+        run: moveAcrossTableCellRight,
+        shift: protectTableCellSelectionRight,
+      },
+      {
+        key: "Home",
+        run: moveToTableCellTextStart,
+        shift: selectToTableCellTextStart,
+      },
+      {
+        key: "End",
+        run: moveToTableCellTextEnd,
+        shift: selectToTableCellTextEnd,
+      },
+      {
+        mac: "Cmd-ArrowLeft",
+        run: moveToTableCellTextLeft,
+        shift: selectToTableCellTextLeft,
+      },
+      {
+        mac: "Cmd-ArrowRight",
+        run: moveToTableCellTextRight,
+        shift: selectToTableCellTextRight,
+      },
+      { key: "Mod-b", run: toggleBold },
+      { key: "Mod-i", run: toggleItalic },
+      { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
+      { key: "Mod-Shift-x", run: toggleStrikethrough },
+      { key: "'", run: insertLiteralApostrophe },
+      { key: "-", run: insertLiteralHyphen },
+      { key: "`", run: wrapSelectionAsInlineCode },
+      { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
+      {
+        key: "Home",
+        run: moveToRenderedListTextStart,
+        shift: selectRenderedListTextStart,
+      },
+      {
+        mac: "Cmd-ArrowLeft",
+        run: moveToRenderedListTextStart,
+        shift: selectRenderedListTextStart,
+      },
+    ])),
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+    EditorView.updateListener.of((update) => {
+      const localDocumentChange = update.docChanged && update.transactions.some(
+        (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
+      );
+      if (localDocumentChange) {
+        if (
+          props.showFrontmatter
+          && changeTouchesLeadingFrontmatter(update)
+        ) {
+          frontmatterHistoryChanged = true;
+        }
+        emit(
+          "update:modelValue",
+          restoreLineEndings(
+            joinLeadingFrontmatter(
+              frontmatterPrefix,
+              update.state.doc.toString(),
+            ),
+            outputLineEnding,
+          ),
+        );
+        refreshDocumentSearch();
+      }
+      if (update.docChanged || update.selectionSet) {
+        updateSuggestions(update.view);
+        schedulePositionCapture(update.view);
+      }
+      scheduleEditorRenderReady(update.view);
+    }),
+  ];
+  const historySession = openNoteEditorHistory(
+    props.vaultId,
+    props.noteId,
+  );
+  closeEditorHistory = historySession.close;
+  const savedState = restorableEditorHistory(
+    historySession.snapshot,
+    normalizeDocumentText(props.modelValue),
+    editableDocument,
+  );
+  if (historySession.snapshot && !savedState) {
+    historySession.discard();
+  }
+  let state = savedState
+    ? EditorState.fromJSON(
+        savedState,
+        { extensions },
+        { history: historyField },
+      )
+    : EditorState.create({
+        doc: editableDocument.body,
+        selection: initialPosition
+          ? EditorSelection.range(initialPosition.selection.anchor, initialPosition.selection.head)
+          : undefined,
+        extensions,
+      });
+  if (savedState && savedState.doc !== editableDocument.body) {
+    const currentBodyStart = markdownBodyStart(savedState.prefix, savedState.doc);
+    state = state.update({
+      annotations: [
+        externalUpdate.of(true),
+        Transaction.addToHistory.of(false),
+      ],
+      changes: minimalDocumentChange(savedState.doc, editableDocument.body),
+      selection: frontmatterVisibilitySelection(
+        state.selection.main,
+        currentBodyStart,
+        editableDocument,
+      ),
+    }).state;
+  }
+  frontmatterHistoryChanged = savedState?.frontmatterHistoryChanged ?? false;
   const view = new EditorView({
     parent: host,
-    state: EditorState.create({
-      doc: editableDocument.body,
-      selection: initialPosition
-        ? EditorSelection.range(initialPosition.selection.anchor, initialPosition.selection.head)
-        : undefined,
-      extensions: [
-        lineNumbersCompartment.of(editorLineNumbers(frontmatterLineOffset)),
-        highlightSpecialChars(),
-        historyCompartment.of(history()),
-        drawSelection(),
-        dropCursor(),
-        EditorState.tabSize.of(4),
-        EditorView.lineWrapping,
-        EditorView.contentAttributes.of({
-          "aria-label": "Markdown source",
-          autocapitalize: "sentences",
-          class: "source-textarea",
-          spellcheck: "true",
-        }),
-        markdown({
-          addKeymap: false,
-          base: markdownLanguage,
-          completeHTMLTags: false,
-          pasteURLAsLink: false,
-        }),
-        literalApostropheExtension,
-        tableDelimiterHyphenExtension,
-        liveMarkdownExtension({
-          documentId: `${props.vaultId}\u0000${props.noteId}`,
-          openLink: openLiveMarkdownLink,
-          openWiki: openLiveMarkdownWikiLink,
-          wikiLinkIsResolved: inlineWikiLinkIsResolved,
-        }),
-        codeMirrorDocumentSearchExtension,
-        Prec.high(keymap.of([
-          { key: "ArrowDown", run: suggestionDown },
-          { key: "ArrowUp", run: suggestionUp },
-          { key: "ArrowDown", run: handleTableArrowDown },
-          { key: "ArrowUp", run: handleTableArrowUp },
-          { key: "Enter", run: acceptSuggestion },
-          { key: "Escape", run: closeSuggestions },
-          { key: "Shift-Enter", run: handleShiftEnter },
-          { key: "Enter", run: handleEnter },
-          { key: "Tab", run: handleTab },
-          { key: "Shift-Tab", run: handleShiftTab },
-          { key: "Backspace", run: deleteEmptyTableRow },
-          { key: "Backspace", run: protectTableCellStart },
-          { key: "Delete", run: protectTableCellEnd },
-          {
-            key: "Mod-Backspace",
-            mac: "Alt-Backspace",
-            run: protectTableCellStart,
-          },
-          {
-            key: "Mod-Delete",
-            mac: "Alt-Delete",
-            run: protectTableCellEnd,
-          },
-          { mac: "Mod-Backspace", run: deleteToTableCellTextStart },
-          { mac: "Mod-Delete", run: deleteToTableCellTextEnd },
-          {
-            key: "ArrowLeft",
-            run: moveAcrossTableCellLeft,
-            shift: protectTableCellSelectionLeft,
-          },
-          {
-            key: "ArrowRight",
-            run: moveAcrossTableCellRight,
-            shift: protectTableCellSelectionRight,
-          },
-          {
-            key: "Home",
-            run: moveToTableCellTextStart,
-            shift: selectToTableCellTextStart,
-          },
-          {
-            key: "End",
-            run: moveToTableCellTextEnd,
-            shift: selectToTableCellTextEnd,
-          },
-          {
-            mac: "Cmd-ArrowLeft",
-            run: moveToTableCellTextLeft,
-            shift: selectToTableCellTextLeft,
-          },
-          {
-            mac: "Cmd-ArrowRight",
-            run: moveToTableCellTextRight,
-            shift: selectToTableCellTextRight,
-          },
-          { key: "Mod-b", run: toggleBold },
-          { key: "Mod-i", run: toggleItalic },
-          { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
-          { key: "Mod-Shift-x", run: toggleStrikethrough },
-          { key: "'", run: insertLiteralApostrophe },
-          { key: "-", run: insertLiteralHyphen },
-          { key: "`", run: wrapSelectionAsInlineCode },
-          { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
-          {
-            key: "Home",
-            run: moveToRenderedListTextStart,
-            shift: selectRenderedListTextStart,
-          },
-          {
-            mac: "Cmd-ArrowLeft",
-            run: moveToRenderedListTextStart,
-            shift: selectRenderedListTextStart,
-          },
-        ])),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        EditorView.updateListener.of((update) => {
-          const localDocumentChange = update.docChanged && update.transactions.some(
-            (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
-          );
-          if (localDocumentChange) {
-            if (
-              props.showFrontmatter
-              && changeTouchesLeadingFrontmatter(update)
-            ) {
-              frontmatterHistoryChanged = true;
-            }
-            emit(
-              "update:modelValue",
-              restoreLineEndings(
-                joinLeadingFrontmatter(
-                  frontmatterPrefix,
-                  update.state.doc.toString(),
-                ),
-                outputLineEnding,
-              ),
-            );
-            refreshDocumentSearch();
-          }
-          if (update.docChanged || update.selectionSet) {
-            updateSuggestions(update.view);
-            schedulePositionCapture(update.view);
-          }
-          scheduleEditorRenderReady(update.view);
-        }),
-      ],
-    }),
+    state,
     scrollTo: initialPosition
       ? EditorView.scrollIntoView(initialPosition.viewport.anchor, { x: "start", y: "start" })
       : undefined,
@@ -987,6 +1030,15 @@ onBeforeUnmount(() => {
     if (positionCaptureEnabled && captureWasActive) {
       emitEditorPosition(captureEditorPosition(view));
     }
+    const serializedState = view.state.toJSON({ history: historyField });
+    closeEditorHistory?.({
+      doc: serializedState.doc,
+      frontmatterHistoryChanged,
+      history: serializedState.history,
+      prefix: frontmatterPrefix,
+      selection: serializedState.selection,
+    });
+    closeEditorHistory = undefined;
     view.destroy();
   }
   editorView.value = undefined;
@@ -1306,6 +1358,29 @@ function projectEditableDocument(
     lineNumberOffset: 0,
     prefix: "",
   };
+}
+
+function restorableEditorHistory(
+  snapshot: NoteEditorHistorySnapshot | undefined,
+  normalizedMarkdown: string,
+  editableDocument: ReturnType<typeof projectEditableDocument>,
+): NoteEditorHistorySnapshot | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  if (snapshot.doc === editableDocument.body) {
+    return snapshot;
+  }
+  const savedMarkdown = joinLeadingFrontmatter(snapshot.prefix, snapshot.doc);
+  if (savedMarkdown !== normalizedMarkdown) {
+    return undefined;
+  }
+  const savedBodyStart = markdownBodyStart(snapshot.prefix, snapshot.doc);
+  const hidingEditedFrontmatter = savedBodyStart === 0
+    && editableDocument.bodyStart > 0
+    && snapshot.frontmatterHistoryChanged;
+
+  return hidingEditedFrontmatter ? undefined : snapshot;
 }
 
 function frontmatterVisibilitySelection(
