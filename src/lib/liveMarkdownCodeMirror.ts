@@ -20,6 +20,7 @@ import {
   liveMarkdownDocumentModelField,
   liveMarkdownDocumentModelForText,
 } from "./liveMarkdownDocumentModel";
+import { liveMarkdownHeadingFoldingExtension } from "./liveMarkdownHeadingFolding";
 import {
   HorizontalRuleWidget,
   ListMarkerWidget,
@@ -59,6 +60,7 @@ import type {
 } from "./liveMarkdownTable";
 
 export interface LiveMarkdownOptions {
+  readonly documentId: string;
   readonly openLink: (href: string) => void;
   readonly openWiki: (target: string, heading?: string) => void;
   readonly wikiLinkIsResolved: (target: string) => boolean;
@@ -299,6 +301,7 @@ const tableCellCaretAssociation = EditorState.transactionFilter.of(
 export function liveMarkdownExtension(options: LiveMarkdownOptions): Extension {
   return [
     liveMarkdownDocumentModelField,
+    liveMarkdownHeadingFoldingExtension(options.documentId),
     tableCellCaretAssociation,
     liveMarkdownPlugin.of(options),
     EditorView.mouseSelectionStyle.of(inlineMarkupMouseSelection),

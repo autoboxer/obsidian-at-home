@@ -2213,6 +2213,42 @@ pre {
   font-weight: 650;
 }
 
+.live-heading-toggle {
+  display: inline-grid;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-right: 0.22rem;
+  margin-left: -1.42rem;
+  padding: 0;
+  vertical-align: 0.08em;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-muted);
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.live-heading-toggle:hover,
+.live-heading-toggle:focus-visible,
+.source-editor .cm-line.live-markdown-block.is-heading:hover .live-heading-toggle {
+  border-color: var(--border);
+  background: var(--surface-control-hover);
+  color: var(--violet-bright);
+}
+
+.live-heading-chevron {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateX(-1px) rotate(-45deg);
+  transition: transform 140ms ease;
+}
+
+.live-heading-toggle[aria-expanded="true"] .live-heading-chevron {
+  transform: translateY(-1px) rotate(45deg);
+}
+
 .source-editor .cm-line.live-markdown-block.heading-level-1 {
   font-size: 1.55em;
   font-weight: 760;

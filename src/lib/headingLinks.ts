@@ -94,7 +94,8 @@ export function markdownHeadingSlug(value: string): string {
   return slug || "section";
 }
 
-function markdownHeadingText(value: string): string {
+/** Return the visible text represented by inline Markdown in a heading. */
+export function markdownHeadingText(value: string): string {
   return value
     .replace(
       /!?\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g,
