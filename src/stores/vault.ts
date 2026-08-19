@@ -22,6 +22,10 @@ import {
   setNoteEditorPosition,
 } from "./editorPositions";
 import {
+  deleteNoteEditorHistory,
+  pruneNoteEditorHistories,
+} from "./editorHistories";
+import {
   archiveWorkspaceNote,
   bootstrapWorkspace,
   createWorkspace,
@@ -951,6 +955,7 @@ export async function deleteNote(id: string): Promise<boolean> {
       applyVaultMutation(() => applyNoteDeletion(id));
       hydrateRecentlyDeletedNotes(candidateDeletedNotes);
       deleteNoteEditorPosition(vaultId, id);
+      deleteNoteEditorHistory(vaultId, id);
       savedVersion = dirtyVersion;
       recentlyDeletedState.error = null;
       notify("Note moved to Recently Deleted", "neutral");
@@ -982,6 +987,7 @@ export async function deleteNote(id: string): Promise<boolean> {
           ...recentlyDeletedState.notes,
         ]);
         deleteNoteEditorPosition(vaultId, id);
+        deleteNoteEditorHistory(vaultId, id);
       },
       async () => {
         const workspace = await reconcileNativeWorkspace(path);
@@ -1438,6 +1444,7 @@ async function mergeImportedVaultExclusive(
     savedVersion = previousSavedVersion;
   }
   pruneNoteEditorPositions(currentEditorPositionVaultId(), vaultState.notes);
+  pruneNoteEditorHistories(currentEditorPositionVaultId(), vaultState.notes);
   notify(
     saved
       ? `Imported ${result.notes.length} Markdown ${result.notes.length === 1 ? "note" : "notes"}`
@@ -1539,6 +1546,7 @@ async function clearVaultExclusive(): Promise<boolean> {
     savedVersion = previousSavedVersion;
   }
   pruneNoteEditorPositions(currentEditorPositionVaultId(), vaultState.notes);
+  pruneNoteEditorHistories(currentEditorPositionVaultId(), vaultState.notes);
   notify(saved ? "Vault cleared" : "Vault cleared, but not saved", saved ? "success" : "warning");
 
   return saved;
@@ -2444,6 +2452,10 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
     workspace.editorPositions,
     workspace.editorPositionsWritable,
     workspace.editorPositionsRevision,
+  );
+  pruneNoteEditorHistories(
+    editorPositionVaultId("native", workspace.descriptor.path),
+    vaultState.notes,
   );
   if (previousPath === workspace.descriptor.path) {
     pruneNoteNavigation();
