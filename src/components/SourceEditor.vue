@@ -763,6 +763,7 @@ onMounted(() => {
         literalApostropheExtension,
         tableDelimiterHyphenExtension,
         liveMarkdownExtension({
+          documentId: `${props.vaultId}\u0000${props.noteId}`,
           openLink: openLiveMarkdownLink,
           openWiki: openLiveMarkdownWikiLink,
           wikiLinkIsResolved: inlineWikiLinkIsResolved,

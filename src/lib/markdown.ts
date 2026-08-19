@@ -13,8 +13,6 @@ export interface MarkdownRenderOptions {
   ) => Note | boolean | null | undefined;
   headingIdPrefix?: string;
   externalLinksInNewTab?: boolean;
-  collapsibleHeadings?: boolean;
-  collapsedHeadingKeys?: ReadonlySet<string>;
 }
 
 interface RenderContext {
@@ -22,19 +20,6 @@ interface RenderContext {
   depth: number;
   listDepth: number;
   taskCounter: { value: number };
-  headingOccurrences: Map<string, number>;
-}
-
-interface OpenHeadingSection {
-  level: number;
-  key: string;
-  bodyId: string;
-  headingId: string;
-  headingHtml: string;
-  headingTextId: string;
-  headingBlockIndex: number;
-  bodyBlockIndex: number;
-  hasContent: boolean;
 }
 
 interface ListTextPart {
@@ -87,7 +72,6 @@ export function renderMarkdown(
     depth: 0,
     listDepth: 0,
     taskCounter: { value: 0 },
-    headingOccurrences: new Map(),
   });
 }
 
@@ -202,53 +186,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
 
   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
   const blocks: string[] = [];
-  const openHeadingSections: OpenHeadingSection[] = [];
   let index = 0;
-
-  const pushContent = (html: string): void => {
-    const currentSection = openHeadingSections.at(-1);
-    if (currentSection) {
-      currentSection.hasContent = true;
-    }
-
-    blocks.push(html);
-  };
-
-  const closeHeadingSection = (): void => {
-    const section = openHeadingSections.pop();
-    if (!section) {
-      return;
-    }
-
-    const canCollapse = section.hasContent;
-    const isCollapsed = canCollapse &&
-      context.options.collapsedHeadingKeys?.has(section.key) === true;
-    const toggle = canCollapse
-      ? `<button type="button" class="markdown-heading-toggle" aria-expanded="${
-        isCollapsed ? "false" : "true"
-      }" aria-controls="${escapeHtml(section.bodyId)}" aria-label="${
-        isCollapsed ? "Expand" : "Collapse"
-      } section" aria-describedby="${escapeHtml(section.headingTextId)}"><span class="markdown-heading-chevron" aria-hidden="true"></span></button>`
-      : "";
-    const sectionClass = isCollapsed
-      ? "markdown-heading-section is-collapsed"
-      : "markdown-heading-section";
-
-    blocks[section.headingBlockIndex] =
-      `<div class="${sectionClass}" data-heading-key="${escapeHtml(section.key)}">` +
-      `<h${section.level} id="${escapeHtml(section.headingId)}" aria-labelledby="${escapeHtml(section.headingTextId)}">` +
-      `${toggle}<span id="${escapeHtml(section.headingTextId)}" class="markdown-heading-text">${section.headingHtml}</span>` +
-      `</h${section.level}>`;
-    blocks[section.bodyBlockIndex] =
-      `<div id="${escapeHtml(section.bodyId)}" class="markdown-heading-body"${isCollapsed ? " hidden" : ""}>`;
-    blocks.push("</div></div>");
-  };
-
-  const closeSectionsThroughLevel = (level: number): void => {
-    while ((openHeadingSections.at(-1)?.level ?? 0) >= level) {
-      closeHeadingSection();
-    }
-  };
 
   while (index < lines.length) {
     const line = lines[index]!;
@@ -288,7 +226,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
         .join(" ");
       const className = classes ? ` class="${classes}"` : "";
       const languageLabel = language ? ` data-language="${escapeHtml(language)}"` : "";
-      pushContent(`<pre${languageLabel}><code${className}>${highlighted ?? escapeHtml(rawCode)}</code></pre>`);
+      blocks.push(`<pre${languageLabel}><code${className}>${highlighted ?? escapeHtml(rawCode)}</code></pre>`);
       continue;
     }
 
@@ -297,50 +235,17 @@ function renderBlocks(markdown: string, context: RenderContext): string {
       const level = heading[1]!.length;
       const text = heading[2]!.replace(/[\t ]+#+[\t ]*$/, "");
       const prefix = context.options.headingIdPrefix ?? "";
-      const slug = markdownHeadingSlug(text);
-      const id = `${prefix}${slug}`;
-
-      if (context.options.collapsibleHeadings) {
-        closeSectionsThroughLevel(level);
-
-        const parentSection = openHeadingSections.at(-1);
-        if (parentSection) {
-          parentSection.hasContent = true;
-        }
-
-        const occurrenceKey = `${level}:${slug}`;
-        const occurrence = (context.headingOccurrences.get(occurrenceKey) ?? 0) + 1;
-        context.headingOccurrences.set(occurrenceKey, occurrence);
-
-        const key = `h${level}:${slug}:${occurrence}`;
-        const bodyId = `${prefix}markdown-heading-body:${key}`;
-        const headingTextId = `${bodyId}:text`;
-        const headingBlockIndex = blocks.push("") - 1;
-        const bodyBlockIndex = blocks.push("") - 1;
-
-        openHeadingSections.push({
-          level,
-          key,
-          bodyId,
-          headingId: id,
-          headingHtml: renderInline(text, context),
-          headingTextId,
-          headingBlockIndex,
-          bodyBlockIndex,
-          hasContent: false,
-        });
-      } else {
-        blocks.push(
-          `<h${level} id="${escapeHtml(id)}">${renderInline(text, context)}</h${level}>`,
-        );
-      }
+      const id = `${prefix}${markdownHeadingSlug(text)}`;
+      blocks.push(
+        `<h${level} id="${escapeHtml(id)}">${renderInline(text, context)}</h${level}>`,
+      );
 
       index += 1;
       continue;
     }
 
     if (/^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      pushContent("<hr>");
+      blocks.push("<hr>");
       index += 1;
       continue;
     }
@@ -362,7 +267,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
         }
         break;
       }
-      pushContent(
+      blocks.push(
         `<blockquote>${renderBlocks(quoted.join("\n"), {
           ...context,
           depth: context.depth + 1,
@@ -374,7 +279,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
     const listMatch = matchListItem(line);
     if (listMatch) {
       const rendered = renderList(lines, index, context, listMatch.indent);
-      pushContent(rendered.html);
+      blocks.push(rendered.html);
       index = rendered.nextIndex;
       continue;
     }
@@ -404,7 +309,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
         return `<tr>${cells}</tr>`;
       }).join("");
 
-      pushContent(
+      blocks.push(
         `<div class="table-wrap"><table><thead><tr>${headerHtml}</tr></thead>${
           bodyHtml ? `<tbody>${bodyHtml}</tbody>` : ""
         }</table></div>`,
@@ -422,11 +327,7 @@ function renderBlocks(markdown: string, context: RenderContext): string {
       paragraph.push(lines[index]!);
       index += 1;
     }
-    pushContent(`<p>${renderInline(paragraph.join("\n"), context)}</p>`);
-  }
-
-  while (openHeadingSections.length) {
-    closeHeadingSection();
+    blocks.push(`<p>${renderInline(paragraph.join("\n"), context)}</p>`);
   }
 
   return blocks.join("\n");
