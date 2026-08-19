@@ -2220,7 +2220,7 @@ pre {
   margin-right: 0.22rem;
   margin-left: -1.42rem;
   padding: 0;
-  vertical-align: 0.08em;
+  vertical-align: middle;
   place-items: center;
   border: 1px solid transparent;
   border-radius: 5px;
@@ -2241,7 +2241,7 @@ pre {
   height: 0.42rem;
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
-  transform: translateX(-1px) rotate(-45deg);
+  transform: translate(-1px, -1px) rotate(-45deg);
   transition: transform 140ms ease;
 }
 
