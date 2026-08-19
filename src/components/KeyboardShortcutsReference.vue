@@ -50,6 +50,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: "Move to the next table cell", detail: "Creates a row after the final cell", keys: ["Tab"] },
       { label: "Move to the previous table cell", keys: ["Shift", "Tab"] },
       { label: "Insert a table row", detail: "Below the current row; moves to its first cell", keys: ["Enter"] },
+      { label: "Delete an empty table row", detail: "From its first cell only", keys: ["Backspace"] },
       { label: "Add a line break in a table cell", keys: ["Shift", "Enter"] },
       { label: "Move up a table column", keys: ["↑"] },
       { label: "Move down a table column", detail: "Exits below the final row", keys: ["↓"] },

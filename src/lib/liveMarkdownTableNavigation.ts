@@ -100,6 +100,59 @@ export function insertLiveMarkdownTableRow(
   };
 }
 
+export function deleteEmptyLiveMarkdownTableRow(
+  value: string,
+  tables: readonly LiveMarkdownTable[],
+  position: number,
+): LiveMarkdownTableEdit | undefined {
+  const table = tableContainingPosition(tables, position);
+  if (!table) {
+    return undefined;
+  }
+
+  const location = locateTableCell(table, position);
+  if (
+    !location ||
+    location.role !== "editable" ||
+    location.rowIndex === 0 ||
+    location.columnIndex !== 0
+  ) {
+    return undefined;
+  }
+
+  const row = table.rows[location.rowIndex - 1];
+  const firstCell = row?.cells[0];
+  if (
+    !row ||
+    !firstCell ||
+    position !== firstCell.from ||
+    row.cells.length < table.columnCount ||
+    row.cells.some((cell) => cell.source.trim())
+  ) {
+    return undefined;
+  }
+
+  const previousRow = location.rowIndex === 1
+    ? table.header
+    : table.rows[location.rowIndex - 2];
+  const previousCell = previousRow?.cells[table.columnCount - 1];
+  const precedingSourceRow = location.rowIndex === 1
+    ? table.delimiter
+    : table.rows[location.rowIndex - 2];
+  if (!previousCell || !precedingSourceRow) {
+    return undefined;
+  }
+
+  const deletionFrom = row.end > row.to ? row.from : precedingSourceRow.to;
+  const nextValue = `${value.slice(0, deletionFrom)}${value.slice(row.end)}`;
+
+  return {
+    value: nextValue,
+    selectionStart: previousCell.to,
+    selectionEnd: previousCell.to,
+  };
+}
+
 export function insertLiveMarkdownTableLineBreak(
   value: string,
   tables: readonly LiveMarkdownTable[],

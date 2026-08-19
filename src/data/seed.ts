@@ -76,7 +76,7 @@ Press Enter at the end of a list item to continue the list. Press Tab or Shift+T
 | CSS snippets | Customize the interface |
 | Obsidian transfer | Copy notes into or out of the current vault |
 
-Inside a table, press Tab or Shift+Tab to move between cells. Enter inserts a row below the current row and moves to its first cell; Shift+Enter adds a line break inside a cell. Use Up Arrow or Down Arrow to move within a column. Down Arrow from the final row exits below the table.
+Inside a table, press Tab or Shift+Tab to move between cells. Enter inserts a row below the current row and moves to its first cell; Backspace in the first cell of an empty body row removes that row; Shift+Enter adds a line break inside a cell. Use Up Arrow or Down Arrow to move within a column. Down Arrow from the final row exits below the table.
 
 ### 5. Quotes and code blocks
 
