@@ -62,6 +62,19 @@ export interface CssSnippet {
   builtIn?: boolean;
 }
 
+export type ImageEmbedLocation = "vault-root" | "note-folder" | "specified-folder";
+
+export interface ImageEmbedSettings {
+  location: ImageEmbedLocation;
+  folderPath: string;
+}
+
+export interface EmbeddedImage {
+  id: string;
+  relativePath: string;
+  mediaType: string;
+}
+
 export interface VaultData {
   name: string;
   notes: Note[];
@@ -71,6 +84,8 @@ export interface VaultData {
   activeNoteId: string | null;
   recentNoteIds: string[];
   selectedFolderId: "all" | "favorites" | "recent";
+  embeddedImages: EmbeddedImage[];
+  imageEmbedSettings: ImageEmbedSettings;
 }
 
 export interface VaultDescriptor {
@@ -112,6 +127,10 @@ export interface WorkspaceRestoreResult extends WorkspaceSaveResult {
 
 export interface WorkspaceRecoveryMutationResult extends WorkspaceSaveResult {
   removedIds: string[];
+}
+
+export interface WorkspaceEmbedImageResult extends WorkspaceSaveResult {
+  image: EmbeddedImage;
 }
 
 export interface VaultSessionState {

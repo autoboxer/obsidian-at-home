@@ -2354,6 +2354,15 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     notes,
     recentNoteIds,
   );
+  const embeddedImages = Array.isArray(input.embeddedImages)
+    ? input.embeddedImages.filter((image) =>
+      image
+      && typeof image.id === "string"
+      && typeof image.relativePath === "string"
+      && typeof image.mediaType === "string"
+    )
+    : [];
+  const imageEmbedSettings = normalizeImageEmbedSettings(input.imageEmbedSettings);
 
   return {
     name: typeof input.name === "string" && input.name.trim() ? input.name : fallback.name,
@@ -2366,7 +2375,25 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     activeNoteId,
     recentNoteIds,
     selectedFolderId,
+    embeddedImages,
+    imageEmbedSettings,
   };
+}
+
+function normalizeImageEmbedSettings(
+  value: VaultData["imageEmbedSettings"] | undefined,
+): VaultData["imageEmbedSettings"] {
+  if (
+    value?.location === "note-folder"
+    || value?.location === "specified-folder"
+  ) {
+    return {
+      location: value.location,
+      folderPath: typeof value.folderPath === "string" ? value.folderPath : "",
+    };
+  }
+
+  return { location: "vault-root", folderPath: "" };
 }
 
 function normalizeFolderSelection(

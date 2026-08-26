@@ -214,6 +214,11 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     activeNoteId: "note-getting-started",
     recentNoteIds: ["note-getting-started"],
     selectedFolderId: "all",
+    embeddedImages: [],
+    imageEmbedSettings: {
+      location: "vault-root",
+      folderPath: "",
+    },
   };
 }
 

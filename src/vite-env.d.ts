@@ -9,7 +9,11 @@ declare module "*.vue" {
 interface Window {
   __TAURI__?: {
     core: {
-      invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+      invoke<T>(
+        command: string,
+        args?: Record<string, unknown> | number[] | ArrayBuffer | Uint8Array,
+        options?: { headers: Record<string, string> },
+      ): Promise<T>;
     };
   };
 }

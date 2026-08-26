@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::{self, Read, Write};
@@ -19,11 +20,13 @@ const TRANSACTIONS_DIRECTORY: &str = "transactions";
 const TRANSACTION_MANIFEST_FILE: &str = "manifest.json";
 const RECENTLY_DELETED_DIRECTORY: &str = "recently-deleted";
 const RECENTLY_DELETED_SNAPSHOT_VERSION: u32 = 1;
-const STATE_VERSION: u32 = 2;
+const STATE_VERSION: u32 = 3;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
 const TRANSACTION_VERSION: u32 = 3;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_IMAGE_ASSETS: usize = 100_000;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
 const MAX_RECENT_NOTES: usize = 10;
@@ -102,6 +105,39 @@ pub struct CssSnippet {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImageEmbedLocation {
+    VaultRoot,
+    NoteFolder,
+    SpecifiedFolder,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageEmbedSettings {
+    pub location: ImageEmbedLocation,
+    #[serde(default)]
+    pub folder_path: String,
+}
+
+impl Default for ImageEmbedSettings {
+    fn default() -> Self {
+        Self {
+            location: ImageEmbedLocation::VaultRoot,
+            folder_path: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedImage {
+    pub id: String,
+    pub relative_path: String,
+    pub media_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultData {
     pub name: String,
@@ -117,6 +153,10 @@ pub struct VaultData {
     #[serde(default)]
     pub recent_note_ids: Vec<String>,
     pub selected_folder_id: String,
+    #[serde(default)]
+    pub embedded_images: Vec<EmbeddedImage>,
+    #[serde(default)]
+    pub image_embed_settings: ImageEmbedSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -219,6 +259,25 @@ pub struct WorkspaceRecoveryMutationResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEmbedImageResult {
+    pub image: EmbeddedImage,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbedImageBytesMetadata {
+    path: String,
+    file_name: String,
+    note_relative_path: String,
+    settings: ImageEmbedSettings,
+    expected_revision: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 struct StoredNoteMetadata {
@@ -234,6 +293,16 @@ struct StoredRecentlyDeletedNote {
     deleted_at: u64,
     expires_at: u64,
     fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StoredImageAsset {
+    relative_path: String,
+    media_type: String,
+    fingerprint: FileFingerprint,
+    #[serde(default)]
+    modified_nanos: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -266,6 +335,10 @@ struct WorkspaceState {
     recent_note_ids: Vec<String>,
     #[serde(default)]
     recently_deleted_notes: BTreeMap<String, StoredRecentlyDeletedNote>,
+    #[serde(default)]
+    image_assets: BTreeMap<String, StoredImageAsset>,
+    #[serde(default)]
+    image_embed_settings: ImageEmbedSettings,
     #[serde(default = "default_folder_selection")]
     selected_folder_id: String,
     #[serde(default)]
@@ -285,6 +358,8 @@ impl Default for WorkspaceState {
             active_note_id: None,
             recent_note_ids: Vec::new(),
             recently_deleted_notes: BTreeMap::new(),
+            image_assets: BTreeMap::new(),
+            image_embed_settings: ImageEmbedSettings::default(),
             selected_folder_id: default_folder_selection(),
             last_committed_transaction_id: None,
         }
@@ -423,7 +498,7 @@ enum TransactionPhase {
     Committed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 struct FileFingerprint {
     length: u64,
@@ -796,6 +871,109 @@ pub fn workspace_revision(app: AppHandle, path: String) -> Result<u64, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_image_file(
+    app: AppHandle,
+    path: String,
+    source_path: String,
+    note_relative_path: String,
+    settings: ImageEmbedSettings,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedImageResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    let source = validate_image_source_file(&source_path)?;
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Image.png")
+        .to_owned();
+    let bytes = read_image_file(&source)?;
+    let existing_relative_path = source
+        .strip_prefix(&root)
+        .ok()
+        .and_then(path_to_slash_string)
+        .filter(|relative| validate_image_relative_path(relative).is_ok());
+
+    embed_workspace_image(
+        &root,
+        &note_relative_path,
+        settings,
+        &file_name,
+        &bytes,
+        existing_relative_path.as_deref(),
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_image_bytes(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<WorkspaceEmbedImageResult, String> {
+    let encoded_metadata = request
+        .headers()
+        .get("x-oah-image-metadata")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "Image metadata is missing from the clipboard request.".to_owned())?;
+    let metadata: EmbedImageBytesMetadata = serde_json::from_str(&percent_decode_utf8(
+        encoded_metadata,
+    )?)
+    .map_err(|error| format!("Image metadata is invalid: {error}"))?;
+    let bytes: Cow<'_, [u8]> = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Cow::Borrowed(bytes),
+        tauri::ipc::InvokeBody::Json(serde_json::Value::Array(values)) => Cow::Owned(
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .filter(|value| *value <= u64::from(u8::MAX))
+                        .map(|value| value as u8)
+                        .ok_or_else(|| "Image bytes are invalid.".to_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        _ => return Err("Image bytes are missing from the clipboard request.".to_owned()),
+    };
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&metadata.path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    embed_workspace_image(
+        &root,
+        &metadata.note_relative_path,
+        metadata.settings,
+        &metadata.file_name,
+        &bytes,
+        None,
+        metadata.expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_read_image(
+    app: AppHandle,
+    path: String,
+    asset_id: Option<String>,
+    note_relative_path: String,
+    destination: String,
+) -> Result<tauri::ipc::Response, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    read_workspace_image(
+        &root,
+        asset_id.as_deref(),
+        &note_relative_path,
+        &destination,
+    )
+    .map(tauri::ipc::Response::new)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn workspace_save_editor_positions(
     app: AppHandle,
     path: String,
@@ -965,6 +1143,14 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
     } else {
         defaults.snippets.clone()
     };
+    let embedded_images = reconcile_image_assets(&root, &mut state.image_assets, &mut warnings);
+    let image_embed_settings = match normalize_image_embed_settings(&state.image_embed_settings) {
+        Ok(settings) => settings,
+        Err(error) => {
+            warnings.push(format!("Reset invalid image embed settings: {error}"));
+            ImageEmbedSettings::default()
+        }
+    };
     let vault_name = display_vault_name(
         if state_was_present && !state.name.trim().is_empty() {
             &state.name
@@ -1010,6 +1196,8 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         active_note_id: active_note_id.clone(),
         recent_note_ids: recent_note_ids.clone(),
         recently_deleted_notes: recently_deleted_state,
+        image_assets: state.image_assets.clone(),
+        image_embed_settings: image_embed_settings.clone(),
         selected_folder_id: selected_folder_id.clone(),
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
     };
@@ -1046,6 +1234,8 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             active_note_id,
             recent_note_ids,
             selected_folder_id,
+            embedded_images,
+            image_embed_settings,
         },
         descriptor: VaultDescriptor {
             name: vault_name,
@@ -1272,6 +1462,8 @@ fn save_workspace_files_with_recovery(
         active_note_id: vault.active_note_id.clone(),
         recent_note_ids,
         recently_deleted_notes,
+        image_assets: old_state.image_assets.clone(),
+        image_embed_settings: normalize_image_embed_settings(&vault.image_embed_settings)?,
         selected_folder_id: vault.selected_folder_id.clone(),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
     };
@@ -2124,6 +2316,695 @@ fn build_folder_paths(folders: &[Folder]) -> Result<BTreeMap<String, String>, St
     Ok(result)
 }
 
+fn normalize_image_embed_settings(
+    settings: &ImageEmbedSettings,
+) -> Result<ImageEmbedSettings, String> {
+    match settings.location {
+        ImageEmbedLocation::VaultRoot => Ok(ImageEmbedSettings::default()),
+        ImageEmbedLocation::NoteFolder => Ok(ImageEmbedSettings {
+            location: ImageEmbedLocation::NoteFolder,
+            folder_path: String::new(),
+        }),
+        ImageEmbedLocation::SpecifiedFolder => {
+            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
+            if folder_path.is_empty() {
+                return Err("Choose a vault-relative folder for embedded images.".to_owned());
+            }
+            validate_relative_path(&folder_path, false)?;
+            Ok(ImageEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path,
+            })
+        }
+    }
+}
+
+fn image_destination_folder(
+    note_relative_path: &str,
+    settings: &ImageEmbedSettings,
+) -> Result<String, String> {
+    validate_markdown_relative_path(note_relative_path)?;
+    let settings = normalize_image_embed_settings(settings)?;
+    match settings.location {
+        ImageEmbedLocation::VaultRoot => Ok(String::new()),
+        ImageEmbedLocation::NoteFolder => Ok(Path::new(note_relative_path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(path_to_slash_string)
+            .unwrap_or_default()),
+        ImageEmbedLocation::SpecifiedFolder => Ok(settings.folder_path),
+    }
+}
+
+fn embed_workspace_image(
+    root: &Path,
+    note_relative_path: &str,
+    settings: ImageEmbedSettings,
+    file_name: &str,
+    bytes: &[u8],
+    existing_relative_path: Option<&str>,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedImageResult, String> {
+    let settings = normalize_image_embed_settings(&settings)?;
+    let destination_folder = image_destination_folder(note_relative_path, &settings)?;
+    let (media_type, extension) = validate_image_bytes(bytes, Some(file_name))?;
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err(
+            "Embedded images cannot be changed while workspace metadata is unreadable or newer than this app."
+                .to_owned(),
+        );
+    }
+    recover_workspace_transactions(root, stored_state.as_ref(), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before embedding the image."
+                .to_owned(),
+        );
+    }
+
+    let mut state = stored_state.unwrap_or_default();
+    let existing_relative_path = existing_relative_path
+        .map(str::to_owned)
+        .filter(|path| validate_image_relative_path(path).is_ok());
+    let fingerprint = fingerprint_bytes(bytes);
+
+    if let Some(relative_path) = existing_relative_path.as_deref() {
+        if let Some((id, stored)) = state.image_assets.iter_mut().find(|(_, stored)| {
+            portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
+        }) {
+            if stored.relative_path != relative_path {
+                let old_path = resolve_workspace_image_file(root, &stored.relative_path, true)?;
+                if old_path.exists() {
+                    return Err(format!(
+                        "The vault contains image paths that differ only by letter case near {relative_path}."
+                    ));
+                }
+                stored.relative_path = relative_path.to_owned();
+            }
+            stored.media_type = media_type.to_owned();
+            stored.fingerprint = fingerprint;
+            stored.modified_nanos = image_modified_nanos_for_path(root, relative_path)?;
+            let id = id.clone();
+            state.version = STATE_VERSION;
+            state.image_embed_settings = settings;
+            write_workspace_state(root, &state)?;
+
+            return Ok(WorkspaceEmbedImageResult {
+                image: EmbeddedImage {
+                    id,
+                    relative_path: relative_path.to_owned(),
+                    media_type: media_type.to_owned(),
+                },
+                revision: revision_for_root(root)?,
+                saved_at: now_millis(),
+                warnings: warnings.finish(),
+            });
+        }
+    }
+
+    if state.image_assets.len() >= MAX_IMAGE_ASSETS {
+        return Err(format!(
+            "This vault already tracks the maximum of {MAX_IMAGE_ASSETS} embedded images."
+        ));
+    }
+
+    let mut wrote_image = false;
+    let relative_path = if let Some(relative_path) = existing_relative_path {
+        relative_path
+    } else {
+        if !destination_folder.is_empty() {
+            ensure_directory_path(root, &destination_folder)?;
+        }
+        let safe_name = safe_image_file_name(file_name, extension);
+        let relative_path = unique_image_relative_path(root, &destination_folder, &safe_name)?;
+        let target = resolve_workspace_image_file(root, &relative_path, true)?;
+        atomic_write(&target, bytes)
+            .map_err(|error| format!("Could not save the embedded image: {error}"))?;
+        wrote_image = true;
+        relative_path
+    };
+
+    let mut used_ids = state.image_assets.keys().cloned().collect::<HashSet<_>>();
+    let id_seed = format!(
+        "{relative_path}:{}:{}:{}",
+        fingerprint.length,
+        fingerprint.hash,
+        now_millis(),
+    );
+    let id = fresh_id("image", &id_seed, &mut used_ids);
+    let modified_nanos = match image_modified_nanos_for_path(root, &relative_path) {
+        Ok(modified_nanos) => modified_nanos,
+        Err(error) => {
+            if wrote_image {
+                if let Ok(target) = resolve_workspace_image_file(root, &relative_path, false) {
+                    let _ = remove_file_durable(&target);
+                }
+            }
+            return Err(error);
+        }
+    };
+    state.version = STATE_VERSION;
+    state.image_embed_settings = settings;
+    state.image_assets.insert(
+        id.clone(),
+        StoredImageAsset {
+            relative_path: relative_path.clone(),
+            media_type: media_type.to_owned(),
+            fingerprint,
+            modified_nanos,
+        },
+    );
+
+    if let Err(error) = write_workspace_state(root, &state) {
+        if wrote_image {
+            if let Ok(target) = resolve_workspace_image_file(root, &relative_path, false) {
+                let _ = remove_file_durable(&target);
+            }
+        }
+        return Err(error);
+    }
+
+    Ok(WorkspaceEmbedImageResult {
+        image: EmbeddedImage {
+            id,
+            relative_path,
+            media_type: media_type.to_owned(),
+        },
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+fn read_workspace_image(
+    root: &Path,
+    asset_id: Option<&str>,
+    note_relative_path: &str,
+    destination: &str,
+) -> Result<Vec<u8>, String> {
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err("Workspace metadata is unreadable or newer than this app.".to_owned());
+    }
+    let mut state = stored_state.unwrap_or_default();
+    let valid_asset_id = asset_id.filter(|id| is_valid_image_asset_id(id));
+    let tracked_asset_id = valid_asset_id.filter(|id| state.image_assets.contains_key(*id));
+    if let Some(relative_path) = tracked_asset_id
+        .and_then(|id| state.image_assets.get(id))
+        .map(|asset| asset.relative_path.as_str())
+    {
+        if let Ok(bytes) = read_relative_workspace_image(root, relative_path) {
+            return Ok(bytes);
+        }
+    }
+    if tracked_asset_id.is_some() {
+        let _ = reconcile_image_assets(root, &mut state.image_assets, &mut warnings);
+        if let Some(relative_path) = tracked_asset_id
+            .and_then(|id| state.image_assets.get(id))
+            .map(|asset| asset.relative_path.as_str())
+        {
+            if let Ok(bytes) = read_relative_workspace_image(root, relative_path) {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    let relative_path = resolve_markdown_image_path(note_relative_path, destination)?;
+    read_relative_workspace_image(root, &relative_path)
+}
+
+fn read_relative_workspace_image(root: &Path, relative_path: &str) -> Result<Vec<u8>, String> {
+    let path = resolve_workspace_image_file(root, relative_path, false)?;
+    let bytes = read_image_file(&path)?;
+    validate_image_bytes(&bytes, Some(relative_path))?;
+    Ok(bytes)
+}
+
+fn validate_image_source_file(input: &str) -> Result<PathBuf, String> {
+    if input.trim().is_empty() {
+        return Err("Choose an image file.".to_owned());
+    }
+    let path = Path::new(input);
+    if !path.is_absolute() {
+        return Err("The selected image path must be absolute.".to_owned());
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("The selected image could not be opened: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Choose a regular image file, not a symbolic link.".to_owned());
+    }
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "The selected image is larger than {} MiB.",
+            MAX_IMAGE_BYTES / 1024 / 1024,
+        ));
+    }
+    path.canonicalize()
+        .map_err(|error| format!("The selected image could not be resolved: {error}"))
+}
+
+fn read_image_file(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{} is not a regular image file.", path.display()));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "The image must be between 1 byte and {} MiB.",
+            MAX_IMAGE_BYTES / 1024 / 1024,
+        ));
+    }
+    fs::read(path).map_err(|error| format!("Could not read {}: {error}", path.display()))
+}
+
+fn image_modified_nanos_for_path(root: &Path, relative_path: &str) -> Result<u64, String> {
+    let path = resolve_workspace_image_file(root, relative_path, false)?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("Could not inspect {relative_path}: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{relative_path} is not a regular image file."));
+    }
+    Ok(image_modified_nanos(&metadata))
+}
+
+fn image_modified_nanos(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn validate_image_bytes(
+    bytes: &[u8],
+    file_name: Option<&str>,
+) -> Result<(&'static str, &'static str), String> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "The image must be between 1 byte and {} MiB.",
+            MAX_IMAGE_BYTES / 1024 / 1024,
+        ));
+    }
+    let detected = detect_image_type(bytes)
+        .ok_or_else(|| "Use a PNG, JPEG, GIF, WebP, BMP, or AVIF image.".to_owned())?;
+    if let Some(extension) = file_name
+        .and_then(|name| Path::new(name).extension())
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+    {
+        if let Some(expected_media_type) = image_media_type_for_extension(&extension) {
+            if expected_media_type != detected.0 {
+                return Err("The image contents do not match the file extension.".to_owned());
+            }
+        }
+    }
+    Ok(detected)
+}
+
+fn detect_image_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(("image/png", "png"));
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some(("image/jpeg", "jpg"));
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some(("image/gif", "gif"));
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some(("image/webp", "webp"));
+    }
+    if bytes.starts_with(b"BM") {
+        return Some(("image/bmp", "bmp"));
+    }
+    if bytes.len() >= 16
+        && &bytes[4..8] == b"ftyp"
+        && bytes[8..]
+            .chunks_exact(4)
+            .any(|brand| brand == b"avif" || brand == b"avis")
+    {
+        return Some(("image/avif", "avif"));
+    }
+    None
+}
+
+fn image_media_type_for_extension(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "avif" => Some("image/avif"),
+        _ => None,
+    }
+}
+
+fn is_supported_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .and_then(image_media_type_for_extension)
+        .is_some()
+}
+
+fn safe_image_file_name(file_name: &str, extension: &str) -> String {
+    let source_stem = Path::new(file_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Image")
+        .trim();
+    let normalized = source_stem
+        .chars()
+        .map(|character| {
+            if character.is_control() || is_forbidden_component_character(character) {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let mut stem = String::new();
+    for character in normalized.trim_matches([' ', '.', '-']).chars() {
+        if stem.len() + character.len_utf8() > 140 {
+            break;
+        }
+        stem.push(character);
+    }
+    if stem.is_empty() || is_windows_reserved_name(&stem) {
+        stem = "Image".to_owned();
+    }
+    format!("{stem}.{extension}")
+}
+
+fn unique_image_relative_path(
+    root: &Path,
+    folder: &str,
+    file_name: &str,
+) -> Result<String, String> {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Image");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png");
+    for index in 1..=10_000_u32 {
+        let candidate_name = if index == 1 {
+            file_name.to_owned()
+        } else {
+            format!("{stem} {index}.{extension}")
+        };
+        let relative_path = if folder.is_empty() {
+            candidate_name
+        } else {
+            format!("{folder}/{candidate_name}")
+        };
+        validate_image_relative_path(&relative_path)?;
+        if !image_path_exists_portably(root, &relative_path)? {
+            return Ok(relative_path);
+        }
+    }
+    Err("Could not choose a unique file name for the embedded image.".to_owned())
+}
+
+fn image_path_exists_portably(root: &Path, relative_path: &str) -> Result<bool, String> {
+    let candidate = resolve_workspace_image_file(root, relative_path, true)?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "The embedded image path has no parent folder.".to_owned())?;
+    let file_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The embedded image name is not valid Unicode.".to_owned())?;
+    let entries = fs::read_dir(parent)
+        .map_err(|error| format!("Could not inspect {}: {error}", parent.display()))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("Could not inspect {}: {error}", parent.display()))?;
+        if entry.file_name().to_string_lossy().eq_ignore_ascii_case(file_name) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn validate_image_relative_path(relative_path: &str) -> Result<(), String> {
+    validate_relative_path(relative_path, false)?;
+    let extension = Path::new(relative_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Embedded image paths must include a supported extension.".to_owned())?;
+    if image_media_type_for_extension(extension).is_none() {
+        return Err("Use a PNG, JPEG, GIF, WebP, BMP, or AVIF image path.".to_owned());
+    }
+    Ok(())
+}
+
+fn is_valid_image_asset_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 180
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn resolve_markdown_image_path(
+    note_relative_path: &str,
+    destination: &str,
+) -> Result<String, String> {
+    validate_markdown_relative_path(note_relative_path)?;
+    if destination.is_empty()
+        || destination.contains('\\')
+        || destination.contains('#')
+        || destination.contains('?')
+        || destination.chars().any(char::is_control)
+    {
+        return Err("The Markdown image path is not a safe local vault path.".to_owned());
+    }
+    let mut components = if destination.starts_with('/') {
+        Vec::new()
+    } else {
+        Path::new(note_relative_path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(path_to_slash_string)
+            .unwrap_or_default()
+            .split('/')
+            .filter(|component| !component.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    for component in destination.trim_start_matches('/').split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if components.pop().is_none() {
+                    return Err("The Markdown image path escapes the vault.".to_owned());
+                }
+            }
+            value => components.push(value.to_owned()),
+        }
+    }
+    let relative_path = components.join("/");
+    validate_image_relative_path(&relative_path)?;
+    Ok(relative_path)
+}
+
+fn percent_decode_utf8(value: &str) -> Result<String, String> {
+    let source = value.as_bytes();
+    let mut decoded = Vec::with_capacity(source.len());
+    let mut index = 0;
+    while index < source.len() {
+        if source[index] == b'%' {
+            if index + 2 >= source.len() {
+                return Err("Image metadata contains invalid percent encoding.".to_owned());
+            }
+            let high = hex_value(source[index + 1])
+                .ok_or_else(|| "Image metadata contains invalid percent encoding.".to_owned())?;
+            let low = hex_value(source[index + 2])
+                .ok_or_else(|| "Image metadata contains invalid percent encoding.".to_owned())?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(source[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded)
+        .map_err(|_| "Image metadata is not valid UTF-8.".to_owned())
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn reconcile_image_assets(
+    root: &Path,
+    assets: &mut BTreeMap<String, StoredImageAsset>,
+    warnings: &mut WarningCollector,
+) -> Vec<EmbeddedImage> {
+    if assets.len() > MAX_IMAGE_ASSETS {
+        warnings.push(format!(
+            "Only the first {MAX_IMAGE_ASSETS} embedded image records were loaded."
+        ));
+        let retained = assets
+            .keys()
+            .take(MAX_IMAGE_ASSETS)
+            .cloned()
+            .collect::<HashSet<_>>();
+        assets.retain(|id, _| retained.contains(id));
+    }
+    let invalid_ids = assets
+        .iter()
+        .filter_map(|(id, asset)| {
+            (!is_valid_image_asset_id(id)
+                || validate_image_relative_path(&asset.relative_path).is_err())
+            .then(|| id.clone())
+        })
+        .collect::<Vec<_>>();
+    for id in invalid_ids {
+        assets.remove(&id);
+        warnings.push("Ignored an invalid embedded image record.".to_owned());
+    }
+
+    let mut assigned_paths = HashSet::new();
+    let mut missing_ids = Vec::new();
+    for (id, asset) in assets.iter_mut() {
+        let path = match resolve_workspace_image_file(root, &asset.relative_path, false) {
+            Ok(path) => path,
+            Err(_) => {
+                missing_ids.push(id.clone());
+                continue;
+            }
+        };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_file() => metadata,
+            _ => {
+                missing_ids.push(id.clone());
+                continue;
+            }
+        };
+        let expected_media_type = Path::new(&asset.relative_path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .and_then(image_media_type_for_extension);
+        let modified_nanos = image_modified_nanos(&metadata);
+        if asset.modified_nanos != 0
+            && asset.modified_nanos == modified_nanos
+            && asset.fingerprint.length == metadata.len()
+            && expected_media_type == Some(asset.media_type.as_str())
+        {
+            assigned_paths.insert(portable_path_key(&asset.relative_path));
+            continue;
+        }
+        match read_image_file(&path) {
+            Ok(bytes) => match validate_image_bytes(&bytes, Some(&asset.relative_path)) {
+                Ok((media_type, _)) => {
+                    asset.media_type = media_type.to_owned();
+                    asset.fingerprint = fingerprint_bytes(&bytes);
+                    asset.modified_nanos = modified_nanos;
+                    assigned_paths.insert(portable_path_key(&asset.relative_path));
+                }
+                Err(_) => missing_ids.push(id.clone()),
+            },
+            Err(_) => missing_ids.push(id.clone()),
+        }
+    }
+
+    if !missing_ids.is_empty() {
+        let missing_lengths = missing_ids
+            .iter()
+            .filter_map(|id| assets.get(id).map(|asset| asset.fingerprint.length))
+            .collect::<HashSet<_>>();
+        let mut candidates: HashMap<FileFingerprint, Vec<(String, String, u64)>> = HashMap::new();
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .max_depth(128)
+            .into_iter()
+            .filter_entry(should_visit_workspace_entry)
+            .filter_map(Result::ok)
+        {
+            if entry.file_type().is_symlink() || !entry.file_type().is_file() {
+                continue;
+            }
+            let Some(relative_path) = entry
+                .path()
+                .strip_prefix(root)
+                .ok()
+                .and_then(path_to_slash_string)
+            else {
+                continue;
+            };
+            if assigned_paths.contains(&portable_path_key(&relative_path))
+                || validate_image_relative_path(&relative_path).is_err()
+            {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !missing_lengths.contains(&metadata.len()) {
+                continue;
+            }
+            let Ok(bytes) = read_image_file(entry.path()) else {
+                continue;
+            };
+            let Ok((media_type, _)) = validate_image_bytes(&bytes, Some(&relative_path)) else {
+                continue;
+            };
+            let modified_nanos = image_modified_nanos(&metadata);
+            candidates
+                .entry(fingerprint_bytes(&bytes))
+                .or_default()
+                .push((relative_path, media_type.to_owned(), modified_nanos));
+        }
+
+        for id in missing_ids {
+            let Some(asset) = assets.get_mut(&id) else {
+                continue;
+            };
+            let Some(matches) = candidates.get(&asset.fingerprint) else {
+                warnings.push(format!("Could not find the embedded image {}.", asset.relative_path));
+                continue;
+            };
+            if matches.len() != 1 {
+                warnings.push(format!(
+                    "Could not uniquely locate the moved embedded image {}.",
+                    asset.relative_path,
+                ));
+                continue;
+            }
+            let (relative_path, media_type, modified_nanos) = matches[0].clone();
+            asset.relative_path = relative_path.clone();
+            asset.media_type = media_type;
+            asset.modified_nanos = modified_nanos;
+            assigned_paths.insert(portable_path_key(&relative_path));
+            candidates.remove(&asset.fingerprint);
+        }
+    }
+
+    assets
+        .iter()
+        .map(|(id, asset)| EmbeddedImage {
+            id: id.clone(),
+            relative_path: asset.relative_path.clone(),
+            media_type: asset.media_type.clone(),
+        })
+        .collect()
+}
+
 fn scan_markdown_files(
     root: &Path,
     warnings: &mut WarningCollector,
@@ -2154,7 +3035,13 @@ fn scan_markdown_files(
             .ok()
             .and_then(path_to_slash_string)
         {
-            Some(path) if validate_relative_path(&path, entry.file_type().is_file()).is_ok() => {
+            Some(path)
+                if validate_relative_path(
+                    &path,
+                    entry.file_type().is_file() && is_markdown_path(entry.path()),
+                )
+                .is_ok() =>
+            {
                 path
             }
             _ => {
@@ -3321,7 +4208,9 @@ fn revision_for_root(root: &Path) -> Result<u64, String> {
         if entry.file_type().is_dir() && relative != STATE_DIRECTORY {
             entries.push((format!("D:{relative}"), None));
         } else if entry.file_type().is_file()
-            && (is_markdown_path(entry.path()) || relative == format!("{STATE_DIRECTORY}/{STATE_FILE}"))
+            && (is_markdown_path(entry.path())
+                || is_supported_image_path(entry.path())
+                || relative == format!("{STATE_DIRECTORY}/{STATE_FILE}"))
         {
             let metadata = entry.metadata().map_err(|error| {
                 format!("Could not inspect {}: {error}", entry.path().display())
@@ -5008,6 +5897,50 @@ fn ensure_regular_directory(path: &Path, label: &str) -> Result<(), String> {
     }
 }
 
+fn resolve_workspace_image_file(
+    root: &Path,
+    relative_path: &str,
+    allow_missing: bool,
+) -> Result<PathBuf, String> {
+    validate_image_relative_path(relative_path)?;
+    let relative = checked_relative_path(relative_path, false)?;
+    let target = root.join(&relative);
+    if let Some(parent) = target.parent() {
+        let mut current = root.to_path_buf();
+        for component in parent
+            .strip_prefix(root)
+            .map_err(|_| "An image path escaped the vault.".to_owned())?
+            .components()
+        {
+            current.push(component.as_os_str());
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "Refusing to follow the symbolic link {}.",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => return Err(format!("{} is not a folder.", current.display())),
+                Err(error) if error.kind() == io::ErrorKind::NotFound && allow_missing => break,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    return Err(format!("Could not inspect {}: {error}", current.display()));
+                }
+            }
+        }
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Refusing to use the symbolic link {}.",
+                target.display()
+            ));
+        }
+    }
+    Ok(target)
+}
+
 fn resolve_workspace_file(
     root: &Path,
     relative_path: &str,
@@ -5774,6 +6707,8 @@ mod tests {
             active_note_id: None,
             recent_note_ids: Vec::new(),
             selected_folder_id: "all".to_owned(),
+            embedded_images: Vec::new(),
+            image_embed_settings: ImageEmbedSettings::default(),
         }
     }
 
@@ -7133,6 +8068,249 @@ mod tests {
             fs::read_to_string(&path).expect("newer positions should remain readable"),
             newer,
         );
+    }
+
+    #[test]
+    fn embeds_reads_and_recovers_moved_images() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nembedded-image-fixture";
+        let workspace = TestWorkspace::new("embedded-image-storage");
+        fs::create_dir(workspace.root.join("Notes")).expect("note folder should be created");
+        fs::write(workspace.root.join("Notes/First.md"), "# First")
+            .expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        let revision = revision_for_root(&workspace.root).expect("revision should be available");
+        let embedded = embed_workspace_image(
+            &workspace.root,
+            "Notes/First.md",
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Assets/Images".to_owned(),
+            },
+            "Photo.png",
+            PNG,
+            None,
+            revision,
+        )
+        .expect("image should be embedded");
+
+        assert_eq!(embedded.image.relative_path, "Assets/Images/Photo.png");
+        assert_eq!(embedded.image.media_type, "image/png");
+        assert_eq!(
+            fs::read(workspace.root.join(&embedded.image.relative_path))
+                .expect("embedded image should be readable"),
+            PNG,
+        );
+        assert_eq!(
+            read_workspace_image(
+                &workspace.root,
+                Some(&embedded.image.id),
+                "Notes/First.md",
+                "../wrong.png",
+            )
+            .expect("stable ID should resolve the image"),
+            PNG,
+        );
+
+        fs::create_dir(workspace.root.join("Moved")).expect("move folder should be created");
+        fs::rename(
+            workspace.root.join(&embedded.image.relative_path),
+            workspace.root.join("Moved/Renamed.png"),
+        )
+        .expect("image should move outside the app");
+        assert_ne!(
+            revision_for_root(&workspace.root).expect("moved revision should be available"),
+            embedded.revision,
+        );
+        assert_eq!(
+            read_workspace_image(
+                &workspace.root,
+                Some(&embedded.image.id),
+                "Notes/First.md",
+                "../missing.png",
+            )
+            .expect("fingerprint should recover the moved image"),
+            PNG,
+        );
+        let loaded = load_workspace(&workspace.root, &empty_vault("Images"))
+            .expect("reloading should persist recovered image metadata");
+        assert_eq!(
+            loaded
+                .vault
+                .embedded_images
+                .iter()
+                .find(|image| image.id == embedded.image.id)
+                .expect("asset should remain indexed")
+                .relative_path,
+            "Moved/Renamed.png",
+        );
+        let mut warnings = WarningCollector::default();
+        let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
+        assert_eq!(
+            state
+                .expect("state should remain readable")
+                .image_assets
+                .get(&embedded.image.id)
+                .expect("asset should remain indexed")
+                .relative_path,
+            "Moved/Renamed.png",
+        );
+    }
+
+    #[test]
+    fn image_storage_honors_locations_and_name_collisions() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nlocation-fixture";
+        let workspace = TestWorkspace::new("embedded-image-locations");
+        fs::create_dir(workspace.root.join("Projects")).expect("note folder should be created");
+        fs::write(workspace.root.join("Projects/Plan.md"), "# Plan")
+            .expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        let first = embed_workspace_image(
+            &workspace.root,
+            "Projects/Plan.md",
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::NoteFolder,
+                folder_path: "ignored".to_owned(),
+            },
+            "Diagram.png",
+            PNG,
+            None,
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect("note-folder image should be embedded");
+        let second = embed_workspace_image(
+            &workspace.root,
+            "Projects/Plan.md",
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::NoteFolder,
+                folder_path: String::new(),
+            },
+            "Diagram.png",
+            PNG,
+            None,
+            first.revision,
+        )
+        .expect("colliding image should be embedded");
+        let case_collision = embed_workspace_image(
+            &workspace.root,
+            "Projects/Plan.md",
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::NoteFolder,
+                folder_path: String::new(),
+            },
+            "diagram.PNG",
+            PNG,
+            None,
+            second.revision,
+        )
+        .expect("case-only collision should use a portable unique name");
+        let root_image = embed_workspace_image(
+            &workspace.root,
+            "Projects/Plan.md",
+            ImageEmbedSettings::default(),
+            "Root.png",
+            PNG,
+            None,
+            case_collision.revision,
+        )
+        .expect("root image should be embedded");
+
+        assert_eq!(first.image.relative_path, "Projects/Diagram.png");
+        assert_eq!(second.image.relative_path, "Projects/Diagram 2.png");
+        assert_eq!(case_collision.image.relative_path, "Projects/diagram 3.png");
+        assert_eq!(root_image.image.relative_path, "Root.png");
+
+        fs::write(workspace.root.join("Projects/Existing.png"), PNG)
+            .expect("existing vault image should be written");
+        let existing = embed_workspace_image(
+            &workspace.root,
+            "Projects/Plan.md",
+            ImageEmbedSettings::default(),
+            "Existing.png",
+            PNG,
+            Some("Projects/Existing.png"),
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect("existing vault image should be registered without copying");
+        let reused = embed_workspace_image(
+            &workspace.root,
+            "Projects/Plan.md",
+            ImageEmbedSettings::default(),
+            "Existing.png",
+            PNG,
+            Some("Projects/Existing.png"),
+            existing.revision,
+        )
+        .expect("registered image should reuse its stable ID");
+        assert_eq!(existing.image.relative_path, "Projects/Existing.png");
+        assert_eq!(reused.image.id, existing.image.id);
+        assert!(!workspace.root.join("Existing.png").exists());
+    }
+
+    #[test]
+    fn image_storage_rejects_unsafe_or_mismatched_inputs() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nvalidation-fixture";
+        assert!(validate_image_bytes(b"<svg></svg>", Some("image.svg")).is_err());
+        assert!(validate_image_bytes(PNG, Some("image.jpg")).is_err());
+        assert!(resolve_markdown_image_path("Notes/First.md", "../../escape.png").is_err());
+        assert!(normalize_image_embed_settings(&ImageEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolder,
+            folder_path: "../outside".to_owned(),
+        })
+        .is_err());
+        assert_eq!(
+            percent_decode_utf8("%7B%22fileName%22%3A%22Caf%C3%A9.png%22%7D")
+                .expect("encoded metadata should decode"),
+            "{\"fileName\":\"Café.png\"}",
+        );
+        assert!(percent_decode_utf8("%GG").is_err());
+        let unicode_name = safe_image_file_name(&format!("{}.png", "😀".repeat(100)), "png");
+        assert!(unicode_name.len() <= 180);
+        assert!(validate_component_name(&unicode_name, "image").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_storage_refuses_source_and_destination_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nsymlink-fixture";
+        let workspace = TestWorkspace::new("embedded-image-symlinks");
+        let outside = TestWorkspace::new("embedded-image-symlinks-outside");
+        fs::write(workspace.root.join("Note.md"), "# Note").expect("note should be written");
+        fs::write(outside.root.join("Source.png"), PNG).expect("source should be written");
+        symlink(
+            outside.root.join("Source.png"),
+            workspace.root.join("Source link.png"),
+        )
+        .expect("source symlink should be created");
+        symlink(&outside.root, workspace.root.join("Linked"))
+            .expect("destination symlink should be created");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        assert!(validate_image_source_file(
+            workspace.root.join("Source link.png").to_str().expect("path should be Unicode")
+        )
+        .is_err());
+        let error = embed_workspace_image(
+            &workspace.root,
+            "Note.md",
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Linked".to_owned(),
+            },
+            "Image.png",
+            PNG,
+            None,
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect_err("destination symlink should be rejected");
+        assert!(error.contains("symbolic link"));
+        assert!(!outside.root.join("Image.png").exists());
     }
 
     #[test]

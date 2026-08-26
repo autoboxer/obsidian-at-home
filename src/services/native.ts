@@ -2,6 +2,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { writeText as writeNativeClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import type {
   ExportResult,
+  ImageEmbedSettings,
   ImportResult,
   Note,
   NoteEditorPosition,
@@ -9,6 +10,7 @@ import type {
   VaultDescriptor,
   WorkspaceArchiveResult,
   WorkspaceBootstrap,
+  WorkspaceEmbedImageResult,
   WorkspaceLoad,
   WorkspaceRecoveryMutationResult,
   WorkspaceRestoreResult,
@@ -50,13 +52,19 @@ export interface SystemFont {
   monospaced: boolean;
 }
 
-async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+type NativeInvokeArgs = Record<string, unknown> | number[] | ArrayBuffer | Uint8Array;
+
+async function invoke<T>(
+  command: string,
+  args?: NativeInvokeArgs,
+  options?: { headers: Record<string, string> },
+): Promise<T> {
   const tauriInvoke = window.__TAURI__?.core?.invoke;
   if (!tauriInvoke) {
     throw new Error("Native vault access is available in the Obsidian At Home desktop app.");
   }
 
-  return tauriInvoke<T>(command, args);
+  return tauriInvoke<T>(command, args, options);
 }
 
 export async function listSystemFonts(): Promise<SystemFont[]> {
@@ -65,6 +73,10 @@ export async function listSystemFonts(): Promise<SystemFont[]> {
 
 export async function pickFolder(): Promise<string | null> {
   return invoke<string | null>("pick_folder");
+}
+
+export async function pickImageFile(): Promise<string | null> {
+  return invoke<string | null>("pick_image_file");
 }
 
 export async function bootstrapWorkspace(defaults: VaultData): Promise<WorkspaceBootstrap> {
@@ -163,6 +175,61 @@ export async function forgetWorkspace(path: string): Promise<VaultDescriptor[]> 
 
 export async function getWorkspaceRevision(path: string): Promise<number> {
   return invoke<number>("workspace_revision", { path });
+}
+
+export async function embedWorkspaceImageFile(
+  path: string,
+  sourcePath: string,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedImageResult> {
+  return invoke<WorkspaceEmbedImageResult>("workspace_embed_image_file", {
+    path,
+    sourcePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function embedWorkspaceImageBytes(
+  path: string,
+  fileName: string,
+  bytes: Uint8Array,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedImageResult> {
+  const metadata = encodeURIComponent(JSON.stringify({
+    path,
+    fileName,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  }));
+
+  return invoke<WorkspaceEmbedImageResult>(
+    "workspace_embed_image_bytes",
+    bytes,
+    { headers: { "x-oah-image-metadata": metadata } },
+  );
+}
+
+export async function readWorkspaceImage(
+  path: string,
+  noteRelativePath: string,
+  destination: string,
+  assetId?: string,
+): Promise<Uint8Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array>("workspace_read_image", {
+    path,
+    assetId,
+    noteRelativePath,
+    destination,
+  });
+
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 }
 
 export async function importObsidianVault(path: string): Promise<ImportResult> {
