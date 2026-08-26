@@ -1,6 +1,7 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import type { Rect } from "@codemirror/view";
 import type { LiveMarkdownBlock } from "./liveMarkdown";
+import type { ParsedMarkdownImage } from "./markdownImages";
 
 const UNORDERED_LIST_MARKERS = ["•", "◦", "▪"] as const;
 const ROMAN_NUMERALS: ReadonlyArray<readonly [number, string]> = [
@@ -243,6 +244,82 @@ export class WikiLinkWidget extends WidgetType {
     });
 
     return link;
+  }
+}
+
+export type MarkdownImageSourceResolver = (
+  image: ParsedMarkdownImage,
+) => Promise<string | null | undefined> | string | null | undefined;
+
+export class MarkdownImageWidget extends WidgetType {
+  constructor(
+    private readonly image: ParsedMarkdownImage,
+    private readonly resolveSource: MarkdownImageSourceResolver | undefined,
+    private readonly from: number,
+    private readonly to: number,
+    private readonly resolutionVersion: number,
+  ) {
+    super();
+  }
+
+  eq(other: MarkdownImageWidget): boolean {
+    return this.image.raw === other.image.raw &&
+      this.resolveSource === other.resolveSource &&
+      this.from === other.from &&
+      this.to === other.to &&
+      this.resolutionVersion === other.resolutionVersion;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const document = view.dom.ownerDocument;
+    const frame = document.createElement("span");
+    const image = document.createElement("img");
+    frame.className = "live-embedded-image is-loading";
+    frame.dataset.imageAssetId = this.image.assetId ?? "";
+    frame.dataset.imageDestination = this.image.destination;
+    frame.setAttribute("contenteditable", "false");
+    image.alt = this.image.alt;
+    image.className = "live-embedded-image__content";
+    image.decoding = "async";
+    image.draggable = false;
+    image.loading = "lazy";
+    if (this.image.title) {
+      image.title = this.image.title;
+    }
+    if (this.image.width) {
+      image.style.width = `${this.image.width}px`;
+    }
+    if (this.image.height) {
+      image.style.height = `${this.image.height}px`;
+    }
+    image.addEventListener("load", () => {
+      frame.classList.remove("is-loading", "is-error");
+    }, { once: true });
+    image.addEventListener("error", () => {
+      frame.classList.remove("is-loading");
+      frame.classList.add("is-error");
+      frame.setAttribute(
+        "aria-label",
+        this.image.alt ? `Could not load image: ${this.image.alt}` : "Could not load image",
+      );
+    }, { once: true });
+    frame.addEventListener("mousedown", (event) =>
+      revealWidgetSource(view, frame, event, this.from, this.to)
+    );
+    frame.append(image);
+
+    void Promise.resolve()
+      .then(() => this.resolveSource?.(this.image) ?? this.image.destination)
+      .then((source) => {
+        if (source) {
+          image.src = source;
+        } else {
+          image.dispatchEvent(new Event("error"));
+        }
+      })
+      .catch(() => image.dispatchEvent(new Event("error")));
+
+    return frame;
   }
 }
 
