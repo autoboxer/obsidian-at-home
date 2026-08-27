@@ -40,6 +40,8 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: "Toggle italic", keys: [commandKey, "I"] },
       { label: "Toggle strikethrough", keys: [commandKey, "Shift", "X"] },
       { label: "Create a Markdown link", keys: [commandKey, "K"] },
+      { label: "Embed an image", detail: "Choose an image file", keys: [commandKey, "Shift", "I"] },
+      { label: "Embed a clipboard image", detail: "When the clipboard contains an image", keys: [commandKey, "V"] },
       { label: "Wrap as inline code", detail: "With text selected", keys: ["Backtick"] },
       { label: "Find in the current note", keys: [commandKey, "F"] },
       { label: "Next find result", detail: "Find field: Enter also works. Anywhere: F3", keys: ["Tab"] },

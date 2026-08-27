@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import type { ExportResult, ImportResult } from "../types";
+import { computed, onMounted, ref, watch } from "vue";
+import { validateImageFolderPath } from "../lib/imageEmbeds";
+import type { ExportResult, ImageEmbedLocation, ImportResult } from "../types";
 import {
   appearanceState,
   fontOptions,
@@ -54,6 +55,8 @@ const feedback = ref<Feedback | null>(null);
 const replaceConfirming = ref(false);
 const clearConfirming = ref(false);
 const forgetConfirming = ref(false);
+const imageFolderDraft = ref(vaultState.imageEmbedSettings.folderPath || "Attachments");
+const imageFolderError = ref("");
 
 const wordCount = computed(() =>
   vaultState.notes.reduce((total, note) => {
@@ -108,6 +111,18 @@ const selectedInstalledFontIsMissing = computed(
 
 onMounted(() => void loadInstalledFonts());
 
+watch(
+  [
+    () => vaultSession.path,
+    () => vaultState.imageEmbedSettings.location,
+    () => vaultState.imageEmbedSettings.folderPath,
+  ],
+  () => {
+    imageFolderDraft.value = vaultState.imageEmbedSettings.folderPath || "Attachments";
+    imageFolderError.value = "";
+  },
+);
+
 function updateAppearanceFont(event: Event): void {
   const select = event.currentTarget as HTMLSelectElement;
   setAppearanceFont(select.value);
@@ -116,6 +131,39 @@ function updateAppearanceFont(event: Event): void {
 function updateNoteFontSize(event: Event): void {
   const input = event.currentTarget as HTMLInputElement;
   setAppearanceFontSize(input.valueAsNumber);
+}
+
+function updateImageEmbedLocation(event: Event): void {
+  const location = (event.currentTarget as HTMLSelectElement).value as ImageEmbedLocation;
+  imageFolderError.value = "";
+  if (location === "specified-folder") {
+    const validated = validateImageFolderPath(imageFolderDraft.value || "Attachments");
+    imageFolderDraft.value = validated.error ? "Attachments" : validated.value;
+    vaultState.imageEmbedSettings = {
+      folderPath: imageFolderDraft.value,
+      location,
+    };
+
+    return;
+  }
+
+  vaultState.imageEmbedSettings = { folderPath: "", location };
+}
+
+function saveImageFolderPath(): void {
+  const validated = validateImageFolderPath(imageFolderDraft.value);
+  if (validated.error) {
+    imageFolderError.value = validated.error;
+
+    return;
+  }
+
+  imageFolderDraft.value = validated.value;
+  imageFolderError.value = "";
+  vaultState.imageEmbedSettings = {
+    folderPath: validated.value,
+    location: "specified-folder",
+  };
 }
 
 function formatCount(value: number): string {
@@ -580,6 +628,52 @@ async function forgetVault(): Promise<void> {
           <strong class="settings-stat-card__value">{{ formatCount(stat.value) }}</strong>
           <span class="settings-stat-card__label">{{ stat.label }}</span>
         </article>
+      </div>
+
+      <div class="settings-image-storage">
+        <span class="settings-image-storage__icon">
+          <AppIcon name="image" :size="18" />
+        </span>
+        <div class="settings-image-storage__copy">
+          <label for="settings-image-location">Embedded image location</label>
+          <p id="settings-image-location-help">
+            Choose where newly embedded image files are stored. Existing images are not moved.
+          </p>
+        </div>
+        <div class="settings-image-storage__controls">
+          <select
+            id="settings-image-location"
+            :value="vaultState.imageEmbedSettings.location"
+            :disabled="!nativeAvailable || !vaultSession.path"
+            aria-describedby="settings-image-location-help"
+            @change="updateImageEmbedLocation"
+          >
+            <option value="vault-root">Vault root</option>
+            <option value="note-folder">Same folder as the note</option>
+            <option value="specified-folder">A specific vault folder</option>
+          </select>
+          <label
+            v-if="vaultState.imageEmbedSettings.location === 'specified-folder'"
+            class="settings-image-folder-field"
+          >
+            <span>Vault-relative folder</span>
+            <input
+              v-model="imageFolderDraft"
+              type="text"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="Attachments/Images"
+              :aria-invalid="Boolean(imageFolderError)"
+              :aria-describedby="imageFolderError ? 'settings-image-folder-error' : undefined"
+              @blur="saveImageFolderPath"
+              @keydown.enter.prevent="saveImageFolderPath"
+            />
+            <small v-if="imageFolderError" id="settings-image-folder-error" role="alert">
+              {{ imageFolderError }}
+            </small>
+          </label>
+        </div>
       </div>
 
       <div class="settings-import-choice">

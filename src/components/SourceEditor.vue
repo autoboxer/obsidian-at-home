@@ -75,27 +75,43 @@ import {
   wrapInlineCode,
   wrapMarkdownLink,
 } from "../lib/markdownFormatting";
+import {
+  decodeMarkdownImageDestination,
+  imageMediaTypeForPath,
+} from "../lib/imageEmbeds";
+import { sanitizeImageUrl } from "../lib/markdown";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
+import { isTauri, readWorkspaceImage } from "../services/native";
 import type { Extension, SelectionRange } from "@codemirror/state";
 import type { Command, ViewUpdate } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
+import type { ParsedMarkdownImage } from "../lib/markdownImages";
 import type { LiveMarkdownTextEdit } from "../lib/liveMarkdown";
-import type { NoteEditorPosition } from "../types";
+import type {
+  EmbeddedImage,
+  ImageInsertionCapture,
+  NoteEditorPosition,
+} from "../types";
 import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
   initialPosition?: NoteEditorPosition;
+  embeddedImages: EmbeddedImage[];
   modelValue: string;
   noteId: string;
+  noteRelativePath: string;
   noteTitles: string[];
   showFrontmatter: boolean;
   vaultId: string;
+  vaultPath: string | null;
 }>();
 
 const emit = defineEmits<{
   editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
+  pasteImage: [capture: ImageInsertionCapture, file?: File];
+  requestEmbedImage: [capture: ImageInsertionCapture];
   "update:modelValue": [value: string];
 }>();
 
@@ -118,6 +134,17 @@ let positionCaptureEnabled = false;
 let removePositionCapture: (() => boolean) | undefined;
 let closeEditorHistory: ReturnType<typeof openNoteEditorHistory>["close"] | undefined;
 let viewportRestoreFrame: number | undefined;
+let imageInsertionSequence = 0;
+let imageResolverDisposed = false;
+
+interface PendingImageInsertion extends ImageInsertionCapture {
+  from: number;
+  to: number;
+}
+
+const pendingImageInsertions = new Map<string, PendingImageInsertion>();
+const imageSourcePromises = new Map<string, Promise<string>>();
+const imageObjectUrls = new Set<string>();
 
 const positionCaptureKey = {};
 const renderReadyKey = {};
@@ -786,6 +813,54 @@ function setRenderedListTextStart(
   return true;
 }
 
+async function resolveLiveMarkdownImageSource(
+  image: ParsedMarkdownImage,
+): Promise<string | undefined> {
+  const source = sanitizeImageUrl(image.destination);
+  if (!source) {
+    return undefined;
+  }
+  if (
+    !isTauri()
+    || !props.vaultPath
+    || /^[a-z][a-z0-9+.-]*:/i.test(source)
+    || source.startsWith("//")
+  ) {
+    return source;
+  }
+
+  const cacheKey = `${props.vaultPath}\u0000${props.noteRelativePath}\u0000${
+    image.assetId ?? ""
+  }\u0000${image.destination}`;
+  const cached = imageSourcePromises.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const bytes = await readWorkspaceImage(
+      props.vaultPath!,
+      props.noteRelativePath,
+      decodeMarkdownImageDestination(image.destination),
+      image.assetId,
+    );
+    const mediaType = props.embeddedImages.find((asset) => asset.id === image.assetId)?.mediaType
+      ?? imageMediaTypeForPath(image.destination);
+    const url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
+    if (imageResolverDisposed) {
+      URL.revokeObjectURL(url);
+      throw new Error("The image editor was closed before the image loaded.");
+    }
+    imageObjectUrls.add(url);
+
+    return url;
+  })();
+  imageSourcePromises.set(cacheKey, pending);
+  pending.catch(() => imageSourcePromises.delete(cacheKey));
+
+  return pending;
+}
+
 onMounted(() => {
   const host = editorHost.value;
   if (!host) {
@@ -829,6 +904,7 @@ onMounted(() => {
       documentId: `${props.vaultId}\u0000${props.noteId}`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
+      resolveImageSource: resolveLiveMarkdownImageSource,
       wikiLinkIsResolved: inlineWikiLinkIsResolved,
     }),
     codeMirrorDocumentSearchExtension,
@@ -889,6 +965,7 @@ onMounted(() => {
         shift: selectToTableCellTextRight,
       },
       { key: "Mod-b", run: toggleBold },
+      { key: "Mod-Shift-i", run: requestImageEmbed },
       { key: "Mod-i", run: toggleItalic },
       { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
       { key: "Mod-Shift-x", run: toggleStrikethrough },
@@ -909,6 +986,13 @@ onMounted(() => {
     ])),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        for (const insertion of pendingImageInsertions.values()) {
+          const empty = insertion.from === insertion.to;
+          insertion.from = update.changes.mapPos(insertion.from, -1);
+          insertion.to = update.changes.mapPos(insertion.to, empty ? -1 : 1);
+        }
+      }
       const localDocumentChange = update.docChanged && update.transactions.some(
         (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
       );
@@ -1018,6 +1102,13 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  imageResolverDisposed = true;
+  pendingImageInsertions.clear();
+  imageSourcePromises.clear();
+  for (const url of imageObjectUrls) {
+    URL.revokeObjectURL(url);
+  }
+  imageObjectUrls.clear();
   const view = editorView.value;
   const captureWasActive = removePositionCapture?.() ?? false;
   removePositionCapture = undefined;
@@ -1189,7 +1280,92 @@ function focusDocumentOffset(offset: number): boolean {
   return true;
 }
 
-defineExpose({ focusDocumentOffset });
+function captureImageInsertion(
+  view = editorView.value,
+): ImageInsertionCapture | undefined {
+  if (!view || view.state.selection.ranges.length !== 1) {
+    return undefined;
+  }
+
+  const selection = view.state.selection.main;
+  const inTable = liveMarkdownDocumentModel(view.state).tables.some((table) =>
+    selection.from >= table.from && selection.to <= table.to
+  );
+  imageInsertionSequence += 1;
+  const token = `${Date.now().toString(36)}-${imageInsertionSequence.toString(36)}`;
+  const insertion: PendingImageInsertion = {
+    from: selection.from,
+    inTable,
+    noteId: props.noteId,
+    selectedText: view.state.sliceDoc(selection.from, selection.to),
+    to: selection.to,
+    token,
+  };
+  pendingImageInsertions.set(token, insertion);
+
+  return {
+    inTable: insertion.inTable,
+    noteId: insertion.noteId,
+    selectedText: insertion.selectedText,
+    token: insertion.token,
+  };
+}
+
+function cancelImageInsertion(capture: ImageInsertionCapture): void {
+  pendingImageInsertions.delete(capture.token);
+}
+
+function insertEmbeddedImage(
+  capture: ImageInsertionCapture,
+  markdownImage: string,
+): boolean {
+  const view = editorView.value;
+  const insertion = pendingImageInsertions.get(capture.token);
+  pendingImageInsertions.delete(capture.token);
+  if (
+    !view
+    || !insertion
+    || insertion.noteId !== props.noteId
+    || insertion.from < 0
+    || insertion.to < insertion.from
+    || insertion.to > view.state.doc.length
+    || view.state.sliceDoc(insertion.from, insertion.to) !== insertion.selectedText
+  ) {
+    return false;
+  }
+
+  const cursor = insertion.from + markdownImage.length;
+  view.dispatch({
+    changes: {
+      from: insertion.from,
+      to: insertion.to,
+      insert: markdownImage,
+    },
+    selection: EditorSelection.cursor(cursor),
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  view.focus();
+
+  return true;
+}
+
+function requestImageEmbed(view: EditorView): boolean {
+  const capture = captureImageInsertion(view);
+  if (!capture) {
+    return false;
+  }
+  emit("requestEmbedImage", capture);
+
+  return true;
+}
+
+defineExpose({
+  cancelImageInsertion,
+  captureImageInsertion,
+  focusDocumentOffset,
+  insertEmbeddedImage,
+});
 
 function normalizeInlineLinkTarget(value: string): string {
   return normalizeWikiTarget(value)
@@ -1848,6 +2024,37 @@ function blockPendingEditorInteraction(event: Event): void {
   }
 }
 
+function handleSourceEditorPaste(event: ClipboardEvent): void {
+  if (!editorRenderReady.value) {
+    blockPendingEditorInteraction(event);
+
+    return;
+  }
+
+  const clipboard = event.clipboardData;
+  if (!clipboard) {
+    return;
+  }
+  const imageItem = Array.from(clipboard.items).find((item) =>
+    item.kind === "file" && item.type.toLocaleLowerCase().startsWith("image/")
+  );
+  const imageSignaled = Boolean(imageItem)
+    || Array.from(clipboard.types).some((type) =>
+      type === "Files" || type.toLocaleLowerCase().startsWith("image/")
+    );
+  if (!imageSignaled) {
+    return;
+  }
+
+  const capture = captureImageInsertion();
+  if (!capture) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  emit("pasteImage", capture, imageItem?.getAsFile() ?? undefined);
+}
+
 function handleSourceEditorKeydown(event: KeyboardEvent): void {
   if (!editorRenderReady.value) {
     blockPendingEditorInteraction(event);
@@ -1870,7 +2077,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
     @beforeinput.capture="blockPendingEditorInteraction"
     @compositionstart.capture="blockPendingEditorInteraction"
     @keydown.capture="handleSourceEditorKeydown"
-    @paste.capture="blockPendingEditorInteraction"
+    @paste.capture="handleSourceEditorPaste"
   >
     <div ref="editorHost" class="code-mirror-host" />
 

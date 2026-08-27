@@ -5843,6 +5843,92 @@ pre {
   background: var(--amber-wash);
 }
 
+.settings-image-storage {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(210px, 280px);
+  align-items: start;
+  gap: 11px;
+  margin-top: 17px;
+  padding-top: 17px;
+  border-top: 1px solid var(--border-faint);
+}
+
+.settings-image-storage__icon {
+  display: grid;
+  width: 33px;
+  height: 33px;
+  place-items: center;
+  border: 1px solid rgba(180, 139, 236, 0.11);
+  border-radius: 9px;
+  background: var(--violet-wash);
+  color: var(--violet-bright);
+}
+
+.settings-image-storage__copy label {
+  color: var(--text-soft);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.settings-image-storage__copy p {
+  max-width: 430px;
+  margin: 4px 0 0;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.settings-image-storage__controls {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-image-storage__controls select,
+.settings-image-folder-field input {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-control);
+  color: var(--text);
+}
+
+.settings-image-storage__controls select {
+  padding-right: 32px;
+}
+
+.settings-image-storage__controls select:focus,
+.settings-image-folder-field input:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 2px var(--focus-wash);
+}
+
+.settings-image-storage__controls select:disabled {
+  opacity: 0.55;
+}
+
+.settings-image-storage__controls select option {
+  background: var(--surface-popup);
+  color: var(--text);
+}
+
+.settings-image-folder-field {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-image-folder-field > span {
+  color: var(--text-faint);
+  font-size: 8.5px;
+}
+
+.settings-image-folder-field small {
+  color: var(--red);
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
 .settings-import-choice {
   display: flex;
   align-items: center;
@@ -6254,6 +6340,14 @@ pre {
   .settings-import-choice {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .settings-image-storage {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .settings-image-storage__controls {
+    grid-column: 2;
   }
 }
 
@@ -7411,6 +7505,7 @@ pre {
 .settings-section,
 .settings-stat-card,
 .settings-transfer-card,
+.settings-image-storage,
 .settings-import-choice,
 .settings-confirmation,
 .settings-import-review,

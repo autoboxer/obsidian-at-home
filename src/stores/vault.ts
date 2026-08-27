@@ -57,6 +57,7 @@ import type {
   VaultSessionState,
   WorkspaceLoad,
   WorkspaceSaveResult,
+  WorkspaceEmbedImageResult,
 } from "../types";
 
 const LEGACY_MIGRATED_KEY = "obsidian-at-home.vault.filesystem-migrated.v1";
@@ -1680,6 +1681,18 @@ function applyWorkspaceSaveResult(result: WorkspaceSaveResult): void {
   vaultSession.warnings = result.warnings;
   uiState.saveStatus = savedVersion < dirtyVersion ? "saving" : "saved";
   uiState.lastSavedAt = result.savedAt || Date.now();
+}
+
+export function applyEmbeddedImageResult(result: WorkspaceEmbedImageResult): void {
+  applyVaultMutation(() => {
+    const index = vaultState.embeddedImages.findIndex((image) => image.id === result.image.id);
+    if (index >= 0) {
+      vaultState.embeddedImages.splice(index, 1, result.image);
+    } else {
+      vaultState.embeddedImages.push(result.image);
+    }
+  });
+  applyWorkspaceSaveResult(result);
 }
 
 function addVaultWarning(message: string): void {

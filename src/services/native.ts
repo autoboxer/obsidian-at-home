@@ -1,5 +1,8 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { writeText as writeNativeClipboardText } from "@tauri-apps/plugin-clipboard-manager";
+import {
+  readImage as readNativeClipboardImage,
+  writeText as writeNativeClipboardText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import type {
   ExportResult,
   ImageEmbedSettings,
@@ -30,6 +33,43 @@ export async function writeClipboardText(value: string): Promise<void> {
     throw new Error("Clipboard access is unavailable in this browser.");
   }
   await navigator.clipboard.writeText(value);
+}
+
+export async function readClipboardImagePng(): Promise<Uint8Array> {
+  if (!isTauri()) {
+    throw new Error("Clipboard image access is available in the desktop app.");
+  }
+
+  const image = await readNativeClipboardImage();
+  try {
+    const [{ width, height }, rgba] = await Promise.all([image.size(), image.rgba()]);
+    if (!width || !height || rgba.length !== width * height * 4) {
+      throw new Error("The clipboard image could not be decoded.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("The clipboard image could not be prepared.");
+    }
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(rgba), width, height),
+      0,
+      0,
+    );
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (value) => value ? resolve(value) : reject(new Error("The clipboard image could not be encoded.")),
+        "image/png",
+      );
+    });
+
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    await image.close().catch(() => undefined);
+  }
 }
 
 export async function applyAppZoom(scaleFactor: number): Promise<void> {

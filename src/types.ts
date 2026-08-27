@@ -75,6 +75,13 @@ export interface EmbeddedImage {
   mediaType: string;
 }
 
+export interface ImageInsertionCapture {
+  inTable: boolean;
+  noteId: string;
+  selectedText: string;
+  token: string;
+}
+
 export interface VaultData {
   name: string;
   notes: Note[];
