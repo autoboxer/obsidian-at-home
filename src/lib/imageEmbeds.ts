@@ -6,6 +6,9 @@ const RESERVED_WORKSPACE_FOLDERS = new Set([
 ]);
 const WINDOWS_RESERVED_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 
+export const VAULT_IMAGE_DRAG_MIME = "application/x-obsidian-at-home-image";
+export const NOTE_IMAGE_DRAG_MIME = "application/x-obsidian-at-home-note-image";
+
 export interface ValidatedImageFolderPath {
   error?: string;
   value: string;

@@ -52,7 +52,9 @@ Neither option copies non-image attachments, Canvas files, themes, plugins, hotk
 
 Use the image button, press `Ctrl/Cmd` + `Shift` + `I`, or paste an image from the clipboard. Images use standard Markdown paths such as `![Diagram](Assets/Diagram.png)`. Optional Obsidian-compatible alt-text suffixes set the displayed width, height, or both: `![Diagram|300](...)`, `![Diagram|x200](...)`, and `![Diagram|300x200](...)`.
 
-Settings can store new images at the vault root, beside the containing note, or in a chosen vault-relative folder. App-created references include an `#oah-image=...` fragment so the app can recover a moved image while retaining a portable relative path for other Markdown readers.
+Settings can store new images at the vault root, beside the containing note, in a chosen vault-relative folder, or in that chosen folder with the note's folder path mirrored below it. App-created references include an `#oah-image=...` fragment so the app can recover a uniquely identifiable renamed or moved image while retaining a portable relative path for other Markdown readers.
+
+Supported image files appear in the left file tree. Drag an image from the tree into a note to insert another reference without duplicating the file, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed from the tree or dragged between folders; references update with the file. A mirrored image folder is app-managed, so its images cannot be manually renamed or moved. Removing the final reference does not delete the image, so an unused image remains available in the tree until it is removed from the vault explicitly.
 
 ## Build and install
 

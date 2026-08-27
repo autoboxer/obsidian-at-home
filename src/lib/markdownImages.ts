@@ -1,3 +1,6 @@
+import { markdownLanguage } from "@codemirror/lang-markdown";
+import { leadingFrontmatterEnd } from "./frontmatter";
+
 const ASSET_FRAGMENT_PREFIX = "oah-image=";
 const MAX_IMAGE_DIMENSION = 10_000;
 
@@ -64,6 +67,25 @@ export function parseMarkdownImageAt(
     ...(destinationParts.title ? { title: destinationParts.title } : {}),
     ...size,
   };
+}
+
+/** Return only images that the editor's Markdown parser recognizes as syntax. */
+export function parseMarkdownImages(source: string): ParsedMarkdownImage[] {
+  const bodyStart = leadingFrontmatterEnd(source) ?? 0;
+  const images: ParsedMarkdownImage[] = [];
+  markdownLanguage.parser.parse(source).iterate({
+    enter(node) {
+      if (node.name !== "Image" || node.from < bodyStart) {
+        return;
+      }
+      const image = parseMarkdownImageAt(source, node.from);
+      if (image && image.end + 1 === node.to) {
+        images.push(image);
+      }
+    },
+  });
+
+  return images;
 }
 
 /** Format a portable Markdown image, escaping its size separator in tables. */

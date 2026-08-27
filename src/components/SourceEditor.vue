@@ -78,8 +78,11 @@ import {
 import {
   decodeMarkdownImageDestination,
   imageMediaTypeForPath,
+  NOTE_IMAGE_DRAG_MIME,
+  VAULT_IMAGE_DRAG_MIME,
 } from "../lib/imageEmbeds";
 import { sanitizeImageUrl } from "../lib/markdown";
+import { parseMarkdownImageAt } from "../lib/markdownImages";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import { isTauri, readWorkspaceImage } from "../services/native";
 import type { Extension, SelectionRange } from "@codemirror/state";
@@ -113,6 +116,7 @@ const emit = defineEmits<{
   openWiki: [target: string, heading?: string];
   pasteImage: [capture: ImageInsertionCapture, file?: File];
   requestEmbedImage: [capture: ImageInsertionCapture];
+  vaultImageDrop: [capture: ImageInsertionCapture, relativePath: string];
   "update:modelValue": [value: string];
 }>();
 
@@ -2076,6 +2080,107 @@ function handleSourceEditorPaste(event: ClipboardEvent): void {
   emit("pasteImage", capture, imageItem?.getAsFile() ?? undefined);
 }
 
+function handleSourceEditorDragOver(event: DragEvent): void {
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  const movingWithinNote = types.includes(NOTE_IMAGE_DRAG_MIME);
+  if (!movingWithinNote && !types.includes(VAULT_IMAGE_DRAG_MIME)) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = movingWithinNote ? "move" : "copy";
+  }
+}
+
+function handleSourceEditorDrop(event: DragEvent): void {
+  const internalImage = parseInternalImageDrag(
+    event.dataTransfer?.getData(NOTE_IMAGE_DRAG_MIME),
+  );
+  const relativePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
+  const view = editorView.value;
+  if ((!internalImage && !relativePath) || !view || !editorRenderReady.value) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
+    ?? view.state.selection.main.head;
+  if (internalImage) {
+    moveImageReferenceWithinNote(view, internalImage.from, internalImage.to, position);
+
+    return;
+  }
+  view.dispatch({
+    selection: EditorSelection.cursor(position),
+    scrollIntoView: true,
+    userEvent: "select.pointer",
+  });
+  const capture = captureImageInsertion(view);
+  if (capture) {
+    emit("vaultImageDrop", capture, relativePath);
+  }
+}
+
+function parseInternalImageDrag(
+  value: string | undefined,
+): { from: number; to: number } | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as { from?: unknown; to?: unknown };
+    if (
+      Number.isSafeInteger(parsed.from)
+      && Number.isSafeInteger(parsed.to)
+      && (parsed.from as number) >= 0
+      && (parsed.to as number) > (parsed.from as number)
+    ) {
+      return { from: parsed.from as number, to: parsed.to as number };
+    }
+  } catch {
+    // Ignore malformed drag data from outside this editor.
+  }
+
+  return undefined;
+}
+
+function moveImageReferenceWithinNote(
+  view: EditorView,
+  from: number,
+  to: number,
+  position: number,
+): void {
+  if (
+    from < 0
+    || to > view.state.doc.length
+    || from >= to
+    || (position >= from && position <= to)
+  ) {
+    view.focus();
+
+    return;
+  }
+  const source = view.state.sliceDoc(from, to);
+  const image = parseMarkdownImageAt(source, 0);
+  if (!image || image.end + 1 !== source.length) {
+    view.focus();
+
+    return;
+  }
+  const insertionStart = position < from ? position : position - (to - from);
+  const changes = position < from
+    ? [{ from: position, insert: source }, { from, to, insert: "" }]
+    : [{ from, to, insert: "" }, { from: position, insert: source }];
+  view.dispatch({
+    changes,
+    selection: EditorSelection.cursor(insertionStart + source.length),
+    scrollIntoView: true,
+    userEvent: "input.move",
+  });
+  view.focus();
+}
+
 function handleSourceEditorKeydown(event: KeyboardEvent): void {
   if (!editorRenderReady.value) {
     blockPendingEditorInteraction(event);
@@ -2099,6 +2204,8 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
     @compositionstart.capture="blockPendingEditorInteraction"
     @keydown.capture="handleSourceEditorKeydown"
     @paste.capture="handleSourceEditorPaste"
+    @dragover.capture="handleSourceEditorDragOver"
+    @drop.capture="handleSourceEditorDrop"
   >
     <div ref="editorHost" class="code-mirror-host" />
 

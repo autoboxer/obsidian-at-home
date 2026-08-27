@@ -14,9 +14,11 @@ import type {
   WorkspaceArchiveResult,
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
+  WorkspaceImageNoteUpdate,
   WorkspaceImportImagesResult,
   WorkspaceImportSaveResult,
   WorkspaceLoad,
+  WorkspaceRelocateImageResult,
   WorkspaceRecoveryMutationResult,
   WorkspaceRestoreResult,
   WorkspaceSaveResult,
@@ -246,6 +248,42 @@ export async function embedWorkspaceImageFile(
     noteRelativePath,
     settings,
     expectedRevision,
+  });
+}
+
+export async function embedWorkspaceVaultImage(
+  path: string,
+  imageRelativePath: string,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedImageResult> {
+  return invoke<WorkspaceEmbedImageResult>("workspace_embed_vault_image", {
+    path,
+    imageRelativePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function relocateWorkspaceImage(
+  path: string,
+  imageRelativePath: string,
+  targetRelativePath: string,
+  assetId: string,
+  noteUpdates: WorkspaceImageNoteUpdate[],
+  expectedRevision: number,
+  managedByNoteMove = false,
+): Promise<WorkspaceRelocateImageResult> {
+  return invoke<WorkspaceRelocateImageResult>("workspace_relocate_image", {
+    path,
+    imageRelativePath,
+    targetRelativePath,
+    assetId,
+    noteUpdates,
+    expectedRevision,
+    managedByNoteMove,
   });
 }
 

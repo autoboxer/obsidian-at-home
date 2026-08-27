@@ -19,6 +19,7 @@ import { resolveWikiLink } from "../lib/wikiLinks";
 import {
   embedWorkspaceImageBytes,
   embedWorkspaceImageFile,
+  embedWorkspaceVaultImage,
   isTauri,
   pickImageFile,
   readClipboardImagePng,
@@ -43,11 +44,13 @@ import {
   flushVault,
   navigateBack,
   navigateForward,
+  moveNoteToFolder,
   notify,
   selectNote,
   togglePinned,
   uiState,
   updateNote,
+  vaultImageInsertRequest,
   vaultSession,
   vaultState,
 } from "../stores/vault";
@@ -378,6 +381,36 @@ async function embedImageFromClipboard(
   }
 }
 
+async function embedImageFromVault(
+  capture: ImageInsertionCapture,
+  relativePath: string,
+): Promise<void> {
+  if (imageEmbedBusy.value) {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    notify("Wait for the current image to finish embedding.", "warning");
+
+    return;
+  }
+
+  imageEmbedBusy.value = true;
+  try {
+    await storeAndInsertImage(capture, (context, expectedRevision) =>
+      embedWorkspaceVaultImage(
+        context.vaultPath,
+        relativePath,
+        context.noteRelativePath,
+        { ...vaultState.imageEmbedSettings },
+        expectedRevision,
+      )
+    );
+  } catch (error) {
+    notify(imageEmbedError(error), "warning");
+  } finally {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    imageEmbedBusy.value = false;
+  }
+}
+
 function requestImageFromToolbar(): void {
   const capture = sourceEditor.value?.captureImageInsertion();
   if (capture) {
@@ -385,12 +418,24 @@ function requestImageFromToolbar(): void {
   }
 }
 
-function setFolder(event: Event): void {
+async function insertRequestedVaultImage(): Promise<void> {
+  const relativePath = vaultImageInsertRequest.relativePath;
+  await nextTick();
+  const capture = sourceEditor.value?.captureImageInsertion();
+  if (!capture || !relativePath) {
+    notify("Place the cursor in an open note before inserting an image", "warning");
+
+    return;
+  }
+  await embedImageFromVault(capture, relativePath);
+}
+
+async function setFolder(event: Event): Promise<void> {
   if (!activeNote.value) {
     return;
   }
   const value = (event.target as HTMLSelectElement).value;
-  updateNote(activeNote.value.id, { folderId: value || null });
+  await moveNoteToFolder(activeNote.value.id, value || null);
 }
 
 function openTagInput(): void {
@@ -513,6 +558,11 @@ watch(
   () => {
     noteMenuOpen.value = false;
   },
+);
+
+watch(
+  () => vaultImageInsertRequest.id,
+  () => void insertRequestedVaultImage(),
 );
 
 watch(tagInput, () => {
@@ -775,6 +825,7 @@ watch(tagInput, () => {
             @open-link="openRenderedLink"
             @open-wiki="openWikiLink"
             @paste-image="embedImageFromClipboard"
+            @vault-image-drop="embedImageFromVault"
             @request-embed-image="embedImageFromFile"
             @update:model-value="setContent"
           />

@@ -110,6 +110,7 @@ pub enum ImageEmbedLocation {
     VaultRoot,
     NoteFolder,
     SpecifiedFolder,
+    SpecifiedFolderMirrored,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +140,15 @@ pub struct EmbeddedImage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct VaultImageFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    pub relative_path: String,
+    pub media_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultData {
     pub name: String,
     #[serde(default)]
@@ -155,6 +165,8 @@ pub struct VaultData {
     pub selected_folder_id: String,
     #[serde(default)]
     pub embedded_images: Vec<EmbeddedImage>,
+    #[serde(default)]
+    pub image_files: Vec<VaultImageFile>,
     #[serde(default)]
     pub image_embed_settings: ImageEmbedSettings,
 }
@@ -271,8 +283,28 @@ pub struct WorkspaceEmbedImageResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceImageNoteUpdate {
+    pub note_id: String,
+    pub relative_path: String,
+    pub expected_content: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRelocateImageResult {
+    pub image: EmbeddedImage,
+    pub previous_relative_path: String,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceImportImagesResult {
     pub image_count: usize,
+    pub image_files: Vec<VaultImageFile>,
     pub path_mappings: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_id: Option<String>,
@@ -470,6 +502,12 @@ struct ScannedNote {
 struct ScannedFolder {
     relative_path: String,
     created_at: u64,
+}
+
+#[derive(Debug)]
+struct ScannedImage {
+    relative_path: String,
+    media_type: String,
 }
 
 #[derive(Debug)]
@@ -999,6 +1037,65 @@ pub fn workspace_embed_image_file(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_vault_image(
+    app: AppHandle,
+    path: String,
+    image_relative_path: String,
+    note_relative_path: String,
+    settings: ImageEmbedSettings,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedImageResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    validate_image_relative_path(&image_relative_path)?;
+    let source = resolve_workspace_image_file(&root, &image_relative_path, false)?;
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Image.png")
+        .to_owned();
+    let bytes = read_image_file(&source)?;
+
+    embed_workspace_image(
+        &root,
+        &note_relative_path,
+        settings,
+        &file_name,
+        &bytes,
+        Some(&image_relative_path),
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_relocate_image(
+    app: AppHandle,
+    path: String,
+    image_relative_path: String,
+    target_relative_path: String,
+    asset_id: String,
+    note_updates: Vec<WorkspaceImageNoteUpdate>,
+    expected_revision: u64,
+    managed_by_note_move: bool,
+) -> Result<WorkspaceRelocateImageResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    relocate_workspace_image(
+        &root,
+        &image_relative_path,
+        &target_relative_path,
+        &asset_id,
+        &note_updates,
+        expected_revision,
+        managed_by_note_move,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn workspace_embed_image_bytes(
     app: AppHandle,
     request: tauri::ipc::Request<'_>,
@@ -1108,7 +1205,8 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         );
     }
     let mut state = stored_state.unwrap_or_default();
-    let (scanned_notes, scanned_folders) = scan_markdown_files(&root, &mut warnings)?;
+    let (scanned_notes, scanned_folders, scanned_images) =
+        scan_workspace_files(&root, &mut warnings)?;
 
     let mut used_note_ids = HashSet::new();
     let note_id_by_path = reverse_valid_paths(&state.note_paths, "note", &mut warnings);
@@ -1251,6 +1349,20 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         defaults.snippets.clone()
     };
     let embedded_images = reconcile_image_assets(&root, &mut state.image_assets, &mut warnings);
+    let tracked_image_ids = embedded_images
+        .iter()
+        .map(|image| (portable_path_key(&image.relative_path), image.id.clone()))
+        .collect::<HashMap<_, _>>();
+    let image_files = scanned_images
+        .into_iter()
+        .map(|image| VaultImageFile {
+            asset_id: tracked_image_ids
+                .get(&portable_path_key(&image.relative_path))
+                .cloned(),
+            relative_path: image.relative_path,
+            media_type: image.media_type,
+        })
+        .collect();
     let image_embed_settings = match normalize_image_embed_settings(&state.image_embed_settings) {
         Ok(settings) => settings,
         Err(error) => {
@@ -1343,6 +1455,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             recent_note_ids,
             selected_folder_id,
             embedded_images,
+            image_files,
             image_embed_settings,
         },
         descriptor: VaultDescriptor {
@@ -2565,6 +2678,17 @@ fn normalize_image_embed_settings(
                 folder_path,
             })
         }
+        ImageEmbedLocation::SpecifiedFolderMirrored => {
+            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
+            if folder_path.is_empty() {
+                return Err("Choose a vault-relative folder for embedded images.".to_owned());
+            }
+            validate_relative_path(&folder_path, false)?;
+            Ok(ImageEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolderMirrored,
+                folder_path,
+            })
+        }
     }
 }
 
@@ -2582,6 +2706,18 @@ fn image_destination_folder(
             .and_then(path_to_slash_string)
             .unwrap_or_default()),
         ImageEmbedLocation::SpecifiedFolder => Ok(settings.folder_path),
+        ImageEmbedLocation::SpecifiedFolderMirrored => {
+            let note_folder = Path::new(note_relative_path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .and_then(path_to_slash_string)
+                .unwrap_or_default();
+            Ok(if note_folder.is_empty() {
+                settings.folder_path
+            } else {
+                format!("{}/{note_folder}", settings.folder_path)
+            })
+        }
     }
 }
 
@@ -2727,6 +2863,363 @@ fn embed_workspace_image(
     })
 }
 
+#[derive(Debug)]
+struct PreparedImageNoteUpdate {
+    path: PathBuf,
+    expected_content: Vec<u8>,
+    content: Vec<u8>,
+}
+
+fn relocate_workspace_image(
+    root: &Path,
+    image_relative_path: &str,
+    target_relative_path: &str,
+    asset_id: &str,
+    note_updates: &[WorkspaceImageNoteUpdate],
+    expected_revision: u64,
+    managed_by_note_move: bool,
+) -> Result<WorkspaceRelocateImageResult, String> {
+    validate_image_relative_path(image_relative_path)?;
+    validate_image_relative_path(target_relative_path)?;
+    if image_relative_path == target_relative_path {
+        return Err("The image is already at that path.".to_owned());
+    }
+    if !is_valid_image_asset_id(asset_id) {
+        return Err("The image has an invalid stable ID.".to_owned());
+    }
+
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err(
+            "Images cannot be reorganized while workspace metadata is unreadable or newer than this app."
+                .to_owned(),
+        );
+    }
+    let old_state = stored_state.unwrap_or_default();
+    recover_workspace_transactions(root, Some(&old_state), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before moving the image."
+                .to_owned(),
+        );
+    }
+    let source_is_mirror_managed =
+        image_path_is_mirror_managed(image_relative_path, &old_state.image_embed_settings)?;
+    if source_is_mirror_managed && !managed_by_note_move {
+        return Err(
+            "Images in the mirrored image folder are managed by note location and cannot be renamed or moved."
+                .to_owned(),
+        );
+    }
+    if managed_by_note_move {
+        let target_is_mirror_managed =
+            image_path_is_mirror_managed(target_relative_path, &old_state.image_embed_settings)?;
+        let source_name = Path::new(image_relative_path).file_name();
+        let target_name = Path::new(target_relative_path).file_name();
+        if !source_is_mirror_managed
+            || !target_is_mirror_managed
+            || source_name.is_none()
+            || source_name != target_name
+        {
+            return Err(
+                "A note move can only carry a mirrored image, without renaming it."
+                    .to_owned(),
+            );
+        }
+    }
+
+    let source = resolve_workspace_image_file(root, image_relative_path, false)?;
+    let bytes = read_image_file(&source)?;
+    let (media_type, _) = validate_image_bytes(&bytes, Some(target_relative_path))?;
+    let target = resolve_workspace_image_file(root, target_relative_path, true)?;
+    let target_parent = target
+        .parent()
+        .ok_or_else(|| "The image destination has no parent folder.".to_owned())?;
+    match fs::symlink_metadata(target_parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("The image destination is not a regular vault folder.".to_owned());
+        }
+        Ok(_) => {}
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound && managed_by_note_move => {}
+        Err(error) => {
+            return Err(format!(
+                "Could not inspect the image destination folder: {error}"
+            ));
+        }
+    }
+    let case_only_rename = portable_path_key(image_relative_path)
+        == portable_path_key(target_relative_path);
+    if !case_only_rename && image_path_exists_portably(root, target_relative_path)? {
+        return Err(format!("A file named {target_relative_path} already exists."));
+    }
+
+    if let Some(stored) = old_state.image_assets.get(asset_id) {
+        if portable_path_key(&stored.relative_path) != portable_path_key(image_relative_path) {
+            return Err("The stable image record no longer points to that file. Reload the vault.".to_owned());
+        }
+    } else {
+        if old_state.image_assets.len() >= MAX_IMAGE_ASSETS {
+            return Err(format!(
+                "This vault already tracks the maximum of {MAX_IMAGE_ASSETS} embedded images."
+            ));
+        }
+        if old_state.image_assets.values().any(|stored| {
+            portable_path_key(&stored.relative_path) == portable_path_key(image_relative_path)
+        }) {
+            return Err("The image's stable record changed. Reload the vault.".to_owned());
+        }
+    }
+
+    let prepared_updates = prepare_image_note_updates(root, &old_state, note_updates)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed while the image move was being prepared. Reload it and try again."
+                .to_owned(),
+        );
+    }
+    for update in &prepared_updates {
+        if fs::read(&update.path).map_err(|error| {
+            format!("Could not recheck a note before moving the image: {error}")
+        })? != update.expected_content
+        {
+            return Err(
+                "A note changed before the image could be moved. Reload the vault and try again."
+                    .to_owned(),
+            );
+        }
+    }
+
+    if managed_by_note_move {
+        ensure_import_image_parent(root, target_relative_path)?;
+    }
+
+    relocate_image_file_durable(&source, &target).map_err(|error| {
+        format!("Could not move the image to {target_relative_path}: {error}")
+    })?;
+
+    let mut applied_note_count = 0_usize;
+    for update in &prepared_updates {
+        if let Err(error) = atomic_write(&update.path, &update.content) {
+            let rollback_error = rollback_image_relocation(
+                &source,
+                &target,
+                &prepared_updates[..=applied_note_count],
+                None,
+                root,
+            );
+            return Err(format!(
+                "Could not update image references: {error}{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+        applied_note_count += 1;
+    }
+
+    let modified_nanos = match image_modified_nanos_for_path(root, target_relative_path) {
+        Ok(value) => value,
+        Err(error) => {
+            let rollback_error = rollback_image_relocation(
+                &source,
+                &target,
+                &prepared_updates,
+                None,
+                root,
+            );
+            return Err(format!(
+                "Could not verify the moved image: {error}{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+    };
+    for update in &prepared_updates {
+        let verification_error = match fs::read(&update.path) {
+            Ok(content) if content == update.content => None,
+            Ok(_) => Some("an image reference did not match the requested content".to_owned()),
+            Err(error) => Some(format!("an image reference could not be read: {error}")),
+        };
+        if let Some(verification_error) = verification_error {
+            let rollback_error = rollback_image_relocation(
+                &source,
+                &target,
+                &prepared_updates,
+                None,
+                root,
+            );
+            return Err(format!(
+                "The move could not be verified because {verification_error}.{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+    }
+
+    let mut state = old_state.clone();
+    state.version = STATE_VERSION;
+    state.image_assets.insert(
+        asset_id.to_owned(),
+        StoredImageAsset {
+            relative_path: target_relative_path.to_owned(),
+            media_type: media_type.to_owned(),
+            fingerprint: fingerprint_bytes(&bytes),
+            modified_nanos,
+        },
+    );
+    if let Err(error) = write_workspace_state(root, &state) {
+        let rollback_error = rollback_image_relocation(
+            &source,
+            &target,
+            &prepared_updates,
+            Some(&old_state),
+            root,
+        );
+        return Err(format!(
+            "Could not update the stable image record: {error}{}",
+            rollback_error
+                .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                .unwrap_or_default(),
+        ));
+    }
+
+    Ok(WorkspaceRelocateImageResult {
+        image: EmbeddedImage {
+            id: asset_id.to_owned(),
+            relative_path: target_relative_path.to_owned(),
+            media_type: media_type.to_owned(),
+        },
+        previous_relative_path: image_relative_path.to_owned(),
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+fn prepare_image_note_updates(
+    root: &Path,
+    state: &WorkspaceState,
+    note_updates: &[WorkspaceImageNoteUpdate],
+) -> Result<Vec<PreparedImageNoteUpdate>, String> {
+    if note_updates.len() > MAX_NOTES {
+        return Err(format!("Only {MAX_NOTES} notes can be updated at once."));
+    }
+    let mut seen_note_ids = HashSet::new();
+    let mut seen_paths = HashSet::new();
+    let mut total_bytes = 0_u64;
+    let mut prepared = Vec::with_capacity(note_updates.len());
+    for update in note_updates {
+        validate_markdown_relative_path(&update.relative_path)?;
+        if state.note_paths.get(&update.note_id).map(String::as_str)
+            != Some(update.relative_path.as_str())
+        {
+            return Err("A note path changed before its image reference could be updated.".to_owned());
+        }
+        if !seen_note_ids.insert(update.note_id.as_str())
+            || !seen_paths.insert(portable_path_key(&update.relative_path))
+        {
+            return Err("The image move contains a duplicate note update.".to_owned());
+        }
+        if update.content.len() as u64 > MAX_NOTE_BYTES
+            || update.expected_content.len() as u64 > MAX_NOTE_BYTES
+        {
+            return Err(format!(
+                "{} is larger than {} MiB and cannot be updated.",
+                update.relative_path,
+                MAX_NOTE_BYTES / 1024 / 1024,
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(update.content.len() as u64);
+        if total_bytes > MAX_TOTAL_NOTE_BYTES {
+            return Err("The image move would update too much note content at once.".to_owned());
+        }
+        let path = resolve_workspace_file(root, &update.relative_path, false)?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("Could not inspect {}: {error}", update.relative_path))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("{} is not a regular Markdown file.", update.relative_path));
+        }
+        let current = fs::read(&path)
+            .map_err(|error| format!("Could not read {}: {error}", update.relative_path))?;
+        if current != update.expected_content.as_bytes() {
+            return Err(format!(
+                "{} changed before its image reference could be updated.",
+                update.relative_path,
+            ));
+        }
+        prepared.push(PreparedImageNoteUpdate {
+            path,
+            expected_content: current,
+            content: update.content.as_bytes().to_vec(),
+        });
+    }
+    Ok(prepared)
+}
+
+fn image_path_is_mirror_managed(
+    image_relative_path: &str,
+    settings: &ImageEmbedSettings,
+) -> Result<bool, String> {
+    let normalized = normalize_image_embed_settings(settings)?;
+    if normalized.location != ImageEmbedLocation::SpecifiedFolderMirrored {
+        return Ok(false);
+    }
+    let image_key = portable_path_key(image_relative_path);
+    let folder_key = portable_path_key(&normalized.folder_path);
+    Ok(image_key.starts_with(&format!("{folder_key}/")))
+}
+
+fn relocate_image_file_durable(source: &Path, target: &Path) -> io::Result<()> {
+    if source == target {
+        return Ok(());
+    }
+    if source.to_string_lossy().eq_ignore_ascii_case(&target.to_string_lossy()) {
+        let parent = source
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "image has no parent"))?;
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(
+            ".oah-image-rename-{}-{counter}.tmp",
+            std::process::id(),
+        ));
+        rename_durable(source, &temporary)?;
+        if let Err(error) = rename_durable(&temporary, target) {
+            let _ = rename_durable(&temporary, source);
+            return Err(error);
+        }
+        return Ok(());
+    }
+    rename_durable(source, target)
+}
+
+fn rollback_image_relocation(
+    source: &Path,
+    target: &Path,
+    applied_updates: &[PreparedImageNoteUpdate],
+    old_state: Option<&WorkspaceState>,
+    root: &Path,
+) -> Option<String> {
+    let mut errors = Vec::new();
+    for update in applied_updates.iter().rev() {
+        if let Err(error) = atomic_write(&update.path, &update.expected_content) {
+            errors.push(format!("could not restore a note: {error}"));
+        }
+    }
+    if let Err(error) = relocate_image_file_durable(target, source) {
+        errors.push(format!("could not restore the image: {error}"));
+    }
+    if let Some(state) = old_state {
+        if let Err(error) = write_workspace_state(root, state) {
+            errors.push(format!("could not restore image metadata: {error}"));
+        }
+    }
+    (!errors.is_empty()).then(|| errors.join("; "))
+}
+
 fn read_workspace_image(
     root: &Path,
     asset_id: Option<&str>,
@@ -2857,7 +3350,7 @@ fn begin_workspace_image_import(
         }
     }
 
-    let mut image_count = 0;
+    let mut image_files = Vec::new();
     let mut path_mappings = BTreeMap::new();
     let mut reserved_paths = HashSet::new();
     let mut warnings = WarningCollector::default();
@@ -2878,10 +3371,11 @@ fn begin_workspace_image_import(
                 continue;
             }
         };
-        let bytes = match read_image_file(&source)
-            .and_then(|bytes| validate_image_bytes(&bytes, Some(relative_path)).map(|_| bytes))
-        {
-            Ok(bytes) => bytes,
+        let (bytes, media_type) = match read_image_file(&source).and_then(|bytes| {
+            validate_image_bytes(&bytes, Some(relative_path))
+                .map(|(media_type, _)| (bytes, media_type.to_owned()))
+        }) {
+            Ok(image) => image,
             Err(error) => {
                 match workspace_image_import_path(root, relative_path, None, &reserved_paths) {
                     Ok((target_path, _)) => {
@@ -2918,7 +3412,11 @@ fn begin_workspace_image_import(
             ));
         }
         if reuse_existing {
-            image_count += 1;
+            image_files.push(VaultImageFile {
+                asset_id: None,
+                relative_path: target_path,
+                media_type,
+            });
             continue;
         }
 
@@ -2931,7 +3429,11 @@ fn begin_workspace_image_import(
             warnings.push(format!("Skipped {relative_path}: {error}"));
             continue;
         }
-        image_count += 1;
+        image_files.push(VaultImageFile {
+            asset_id: None,
+            relative_path: target_path,
+            media_type,
+        });
     }
 
     if let Some(missing_path) = image_paths
@@ -2949,7 +3451,8 @@ fn begin_workspace_image_import(
     let (revision, transaction_id) =
         apply_workspace_image_import(root, transaction, &mut warnings)?;
     Ok(WorkspaceImportImagesResult {
-        image_count,
+        image_count: image_files.len(),
+        image_files,
         path_mappings,
         transaction_id,
         revision,
@@ -4043,12 +4546,13 @@ fn reconcile_image_assets(
         .collect()
 }
 
-fn scan_markdown_files(
+fn scan_workspace_files(
     root: &Path,
     warnings: &mut WarningCollector,
-) -> Result<(Vec<ScannedNote>, Vec<ScannedFolder>), String> {
+) -> Result<(Vec<ScannedNote>, Vec<ScannedFolder>, Vec<ScannedImage>), String> {
     let mut notes = Vec::new();
     let mut folders = Vec::new();
+    let mut images = Vec::new();
     let mut total_bytes = 0_u64;
     let walker = WalkDir::new(root)
         .follow_links(false)
@@ -4104,7 +4608,33 @@ fn scan_markdown_files(
             });
             continue;
         }
-        if !entry.file_type().is_file() || !is_markdown_path(entry.path()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if is_supported_image_path(entry.path()) {
+            if images.len() >= MAX_IMAGE_ASSETS {
+                warnings.push(format!(
+                    "Only the first {MAX_IMAGE_ASSETS} image files are shown in the vault tree."
+                ));
+                continue;
+            }
+            if metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
+                continue;
+            }
+            let Some(media_type) = Path::new(&relative_path)
+                .extension()
+                .and_then(|value| value.to_str())
+                .and_then(image_media_type_for_extension)
+            else {
+                continue;
+            };
+            images.push(ScannedImage {
+                relative_path,
+                media_type: media_type.to_owned(),
+            });
+            continue;
+        }
+        if !is_markdown_path(entry.path()) {
             continue;
         }
         if notes.len() >= MAX_NOTES {
@@ -4147,7 +4677,8 @@ fn scan_markdown_files(
 
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     folders.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok((notes, folders))
+    images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok((notes, folders, images))
 }
 
 fn load_recently_deleted_notes(
@@ -7823,6 +8354,7 @@ mod tests {
             recent_note_ids: Vec::new(),
             selected_folder_id: "all".to_owned(),
             embedded_images: Vec::new(),
+            image_files: Vec::new(),
             image_embed_settings: ImageEmbedSettings::default(),
         }
     }
@@ -8043,7 +8575,7 @@ mod tests {
         );
         assert!(snapshot_path.is_file());
 
-        let (scanned_notes, _) = scan_markdown_files(
+        let (scanned_notes, _, _) = scan_workspace_files(
             &workspace.root,
             &mut WarningCollector::default(),
         )
@@ -9264,6 +9796,14 @@ mod tests {
                 .relative_path,
             "Moved/Renamed.png",
         );
+        assert_eq!(
+            loaded.vault.image_files,
+            vec![VaultImageFile {
+                asset_id: Some(embedded.image.id.clone()),
+                relative_path: "Moved/Renamed.png".to_owned(),
+                media_type: "image/png".to_owned(),
+            }],
+        );
         let mut warnings = WarningCollector::default();
         let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
         assert_eq!(
@@ -9274,6 +9814,370 @@ mod tests {
                 .expect("asset should remain indexed")
                 .relative_path,
             "Moved/Renamed.png",
+        );
+    }
+
+    #[test]
+    fn mirrored_image_storage_follows_each_notes_folder() {
+        const FIRST: &[u8] = b"\x89PNG\r\n\x1a\nfirst-mirrored-image";
+        const SECOND: &[u8] = b"\x89PNG\r\n\x1a\nsecond-mirrored-image";
+        let workspace = TestWorkspace::new("mirrored-image-locations");
+        fs::create_dir(workspace.root.join("test1")).expect("test1 should be created");
+        fs::create_dir(workspace.root.join("test2")).expect("test2 should be created");
+        fs::write(workspace.root.join("test1/doc1.md"), "# Doc 1")
+            .expect("doc1 should be written");
+        fs::write(workspace.root.join("test2/doc2.md"), "# Doc 2")
+            .expect("doc2 should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let settings = ImageEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Images".to_owned(),
+        };
+
+        let first = embed_workspace_image(
+            &workspace.root,
+            "test1/doc1.md",
+            settings.clone(),
+            "First.png",
+            FIRST,
+            None,
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect("first mirrored image should be embedded");
+        let second = embed_workspace_image(
+            &workspace.root,
+            "test2/doc2.md",
+            settings,
+            "Second.png",
+            SECOND,
+            None,
+            first.revision,
+        )
+        .expect("second mirrored image should be embedded");
+
+        assert_eq!(first.image.relative_path, "Images/test1/First.png");
+        assert_eq!(second.image.relative_path, "Images/test2/Second.png");
+        assert_eq!(
+            fs::read(workspace.root.join(&first.image.relative_path)).unwrap(),
+            FIRST,
+        );
+        assert_eq!(
+            fs::read(workspace.root.join(&second.image.relative_path)).unwrap(),
+            SECOND,
+        );
+    }
+
+    #[test]
+    fn reorganizing_an_image_moves_it_and_updates_references() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nreorganized-image";
+        let workspace = TestWorkspace::new("reorganized-image");
+        fs::create_dir(workspace.root.join("Images")).expect("image folder should be created");
+        fs::create_dir(workspace.root.join("Images/Sub")).expect("subfolder should be created");
+        fs::create_dir(workspace.root.join("Other Images"))
+            .expect("sibling image folder should be created");
+        fs::write(workspace.root.join("Note.md"), "# Note")
+            .expect("note should be written");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("note-1".to_owned(), "Note.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let embedded = embed_workspace_image(
+            &workspace.root,
+            "Note.md",
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Images".to_owned(),
+            },
+            "Photo.png",
+            PNG,
+            None,
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect("image should be embedded");
+        let original = format!(
+            "![Tracked](Images/Photo.png#oah-image={})\n![Path only](Images/Photo.png)",
+            embedded.image.id,
+        );
+        fs::write(workspace.root.join("Note.md"), &original)
+            .expect("references should be written");
+        let moved_content = format!(
+            "![Tracked](Images/Sub/Photo.png#oah-image={})\n![Path only](Images/Sub/Photo.png#oah-image={})",
+            embedded.image.id, embedded.image.id,
+        );
+        let moved = relocate_workspace_image(
+            &workspace.root,
+            "Images/Photo.png",
+            "Images/Sub/Photo.png",
+            &embedded.image.id,
+            &[WorkspaceImageNoteUpdate {
+                note_id: "note-1".to_owned(),
+                relative_path: "Note.md".to_owned(),
+                expected_content: original,
+                content: moved_content.clone(),
+            }],
+            revision_for_root(&workspace.root).expect("revision should be available"),
+            false,
+        )
+        .expect("image should move into its subfolder");
+
+        assert!(!workspace.root.join("Images/Photo.png").exists());
+        assert_eq!(
+            fs::read(workspace.root.join("Images/Sub/Photo.png")).unwrap(),
+            PNG,
+        );
+        assert_eq!(fs::read_to_string(workspace.root.join("Note.md")).unwrap(), moved_content);
+        assert_eq!(moved.image.relative_path, "Images/Sub/Photo.png");
+
+        let renamed_content = moved_content.replace("Images/Sub/Photo.png", "Other%20Images/Renamed.png");
+        let renamed = relocate_workspace_image(
+            &workspace.root,
+            "Images/Sub/Photo.png",
+            "Other Images/Renamed.png",
+            &embedded.image.id,
+            &[WorkspaceImageNoteUpdate {
+                note_id: "note-1".to_owned(),
+                relative_path: "Note.md".to_owned(),
+                expected_content: moved_content,
+                content: renamed_content.clone(),
+            }],
+            moved.revision,
+            false,
+        )
+        .expect("image should move to a sibling folder and be renamed");
+
+        assert!(!workspace.root.join("Images/Sub/Photo.png").exists());
+        assert_eq!(
+            fs::read(workspace.root.join("Other Images/Renamed.png")).unwrap(),
+            PNG,
+        );
+        assert_eq!(fs::read_to_string(workspace.root.join("Note.md")).unwrap(), renamed_content);
+        assert_eq!(renamed.image.relative_path, "Other Images/Renamed.png");
+        let mut warnings = WarningCollector::default();
+        let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
+        assert_eq!(
+            state.unwrap().image_assets[&embedded.image.id].relative_path,
+            "Other Images/Renamed.png",
+        );
+    }
+
+    #[test]
+    fn reorganizing_registers_an_untracked_image_and_rejects_collisions() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nuntracked-image";
+        let workspace = TestWorkspace::new("reorganized-untracked-image");
+        fs::create_dir(workspace.root.join("Images")).expect("image folder should be created");
+        fs::create_dir(workspace.root.join("Archive")).expect("archive should be created");
+        fs::write(workspace.root.join("Images/Loose.png"), PNG)
+            .expect("loose image should be written");
+        fs::write(workspace.root.join("Archive/Loose.png"), PNG)
+            .expect("collision should be written");
+        fs::write(workspace.root.join("Note.md"), "![Loose](Images/Loose.png)")
+            .expect("note should be written");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("note-1".to_owned(), "Note.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let revision = revision_for_root(&workspace.root).expect("revision should be available");
+        let error = relocate_workspace_image(
+            &workspace.root,
+            "Images/Loose.png",
+            "Archive/Loose.png",
+            "image-loose",
+            &[],
+            revision,
+            false,
+        )
+        .expect_err("an existing image should block the move");
+        assert!(error.contains("already exists"));
+        assert!(workspace.root.join("Images/Loose.png").exists());
+
+        let updated = "![Loose](Archive/Loose%202.png#oah-image=image-loose)";
+        relocate_workspace_image(
+            &workspace.root,
+            "Images/Loose.png",
+            "Archive/Loose 2.png",
+            "image-loose",
+            &[WorkspaceImageNoteUpdate {
+                note_id: "note-1".to_owned(),
+                relative_path: "Note.md".to_owned(),
+                expected_content: "![Loose](Images/Loose.png)".to_owned(),
+                content: updated.to_owned(),
+            }],
+            revision,
+            false,
+        )
+        .expect("the untracked image should be registered while moving");
+        let mut warnings = WarningCollector::default();
+        let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
+        assert_eq!(
+            state.unwrap().image_assets["image-loose"].relative_path,
+            "Archive/Loose 2.png",
+        );
+        assert_eq!(fs::read_to_string(workspace.root.join("Note.md")).unwrap(), updated);
+    }
+
+    #[test]
+    fn mirrored_images_cannot_be_reorganized() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nmanaged-mirror-image";
+        let workspace = TestWorkspace::new("managed-mirror-image");
+        fs::create_dir_all(workspace.root.join("Images/Notes"))
+            .expect("mirrored image folder should be created");
+        fs::create_dir(workspace.root.join("Elsewhere"))
+            .expect("destination should be created");
+        fs::write(workspace.root.join("Images/Notes/Photo.png"), PNG)
+            .expect("managed image should be written");
+        let mut state = WorkspaceState::default();
+        state.image_embed_settings = ImageEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Images".to_owned(),
+        };
+        state.image_assets.insert(
+            "image-managed".to_owned(),
+            StoredImageAsset {
+                relative_path: "Images/Notes/Photo.png".to_owned(),
+                media_type: "image/png".to_owned(),
+                fingerprint: fingerprint_bytes(PNG),
+                modified_nanos: image_modified_nanos_for_path(
+                    &workspace.root,
+                    "Images/Notes/Photo.png",
+                )
+                .unwrap(),
+            },
+        );
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+
+        let error = relocate_workspace_image(
+            &workspace.root,
+            "Images/Notes/Photo.png",
+            "Elsewhere/Photo.png",
+            "image-managed",
+            &[],
+            revision_for_root(&workspace.root).expect("revision should be available"),
+            false,
+        )
+        .expect_err("mirrored images should be managed by note location");
+
+        assert!(error.contains("mirrored image folder"));
+        assert!(workspace.root.join("Images/Notes/Photo.png").exists());
+        assert!(!workspace.root.join("Elsewhere/Photo.png").exists());
+    }
+
+    #[test]
+    fn note_moves_carry_mirrored_images_without_allowing_renames() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nmanaged-note-move-image";
+        let workspace = TestWorkspace::new("managed-note-move-image");
+        fs::create_dir_all(workspace.root.join("Images/Notes"))
+            .expect("source mirror folder should be created");
+        fs::write(workspace.root.join("Images/Notes/Photo.png"), PNG)
+            .expect("managed image should be written");
+        let mut state = WorkspaceState::default();
+        state.image_embed_settings = ImageEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Images".to_owned(),
+        };
+        state.image_assets.insert(
+            "image-managed".to_owned(),
+            StoredImageAsset {
+                relative_path: "Images/Notes/Photo.png".to_owned(),
+                media_type: "image/png".to_owned(),
+                fingerprint: fingerprint_bytes(PNG),
+                modified_nanos: image_modified_nanos_for_path(
+                    &workspace.root,
+                    "Images/Notes/Photo.png",
+                )
+                .unwrap(),
+            },
+        );
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+
+        let renamed_error = relocate_workspace_image(
+            &workspace.root,
+            "Images/Notes/Photo.png",
+            "Images/Archive/Renamed.png",
+            "image-managed",
+            &[],
+            revision_for_root(&workspace.root).expect("revision should be available"),
+            true,
+        )
+        .expect_err("a managed note move must not rename its image");
+        assert!(renamed_error.contains("without renaming"));
+
+        let moved = relocate_workspace_image(
+            &workspace.root,
+            "Images/Notes/Photo.png",
+            "Images/Archive/Photo.png",
+            "image-managed",
+            &[],
+            revision_for_root(&workspace.root).expect("revision should be available"),
+            true,
+        )
+        .expect("a note move should carry its managed image");
+
+        assert_eq!(moved.image.relative_path, "Images/Archive/Photo.png");
+        assert!(!workspace.root.join("Images/Notes/Photo.png").exists());
+        assert_eq!(
+            fs::read(workspace.root.join("Images/Archive/Photo.png")).unwrap(),
+            PNG,
+        );
+    }
+
+    #[test]
+    fn removing_the_final_markdown_reference_keeps_the_image_file() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nretained-unreferenced-image";
+        let workspace = TestWorkspace::new("retained-unreferenced-image");
+        fs::write(
+            workspace.root.join("Note.md"),
+            "# Note\n\n![Retained](Retained.png)",
+        )
+        .expect("note should be written");
+        fs::write(workspace.root.join("Retained.png"), PNG)
+            .expect("image should be written");
+        let loaded = load_workspace(&workspace.root, &empty_vault("Images"))
+            .expect("workspace should load");
+        assert_eq!(
+            loaded.vault.image_files,
+            vec![VaultImageFile {
+                asset_id: None,
+                relative_path: "Retained.png".to_owned(),
+                media_type: "image/png".to_owned(),
+            }],
+        );
+        let registered = embed_workspace_image(
+            &workspace.root,
+            "Note.md",
+            ImageEmbedSettings::default(),
+            "Retained.png",
+            PNG,
+            Some("Retained.png"),
+            loaded.revision,
+        )
+        .expect("existing image should be registered");
+        let registered_workspace = load_workspace(&workspace.root, &empty_vault("Images"))
+            .expect("registered workspace should load");
+        let reference_revision = registered_workspace.revision;
+        let mut without_reference = registered_workspace.vault;
+        without_reference.notes[0].content = "# Note\n\nNo image reference remains.".to_owned();
+
+        save_workspace_files(
+            &workspace.root,
+            &without_reference,
+            reference_revision,
+        )
+        .expect("note without the image reference should save");
+
+        assert_eq!(fs::read(workspace.root.join("Retained.png")).unwrap(), PNG);
+        let reopened = load_workspace(&workspace.root, &empty_vault("Images"))
+            .expect("workspace should reopen");
+        assert_eq!(reopened.vault.image_files.len(), 1);
+        assert_eq!(
+            reopened.vault.image_files[0].asset_id.as_deref(),
+            Some(registered.image.id.as_str()),
         );
     }
 
@@ -9393,6 +10297,21 @@ mod tests {
         .expect("valid images should be imported");
 
         assert_eq!(result.image_count, 2);
+        assert_eq!(
+            result.image_files,
+            vec![
+                VaultImageFile {
+                    asset_id: None,
+                    relative_path: "Assets/Diagram.png".to_owned(),
+                    media_type: "image/png".to_owned(),
+                },
+                VaultImageFile {
+                    asset_id: None,
+                    relative_path: "Collision 2.png".to_owned(),
+                    media_type: "image/png".to_owned(),
+                },
+            ],
+        );
         assert_eq!(
             result.path_mappings,
             BTreeMap::from([

@@ -62,7 +62,11 @@ export interface CssSnippet {
   builtIn?: boolean;
 }
 
-export type ImageEmbedLocation = "vault-root" | "note-folder" | "specified-folder";
+export type ImageEmbedLocation =
+  | "vault-root"
+  | "note-folder"
+  | "specified-folder"
+  | "specified-folder-mirrored";
 
 export interface ImageEmbedSettings {
   location: ImageEmbedLocation;
@@ -71,6 +75,12 @@ export interface ImageEmbedSettings {
 
 export interface EmbeddedImage {
   id: string;
+  relativePath: string;
+  mediaType: string;
+}
+
+export interface VaultImageFile {
+  assetId?: string;
   relativePath: string;
   mediaType: string;
 }
@@ -92,6 +102,7 @@ export interface VaultData {
   recentNoteIds: string[];
   selectedFolderId: "all" | "favorites" | "recent";
   embeddedImages: EmbeddedImage[];
+  imageFiles: VaultImageFile[];
   imageEmbedSettings: ImageEmbedSettings;
 }
 
@@ -139,6 +150,18 @@ export interface WorkspaceRecoveryMutationResult extends WorkspaceSaveResult {
 
 export interface WorkspaceEmbedImageResult extends WorkspaceSaveResult {
   image: EmbeddedImage;
+}
+
+export interface WorkspaceImageNoteUpdate {
+  noteId: string;
+  relativePath: string;
+  expectedContent: string;
+  content: string;
+}
+
+export interface WorkspaceRelocateImageResult extends WorkspaceSaveResult {
+  image: EmbeddedImage;
+  previousRelativePath: string;
 }
 
 export interface VaultSessionState {
@@ -231,6 +254,7 @@ export interface ExportResult {
 
 export interface WorkspaceImportImagesResult extends WorkspaceSaveResult {
   imageCount: number;
+  imageFiles: VaultImageFile[];
   pathMappings: Record<string, string>;
   transactionId?: string;
 }

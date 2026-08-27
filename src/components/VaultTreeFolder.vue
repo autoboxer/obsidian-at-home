@@ -7,15 +7,19 @@ import {
   FOLDER_DRAG_MIME,
   folderChildren,
   folderPath,
+  isMirrorManagedImage,
   moveFolder,
+  moveVaultImageToFolder,
   moveNoteToFolder,
   NOTE_DRAG_MIME,
   renameFolder,
   treeDragState,
   vaultState,
 } from "../stores/vault";
-import type { Folder, Note } from "../types";
+import type { Folder, Note, VaultImageFile } from "../types";
+import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
 import AppIcon from "./AppIcon.vue";
+import VaultTreeImage from "./VaultTreeImage.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
 
 defineOptions({ name: "VaultTreeFolder" });
@@ -24,6 +28,7 @@ const props = withDefaults(
   defineProps<{
     folder: Folder;
     notes: Note[];
+    images: VaultImageFile[];
     depth?: number;
     showEmptyFolders?: boolean;
   }>(),
@@ -58,16 +63,26 @@ const directNotes = computed(() => props.notes
   .filter((note) => note.folderId === props.folder.id)
   .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true }) || a.id.localeCompare(b.id)));
 
+const currentFolderPath = computed(() => folderPath(props.folder.id));
+const directImages = computed(() => props.images
+  .filter((image) => image.relativePath.slice(0, image.relativePath.lastIndexOf("/")) === currentFolderPath.value)
+  .sort((left, right) => left.relativePath.localeCompare(right.relativePath)));
+
 const children = computed(() => folderChildren(props.folder.id)
   .filter((folder) => props.showEmptyFolders || branchContainsPassedNote(folder.id)));
 const moveDestinations = computed(() => vaultState.folders
   .filter((folder) => folder.id !== props.folder.id && !folderIsWithin(folder.id, props.folder.id))
   .sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
 
-const hasContents = computed(() => children.value.length > 0 || directNotes.value.length > 0);
+const hasContents = computed(() =>
+  children.value.length > 0 || directNotes.value.length > 0 || directImages.value.length > 0
+);
 const canExpand = computed(() => hasContents.value || subfolderInputOpen.value);
 const branchVisible = computed(() => props.showEmptyFolders || hasContents.value);
-const passedNoteIds = computed(() => props.notes.map((note) => note.id).sort().join("\u0000"));
+const passedContentKey = computed(() => [
+  ...props.notes.map((note) => `note:${note.id}`),
+  ...props.images.map((image) => `image:${image.relativePath}`),
+].sort().join("\u0000"));
 const activeNoteFolderId = computed(
   () => vaultState.notes.find((note) => note.id === vaultState.activeNoteId)?.folderId ?? null,
 );
@@ -82,7 +97,7 @@ watch(
 );
 
 watch(
-  passedNoteIds,
+  passedContentKey,
   () => {
     if (branchContainsPassedNote(props.folder.id)) {
       expanded.value = true;
@@ -102,9 +117,9 @@ watch(
 );
 
 watch(
-  () => [treeDragState.noteId, treeDragState.folderId] as const,
-  ([noteId, folderId]) => {
-    if (!noteId && !folderId) {
+  () => [treeDragState.noteId, treeDragState.folderId, treeDragState.imagePath] as const,
+  ([noteId, folderId, imagePath]) => {
+    if (!noteId && !folderId && !imagePath) {
       dropActive.value = false;
       dropInvalid.value = false;
       clearExpandTimer();
@@ -122,6 +137,11 @@ function branchContainsPassedNote(folderId: string, visited = new Set<string>())
     return false;
   }
   visited.add(folderId);
+
+  const path = folderPath(folderId);
+  if (props.images.some((image) => image.relativePath.startsWith(`${path}/`))) {
+    return true;
+  }
 
   return folderChildren(folderId).some((folder) => branchContainsPassedNote(folder.id, visited));
 }
@@ -146,9 +166,10 @@ function branchContainsFolder(folderId: string): boolean {
 function isTreeDrag(event: DragEvent): boolean {
   const types = Array.from(event.dataTransfer?.types ?? []);
 
-  return Boolean(treeDragState.noteId || treeDragState.folderId)
+  return Boolean(treeDragState.noteId || treeDragState.folderId || treeDragState.imagePath)
     || types.includes(NOTE_DRAG_MIME)
-    || types.includes(FOLDER_DRAG_MIME);
+    || types.includes(FOLDER_DRAG_MIME)
+    || types.includes(VAULT_IMAGE_DRAG_MIME);
 }
 
 function startFolderDrag(event: DragEvent): void {
@@ -161,6 +182,7 @@ function startFolderDrag(event: DragEvent): void {
   event.dataTransfer.setData(FOLDER_DRAG_MIME, props.folder.id);
   event.dataTransfer.setData("text/plain", props.folder.name);
   treeDragState.noteId = null;
+  treeDragState.imagePath = null;
   treeDragState.folderId = props.folder.id;
   dragging.value = true;
 }
@@ -179,6 +201,29 @@ function isInvalidFolderTarget(): boolean {
   const draggedFolderId = treeDragState.folderId;
 
   return draggedFolderId ? folderIsWithin(props.folder.id, draggedFolderId) : false;
+}
+
+function draggedImage(): VaultImageFile | undefined {
+  const relativePath = treeDragState.imagePath;
+  if (!relativePath) {
+    return undefined;
+  }
+
+  return vaultState.imageFiles.find((image) => image.relativePath === relativePath);
+}
+
+function isInvalidImageTarget(): boolean {
+  const image = draggedImage();
+  if (!image) {
+    return false;
+  }
+  const currentParent = image.relativePath.split("/").slice(0, -1).join("/");
+
+  return isMirrorManagedImage(image.relativePath) || currentParent === currentFolderPath.value;
+}
+
+function isInvalidDropTarget(): boolean {
+  return isInvalidFolderTarget() || isInvalidImageTarget();
 }
 
 function folderIsWithin(folderId: string, ancestorId: string): boolean {
@@ -222,7 +267,7 @@ function handleDragEnter(event: DragEvent): void {
   }
   event.preventDefault();
   event.stopPropagation();
-  dropInvalid.value = isInvalidFolderTarget();
+  dropInvalid.value = isInvalidDropTarget();
   dropActive.value = !dropInvalid.value;
   if (!dropInvalid.value) {
     scheduleExpand();
@@ -235,7 +280,7 @@ function handleDragOver(event: DragEvent): void {
   }
   event.preventDefault();
   event.stopPropagation();
-  dropInvalid.value = isInvalidFolderTarget();
+  dropInvalid.value = isInvalidDropTarget();
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = dropInvalid.value ? "none" : "move";
   }
@@ -255,9 +300,9 @@ function handleDragLeave(event: DragEvent): void {
   clearExpandTimer();
 }
 
-function handleDrop(event: DragEvent): void {
+async function handleDrop(event: DragEvent): Promise<void> {
   dropActive.value = false;
-  const invalid = dropInvalid.value || isInvalidFolderTarget();
+  const invalid = dropInvalid.value || isInvalidDropTarget();
   dropInvalid.value = false;
   clearExpandTimer();
   if (!isTreeDrag(event)) {
@@ -268,16 +313,28 @@ function handleDrop(event: DragEvent): void {
   if (invalid) {
     treeDragState.noteId = null;
     treeDragState.folderId = null;
+    treeDragState.imagePath = null;
 
     return;
   }
   const noteId = event.dataTransfer?.getData(NOTE_DRAG_MIME).trim() || treeDragState.noteId;
   const folderId = event.dataTransfer?.getData(FOLDER_DRAG_MIME).trim() || treeDragState.folderId;
-  const moved = noteId
-    ? moveNoteToFolder(noteId, props.folder.id)
-    : Boolean(folderId && moveFolder(folderId, props.folder.id));
+  const imagePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim()
+    || treeDragState.imagePath;
+  const image = imagePath
+    ? vaultState.imageFiles.find((candidate) => candidate.relativePath === imagePath)
+    : undefined;
+  let moved = false;
+  if (image) {
+    moved = await moveVaultImageToFolder(image, props.folder.id);
+  } else if (noteId) {
+    moved = await moveNoteToFolder(noteId, props.folder.id);
+  } else if (folderId) {
+    moved = moveFolder(folderId, props.folder.id);
+  }
   treeDragState.noteId = null;
   treeDragState.folderId = null;
+  treeDragState.imagePath = null;
   if (moved) {
     expanded.value = true;
   }
@@ -620,6 +677,7 @@ function removeFolder(): void {
           :key="child.id"
           :folder="child"
           :notes="notes"
+          :images="images"
           :depth="depth + 1"
           :show-empty-folders="showEmptyFolders"
         />
@@ -627,6 +685,12 @@ function removeFolder(): void {
           v-for="note in directNotes"
           :key="note.id"
           :note="note"
+          :depth="depth + 1"
+        />
+        <VaultTreeImage
+          v-for="image in directImages"
+          :key="image.relativePath"
+          :image="image"
           :depth="depth + 1"
         />
       </div>

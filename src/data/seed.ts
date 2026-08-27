@@ -80,7 +80,7 @@ Inside a table, press Tab or Shift+Tab to move between cells. Enter inserts a ro
 
 ### 5. Images
 
-In the desktop app, use the image button in the note toolbar, press **⌘/Ctrl Shift I**, or paste an image from the clipboard. The image file is copied into the vault and inserted using standard Markdown such as \`![Diagram](Assets/Diagram.png)\`. Choose whether new images go at the vault root, beside the current note, or in a specific vault folder under **Settings → Current vault**.
+In the desktop app, use the image button in the note toolbar, press **⌘/Ctrl Shift I**, or paste an image from the clipboard. The image file is copied into the vault and inserted using standard Markdown such as \`![Diagram](Assets/Diagram.png)\`. Choose whether new images go at the vault root, beside the current note, in a specific vault folder, or in a specific folder that mirrors the note's folder path under **Settings → Current vault**.
 
 Add an Obsidian-compatible suffix to the alt text to control its displayed size:
 
@@ -88,7 +88,7 @@ Add an Obsidian-compatible suffix to the alt text to control its displayed size:
 - \`![Diagram|300x200](Assets/Diagram.png)\` — 300 pixels wide and 200 pixels high
 - \`![Diagram|x200](Assets/Diagram.png)\` — 200 pixels high
 
-Images work on their own and inside lists, tasks, blockquotes, and tables. The app escapes the sizing separator when it inserts an image into a table. App-created references also contain an \`#oah-image=...\` fragment; leave it in place so the app can recover the image if its file is moved.
+Images work on their own and inside lists, tasks, blockquotes, and tables. The app escapes the sizing separator when it inserts an image into a table. App-created references also contain an \`#oah-image=...\` fragment; leave it in place so the app can recover a uniquely identifiable image if its file is renamed or moved. Image files remain in the left file tree after their final reference is removed; drag one from the tree into a note to use it again, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed or dragged between folders. Mirrored image folders are app-managed, so their images cannot be manually renamed or moved.
 
 ### 6. Quotes and code blocks
 
@@ -229,6 +229,7 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     recentNoteIds: ["note-getting-started"],
     selectedFolderId: "all",
     embeddedImages: [],
+    imageFiles: [],
     imageEmbedSettings: {
       location: "vault-root",
       folderPath: "",

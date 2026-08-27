@@ -27,6 +27,8 @@ pub fn run() {
             workspace::workspace_forget,
             workspace::workspace_revision,
             workspace::workspace_embed_image_file,
+            workspace::workspace_embed_vault_image,
+            workspace::workspace_relocate_image,
             workspace::workspace_embed_image_bytes,
             workspace::workspace_read_image,
             workspace::workspace_import_images,

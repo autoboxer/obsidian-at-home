@@ -1,4 +1,5 @@
 import { EditorView, WidgetType } from "@codemirror/view";
+import { NOTE_IMAGE_DRAG_MIME } from "./imageEmbeds";
 import type { Rect } from "@codemirror/view";
 import type { LiveMarkdownBlock } from "./liveMarkdown";
 import type { ParsedMarkdownImage } from "./markdownImages";
@@ -278,6 +279,7 @@ export class MarkdownImageWidget extends WidgetType {
     frame.dataset.imageAssetId = this.image.assetId ?? "";
     frame.dataset.imageDestination = this.image.destination;
     frame.setAttribute("contenteditable", "false");
+    frame.draggable = true;
     image.alt = this.image.alt;
     image.className = "live-embedded-image__content";
     image.decoding = "async";
@@ -303,9 +305,31 @@ export class MarkdownImageWidget extends WidgetType {
         this.image.alt ? `Could not load image: ${this.image.alt}` : "Could not load image",
       );
     }, { once: true });
-    frame.addEventListener("mousedown", (event) =>
+    frame.addEventListener("mousedown", (event) => {
+      if (event.button === 0) {
+        // Keep CodeMirror from replacing the widget before the browser can
+        // decide whether this pointer gesture is a click or a native drag.
+        event.stopPropagation();
+        view.focus();
+      }
+    });
+    frame.addEventListener("click", (event) =>
       revealWidgetSource(view, frame, event, this.from, this.to)
     );
+    frame.addEventListener("dragstart", (event) => {
+      if (!event.dataTransfer) {
+        return;
+      }
+      event.dataTransfer.clearData();
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData(NOTE_IMAGE_DRAG_MIME, JSON.stringify({
+        from: this.from,
+        to: this.to,
+      }));
+      event.dataTransfer.setData("text/plain", this.image.raw);
+      frame.classList.add("is-dragging");
+    });
+    frame.addEventListener("dragend", () => frame.classList.remove("is-dragging"));
     frame.append(image);
 
     void Promise.resolve()
@@ -354,12 +378,12 @@ function revealWidgetSource(
   const bounds = element.getBoundingClientRect();
   const approachFromLeft = event.clientX < bounds.left + bounds.width / 2;
   const position = approachFromLeft ? from : to;
+  view.focus();
   view.dispatch({
     selection: { anchor: position },
     scrollIntoView: true,
     userEvent: "select.pointer",
   });
-  view.focus();
 }
 
 function listControlCoordinates(
