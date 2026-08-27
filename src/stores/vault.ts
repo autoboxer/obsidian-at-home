@@ -1,8 +1,18 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { markdownLanguage } from "@codemirror/lang-markdown";
 import { computed, reactive, watch } from "vue";
 import { createEmptyVault, createSeedVault } from "../data/seed";
 import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from "../lib";
+import {
+  resolveMarkdownImagePath as resolveImportedMarkdownImagePath,
+} from "../lib/imageEmbeds";
+import { leadingFrontmatterEnd } from "../lib/frontmatter";
+import {
+  formatMarkdownImage,
+  parseMarkdownImageAt,
+  relativeImageDestination,
+} from "../lib/markdownImages";
 import {
   compareRecentlyDeletedNotes,
   readBrowserWorkspace,
@@ -11,6 +21,7 @@ import {
   writeBrowserWorkspace,
 } from "../services/browserWorkspace";
 import type { StoredBrowserWorkspace } from "../services/browserWorkspace";
+import type { ParsedMarkdownImage } from "../lib/markdownImages";
 import {
   captureNoteEditorPosition,
   deleteNoteEditorPosition,
@@ -32,12 +43,14 @@ import {
   deleteRecentlyDeletedNotes,
   forgetWorkspace,
   getWorkspaceRevision,
+  importWorkspaceImages,
   isTauri,
   openWorkspace,
   pickFolder,
   pruneRecentlyDeletedNotes,
   restoreRecentlyDeletedNote as restoreRecentlyDeletedNoteNative,
   saveWorkspace,
+  saveWorkspaceWithImageImport,
 } from "../services/native";
 import type {
   CssSnippet,
@@ -55,9 +68,9 @@ import type {
   VaultData,
   VaultDescriptor,
   VaultSessionState,
+  WorkspaceEmbedImageResult,
   WorkspaceLoad,
   WorkspaceSaveResult,
-  WorkspaceEmbedImageResult,
 } from "../types";
 
 const LEGACY_MIGRATED_KEY = "obsidian-at-home.vault.filesystem-migrated.v1";
@@ -95,6 +108,7 @@ interface UiState {
   frontmatterVisible: boolean;
   vaultChooserOpen: boolean;
   inspectorTab: "links" | "info";
+  imageRefreshToken: number;
   saveStatus: SaveStatus;
   lastSavedAt: number;
   zoom: number;
@@ -157,6 +171,7 @@ export const uiState = reactive<UiState>({
   frontmatterVisible: false,
   vaultChooserOpen: false,
   inspectorTab: "links",
+  imageRefreshToken: 0,
   saveStatus: "saved",
   lastSavedAt: Date.now(),
   zoom: readStoredZoom(),
@@ -506,6 +521,7 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
     const targetVersion = dirtyVersion;
     const currentRevision = await getWorkspaceRevision(path);
     const result = await saveWorkspace(path, snapshotVault(), currentRevision);
+    applySavedNotePaths(result.notePaths);
     vaultSession.revision = result.revision;
     vaultSession.error = null;
     vaultSession.conflict = false;
@@ -529,7 +545,7 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
   }
 }
 
-export async function flushVault(): Promise<boolean> {
+export async function flushVault(imageImportTransactionId?: string): Promise<boolean> {
   clearTimeout(persistTimer);
 
   if (recoverySaveInFlight) {
@@ -538,10 +554,12 @@ export async function flushVault(): Promise<boolean> {
       return false;
     }
 
-    return savedVersion < dirtyVersion ? flushVault() : true;
+    return savedVersion < dirtyVersion
+      ? flushVault(imageImportTransactionId)
+      : true;
   }
 
-  if (!initialized || savedVersion >= dirtyVersion) {
+  if (!initialized || (savedVersion >= dirtyVersion && !imageImportTransactionId)) {
     return true;
   }
 
@@ -551,7 +569,9 @@ export async function flushVault(): Promise<boolean> {
       return false;
     }
 
-    return savedVersion < dirtyVersion ? flushVault() : true;
+    return savedVersion < dirtyVersion
+      ? flushVault(imageImportTransactionId)
+      : true;
   }
 
   const targetVersion = dirtyVersion;
@@ -578,10 +598,37 @@ export async function flushVault(): Promise<boolean> {
     }
 
     try {
-      const result = await saveWorkspace(path, snapshot, vaultSession.revision);
+      let result: WorkspaceSaveResult;
+      if (imageImportTransactionId) {
+        const importResult = await saveWorkspaceWithImageImport(
+          path,
+          snapshot,
+          vaultSession.revision,
+          imageImportTransactionId,
+        );
+        if (!importResult.saved) {
+          if (generation !== sessionGeneration || path !== vaultSession.path) {
+            return false;
+          }
+          vaultSession.revision = importResult.revision;
+          vaultSession.warnings = importResult.warnings;
+          uiState.saveStatus = "error";
+          const message = importResult.error || "The imported notes could not be saved.";
+          vaultSession.error = message;
+          vaultSession.conflict = isRevisionConflict(message);
+          uiState.commandOpen = false;
+          notify(message, "warning");
+
+          return false;
+        }
+        result = importResult;
+      } else {
+        result = await saveWorkspace(path, snapshot, vaultSession.revision);
+      }
       if (generation !== sessionGeneration || path !== vaultSession.path) {
         return true;
       }
+      applySavedNotePaths(result.notePaths);
       vaultSession.revision = result.revision;
       vaultSession.error = null;
       vaultSession.conflict = false;
@@ -1363,26 +1410,84 @@ export function deleteSnippet(id: string): void {
 
 export async function mergeImportedVault(
   result: ImportResult,
+  sourcePath: string,
   replace = false,
-): Promise<{ noteCount: number; saved: boolean }> {
+): Promise<{ imageCount: number; noteCount: number; saved: boolean; warnings: string[] }> {
   return runExclusiveVaultDataOperation(
-    { noteCount: result.notes.length, saved: false },
-    () => mergeImportedVaultExclusive(result, replace),
+    { imageCount: 0, noteCount: result.notes.length, saved: false, warnings: [] },
+    () => mergeImportedVaultExclusive(result, sourcePath, replace),
   );
 }
 
 async function mergeImportedVaultExclusive(
   result: ImportResult,
+  sourcePath: string,
   replace: boolean,
-): Promise<{ noteCount: number; saved: boolean }> {
+): Promise<{ imageCount: number; noteCount: number; saved: boolean; warnings: string[] }> {
   if (!(await flushVault())) {
-    return { noteCount: result.notes.length, saved: false };
+    return { imageCount: 0, noteCount: result.notes.length, saved: false, warnings: [] };
   }
   clearTimeout(persistTimer);
-  const previousVault = snapshotVault();
   const previousSavedVersion = savedVersion;
   const previousActiveNoteId = vaultState.activeNoteId;
   const previousNoteNavigation = snapshotNoteNavigation();
+  const previousVault = snapshotVault();
+  let imageCount = 0;
+  let imageImportTransactionId: string | undefined;
+  const warnings: string[] = [];
+  const importedImagePaths = new Map(
+    result.images.map((image) => [
+      image.relativePath.toLowerCase(),
+      image.relativePath,
+    ]),
+  );
+  if (result.images.length) {
+    if (vaultSession.backend !== "native") {
+      warnings.push("The notes were imported, but their image files could not be copied here.");
+    } else if (!vaultSession.path || !sourcePath) {
+      const warning = "The import stopped because its image source was no longer available.";
+      warnings.push(warning);
+      notify(warning, "warning");
+
+      return { imageCount: 0, noteCount: 0, saved: false, warnings };
+    } else {
+      try {
+        const imageResult = await importWorkspaceImages(
+          vaultSession.path,
+          sourcePath,
+          result.images.map((image) => image.relativePath),
+          vaultSession.revision,
+        );
+        const returnedMappings = new Map(
+          Object.entries(imageResult.pathMappings).map(([source, target]) => [
+            source.toLowerCase(),
+            target,
+          ]),
+        );
+        if (result.images.some((image) =>
+          !returnedMappings.has(image.relativePath.toLowerCase())
+        )) {
+          throw new Error("A safe destination could not be reserved for every imported image.");
+        }
+        for (const [source, target] of returnedMappings) {
+          importedImagePaths.set(source, target);
+        }
+        applyWorkspaceSaveResult(imageResult);
+        uiState.imageRefreshToken += 1;
+        imageCount = imageResult.imageCount;
+        imageImportTransactionId = imageResult.transactionId;
+        warnings.push(...imageResult.warnings);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const warning = `The import stopped before its notes were added: ${detail}`;
+        warnings.push(warning);
+        notify(warning, "warning");
+
+        return { imageCount: 0, noteCount: 0, saved: false, warnings };
+      }
+    }
+  }
+
   if (replace) {
     vaultState.notes.splice(0);
     vaultState.folders.splice(0);
@@ -1393,11 +1498,17 @@ async function mergeImportedVaultExclusive(
   for (const imported of result.notes) {
     const folderId = ensureFolderPath(imported.folderPath);
     const title = uniqueNoteTitle(imported.title || "Untitled note");
+    const relativePath = importedNoteTargetPath(title, folderPath(folderId));
     const note: Note = {
       id: createId("note"),
       title,
-      content: imported.content,
-      relativePath: "",
+      content: rewriteImportedImageReferences(
+        imported.content,
+        imported.relativePath,
+        relativePath,
+        importedImagePaths,
+      ),
+      relativePath,
       folderId,
       tags: imported.tags,
       pinned: false,
@@ -1437,23 +1548,122 @@ async function mergeImportedVaultExclusive(
   if (!replace && firstImportedNoteId) {
     recordDirectNoteNavigation(previousActiveNoteId, firstImportedNoteId);
   }
-  const saved = await flushVault();
+  const saved = await flushVault(imageImportTransactionId);
   if (!saved) {
     hydrateVault(previousVault);
     restoreNoteNavigation(previousNoteNavigation);
     dirtyVersion = previousSavedVersion;
     savedVersion = previousSavedVersion;
+    uiState.imageRefreshToken += 1;
   }
   pruneNoteEditorPositions(currentEditorPositionVaultId(), vaultState.notes);
   pruneNoteEditorHistories(currentEditorPositionVaultId(), vaultState.notes);
   notify(
     saved
-      ? `Imported ${result.notes.length} Markdown ${result.notes.length === 1 ? "note" : "notes"}`
-      : "Import applied, but not saved",
-    saved ? "success" : "warning",
+      ? `Imported ${result.notes.length} Markdown ${
+        result.notes.length === 1 ? "note" : "notes"
+      }${imageCount ? ` and ${imageCount} ${imageCount === 1 ? "image" : "images"}` : ""}`
+      : "Import could not be completed",
+    saved && !warnings.length ? "success" : "warning",
   );
 
-  return { noteCount: result.notes.length, saved };
+  return {
+    imageCount: saved ? imageCount : 0,
+    noteCount: saved ? result.notes.length : 0,
+    saved,
+    warnings,
+  };
+}
+
+function rewriteImportedImageReferences(
+  content: string,
+  sourceNotePath: string,
+  targetNotePath: string,
+  imagePaths: ReadonlyMap<string, string>,
+): string {
+  const replacements: Array<{ from: number; to: number; value: string }> = [];
+  for (const image of parseImportedMarkdownImages(content)) {
+    const sourceImagePath = resolveImportedMarkdownImagePath(
+      sourceNotePath,
+      image.destination,
+    );
+    const targetImagePath = sourceImagePath
+      ? imagePaths.get(sourceImagePath.toLowerCase())
+      : undefined;
+    if (!targetImagePath) {
+      continue;
+    }
+    replacements.push({
+      from: image.start,
+      to: image.end + 1,
+      value: formatMarkdownImage({
+        alt: image.alt,
+        destination: relativeImageDestination(targetNotePath, targetImagePath),
+        ...(image.width ? { width: image.width } : {}),
+        ...(image.height ? { height: image.height } : {}),
+        ...(image.title !== undefined ? { title: image.title } : {}),
+        inTable: image.raw.includes("\\|"),
+      }),
+    });
+  }
+
+  let rewritten = content;
+  for (const replacement of replacements.reverse()) {
+    rewritten = `${rewritten.slice(0, replacement.from)}${replacement.value}${
+      rewritten.slice(replacement.to)
+    }`;
+  }
+
+  return rewritten;
+}
+
+function parseImportedMarkdownImages(source: string): ParsedMarkdownImage[] {
+  const bodyStart = leadingFrontmatterEnd(source) ?? 0;
+  const images: ParsedMarkdownImage[] = [];
+  markdownLanguage.parser.parse(source).iterate({
+    enter(node) {
+      if (node.name !== "Image" || node.from < bodyStart) {
+        return;
+      }
+      const image = parseMarkdownImageAt(source, node.from);
+      if (image && image.end + 1 === node.to) {
+        images.push(image);
+      }
+    },
+  });
+
+  return images;
+}
+
+function importedNoteTargetPath(title: string, folder: string): string {
+  const fileName = `${safeImportedNoteStem(title)}.md`;
+
+  return folder ? `${folder}/${fileName}` : fileName;
+}
+
+function safeImportedNoteStem(value: string): string {
+  const encoder = new TextEncoder();
+  let result = "";
+  let previousWasReplacement = false;
+  for (const character of value.trim()) {
+    if (/[\p{Cc}/\\:*?"<>|]/u.test(character)) {
+      if (!previousWasReplacement) {
+        result += "-";
+        previousWasReplacement = true;
+      }
+    } else {
+      result += character;
+      previousWasReplacement = false;
+    }
+    if (encoder.encode(result).length >= 120) {
+      break;
+    }
+  }
+  result = result.replace(/^[ .]+|[ .]+$/g, "") || "Untitled note";
+
+  return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(result)
+    ? `_${result}`
+    : result;
 }
 
 export function buildExportPayload(): {
@@ -1675,12 +1885,27 @@ async function reconcileNativeWorkspace(path: string): Promise<WorkspaceLoad | n
 }
 
 function applyWorkspaceSaveResult(result: WorkspaceSaveResult): void {
+  applySavedNotePaths(result.notePaths);
   vaultSession.revision = result.revision;
   vaultSession.error = null;
   vaultSession.conflict = false;
   vaultSession.warnings = result.warnings;
   uiState.saveStatus = savedVersion < dirtyVersion ? "saving" : "saved";
   uiState.lastSavedAt = result.savedAt || Date.now();
+}
+
+function applySavedNotePaths(notePaths: Record<string, string> | undefined): void {
+  if (!notePaths) {
+    return;
+  }
+  applyVaultMutation(() => {
+    for (const note of vaultState.notes) {
+      const relativePath = notePaths[note.id];
+      if (relativePath) {
+        note.relativePath = relativePath;
+      }
+    }
+  });
 }
 
 export function applyEmbeddedImageResult(result: WorkspaceEmbedImageResult): void {
@@ -1693,6 +1918,7 @@ export function applyEmbeddedImageResult(result: WorkspaceEmbedImageResult): voi
     }
   });
   applyWorkspaceSaveResult(result);
+  uiState.imageRefreshToken += 1;
 }
 
 function addVaultWarning(message: string): void {
@@ -2484,6 +2710,7 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
   const previousPath = vaultSession.path;
   sessionGeneration += 1;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
+  uiState.imageRefreshToken += 1;
   hydrateRecentlyDeletedNotes(workspace.recentlyDeletedNotes);
   initializeNoteEditorPositions(
     "native",

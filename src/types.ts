@@ -118,6 +118,7 @@ export interface WorkspaceBootstrap {
 }
 
 export interface WorkspaceSaveResult {
+  notePaths?: Record<string, string>;
   revision: number;
   savedAt: number;
   warnings: string[];
@@ -183,6 +184,10 @@ export interface ImportedNote {
   tags: string[];
 }
 
+export interface ImportedImage {
+  relativePath: string;
+}
+
 export interface ImportedSnippet {
   name: string;
   css: string;
@@ -191,6 +196,7 @@ export interface ImportedSnippet {
 
 export interface ImportResult {
   vaultName: string;
+  images: ImportedImage[];
   notes: ImportedNote[];
   snippets: ImportedSnippet[];
   warnings: string[];
@@ -216,8 +222,20 @@ export interface ExportSnippet {
 
 export interface ExportResult {
   path: string;
+  imageCount: number;
   noteCount: number;
   templateCount: number;
   snippetCount: number;
   warnings: string[];
+}
+
+export interface WorkspaceImportImagesResult extends WorkspaceSaveResult {
+  imageCount: number;
+  pathMappings: Record<string, string>;
+  transactionId?: string;
+}
+
+export interface WorkspaceImportSaveResult extends WorkspaceSaveResult {
+  saved: boolean;
+  error?: string;
 }

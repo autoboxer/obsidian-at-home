@@ -263,9 +263,12 @@ async function storeAndInsertImage(
   if (
     vaultSession.path !== context.vaultPath
     || activeNote.value?.id !== context.note.id
-    || context.note.relativePath !== context.noteRelativePath
   ) {
     throw new Error("The note or vault changed before the image could be embedded.");
+  }
+  context.noteRelativePath = context.note.relativePath;
+  if (!context.noteRelativePath) {
+    throw new Error("The note does not have a saved file path for the embedded image.");
   }
 
   const result = await embed(context, vaultSession.revision);
@@ -760,6 +763,7 @@ watch(tagInput, () => {
             ref="sourceEditor"
             :initial-position="savedEditorPosition(activeNote.id, activeNote.content)"
             :embedded-images="vaultState.embeddedImages"
+            :image-refresh-token="uiState.imageRefreshToken"
             :model-value="activeNote.content"
             :note-id="activeNote.id"
             :note-relative-path="activeNote.relativePath"

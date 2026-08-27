@@ -62,6 +62,40 @@ export function decodeMarkdownImageDestination(value: string): string {
   }
 }
 
+export function resolveMarkdownImagePath(
+  noteRelativePath: string,
+  destination: string,
+): string | undefined {
+  const decoded = decodeMarkdownImageDestination(destination);
+  if (
+    !decoded
+    || decoded.includes("\\")
+    || decoded.includes("#")
+    || decoded.includes("?")
+    || /[\u0000-\u001f\u007f]/u.test(decoded)
+    || /^[A-Za-z][A-Za-z\d+.-]*:/u.test(decoded)
+  ) {
+    return undefined;
+  }
+  const parts = decoded.startsWith("/")
+    ? []
+    : noteRelativePath.split("/").slice(0, -1);
+  for (const component of decoded.replace(/^\/+/, "").split("/")) {
+    if (!component || component === ".") {
+      continue;
+    }
+    if (component === "..") {
+      if (!parts.pop()) {
+        return undefined;
+      }
+    } else {
+      parts.push(component);
+    }
+  }
+
+  return parts.join("/");
+}
+
 export function imageAltFromPath(relativePath: string): string {
   const fileName = relativePath.split("/").at(-1) ?? "Image";
   const stem = fileName.replace(/\.[^.]+$/, "").trim();

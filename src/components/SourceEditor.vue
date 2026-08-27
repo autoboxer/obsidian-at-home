@@ -97,6 +97,7 @@ import AppIcon from "./AppIcon.vue";
 const props = defineProps<{
   initialPosition?: NoteEditorPosition;
   embeddedImages: EmbeddedImage[];
+  imageRefreshToken: number;
   modelValue: string;
   noteId: string;
   noteRelativePath: string;
@@ -136,6 +137,7 @@ let closeEditorHistory: ReturnType<typeof openNoteEditorHistory>["close"] | unde
 let viewportRestoreFrame: number | undefined;
 let imageInsertionSequence = 0;
 let imageResolverDisposed = false;
+let imageResolverGeneration = 0;
 
 interface PendingImageInsertion extends ImageInsertionCapture {
   from: number;
@@ -829,7 +831,8 @@ async function resolveLiveMarkdownImageSource(
     return source;
   }
 
-  const cacheKey = `${props.vaultPath}\u0000${props.noteRelativePath}\u0000${
+  const generation = imageResolverGeneration;
+  const cacheKey = `${generation}\u0000${props.vaultPath}\u0000${props.noteRelativePath}\u0000${
     image.assetId ?? ""
   }\u0000${image.destination}`;
   const cached = imageSourcePromises.get(cacheKey);
@@ -844,21 +847,33 @@ async function resolveLiveMarkdownImageSource(
       decodeMarkdownImageDestination(image.destination),
       image.assetId,
     );
+    if (imageResolverDisposed || generation !== imageResolverGeneration) {
+      throw new Error("The image changed before it finished loading.");
+    }
     const mediaType = props.embeddedImages.find((asset) => asset.id === image.assetId)?.mediaType
       ?? imageMediaTypeForPath(image.destination);
     const url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
-    if (imageResolverDisposed) {
-      URL.revokeObjectURL(url);
-      throw new Error("The image editor was closed before the image loaded.");
-    }
     imageObjectUrls.add(url);
 
     return url;
   })();
   imageSourcePromises.set(cacheKey, pending);
-  pending.catch(() => imageSourcePromises.delete(cacheKey));
+  pending.catch(() => {
+    if (imageSourcePromises.get(cacheKey) === pending) {
+      imageSourcePromises.delete(cacheKey);
+    }
+  });
 
   return pending;
+}
+
+function clearLiveMarkdownImageSources(): void {
+  imageResolverGeneration += 1;
+  imageSourcePromises.clear();
+  for (const url of imageObjectUrls) {
+    URL.revokeObjectURL(url);
+  }
+  imageObjectUrls.clear();
 }
 
 onMounted(() => {
@@ -1104,11 +1119,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   imageResolverDisposed = true;
   pendingImageInsertions.clear();
-  imageSourcePromises.clear();
-  for (const url of imageObjectUrls) {
-    URL.revokeObjectURL(url);
-  }
-  imageObjectUrls.clear();
+  clearLiveMarkdownImageSources();
   const view = editorView.value;
   const captureWasActive = removePositionCapture?.() ?? false;
   removePositionCapture = undefined;
@@ -1235,6 +1246,16 @@ watch(
     });
   },
   { deep: true },
+);
+
+watch(
+  () => props.imageRefreshToken,
+  () => {
+    clearLiveMarkdownImageSources();
+    editorView.value?.dispatch({
+      effects: refreshLiveMarkdownEffect.of(null),
+    });
+  },
 );
 
 function openLiveMarkdownLink(href: string): void {

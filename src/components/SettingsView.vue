@@ -222,7 +222,11 @@ async function chooseVaultToImport(): Promise<void> {
     feedback.value = {
       tone: result.warnings.length ? "warning" : "info",
       title: "Import ready to review",
-      message: `Obsidian At Home found ${formatCount(result.notes.length)} Markdown ${result.notes.length === 1 ? "note" : "notes"}. Choose how to bring them in.`,
+      message: `Obsidian At Home found ${formatCount(result.notes.length)} Markdown ${
+        result.notes.length === 1 ? "note" : "notes"
+      } and ${formatCount(result.images.length)} ${
+        result.images.length === 1 ? "image" : "images"
+      }. Choose how to bring them in.`,
     };
   } catch (error) {
     feedback.value = {
@@ -257,8 +261,13 @@ async function applyImport(replace: boolean): Promise<void> {
 
   activeTask.value = "import";
   try {
-    const { noteCount, saved } = await mergeImportedVault(result, replace);
-    const warnings = [...result.warnings];
+    const {
+      imageCount,
+      noteCount,
+      saved,
+      warnings: transferWarnings,
+    } = await mergeImportedVault(result, importSourcePath.value, replace);
+    const warnings = [...result.warnings, ...transferWarnings];
     if (saved) {
       importReview.value = null;
       importSourcePath.value = "";
@@ -272,7 +281,11 @@ async function applyImport(replace: boolean): Promise<void> {
         ? replace ? "Vault replaced" : "Vault merged"
         : "Import not applied",
       message: saved
-        ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"} copied from ${result.vaultName || "the selected vault"}.`
+        ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"}${
+          imageCount
+            ? ` and ${formatCount(imageCount)} ${imageCount === 1 ? "image was" : "images were"}`
+            : ""
+        } copied from ${result.vaultName || "the selected vault"}.`
         : "The current vault was restored because the imported notes could not be saved. Resolve the vault message, then try the import again.",
       warnings,
     };
@@ -288,7 +301,7 @@ async function applyImport(replace: boolean): Promise<void> {
 }
 
 async function exportVault(): Promise<void> {
-  if (!nativeAvailable || activeTask.value) {
+  if (!nativeAvailable || !vaultSession.path || activeTask.value) {
     return;
   }
 
@@ -312,6 +325,7 @@ async function exportVault(): Promise<void> {
 
     const result = await exportObsidianVault(
       parentPath,
+      vaultSession.path,
       vaultState.name,
       buildExportPayload(),
     );
@@ -319,7 +333,11 @@ async function exportVault(): Promise<void> {
     feedback.value = {
       tone: result.warnings.length ? "warning" : "success",
       title: "Portable vault created",
-      message: `Exported ${formatCount(result.noteCount)} Markdown ${result.noteCount === 1 ? "note" : "notes"} to a new folder.`,
+      message: `Exported ${formatCount(result.noteCount)} Markdown ${
+        result.noteCount === 1 ? "note" : "notes"
+      } and ${formatCount(result.imageCount)} ${
+        result.imageCount === 1 ? "image" : "images"
+      } to a new folder.`,
       warnings: result.warnings,
     };
   } catch (error) {
@@ -773,7 +791,7 @@ async function forgetVault(): Promise<void> {
             <div>
               <h3 class="settings-transfer-card__title">Import from Obsidian</h3>
               <p class="settings-transfer-card__description">
-                Copy Markdown notes, folders, frontmatter tags, and CSS snippets into this vault.
+                Copy Markdown notes, folders, embedded images, frontmatter tags, and CSS snippets into this vault.
               </p>
             </div>
           </div>
@@ -781,6 +799,7 @@ async function forgetVault(): Promise<void> {
           <ul class="settings-feature-list" aria-label="Imported content">
             <li><AppIcon name="check" :size="14" /> Original Markdown content</li>
             <li><AppIcon name="check" :size="14" /> Nested note folders</li>
+            <li><AppIcon name="check" :size="14" /> Embedded image files</li>
             <li><AppIcon name="check" :size="14" /> Enabled CSS snippet state</li>
           </ul>
 
@@ -818,7 +837,7 @@ async function forgetVault(): Promise<void> {
           <button
             type="button"
             class="settings-button settings-button--secondary settings-button--full"
-            :disabled="!nativeAvailable || activeTask !== null"
+            :disabled="!nativeAvailable || !vaultSession.path || activeTask !== null"
             @click="exportVault"
           >
             <AppIcon :name="activeTask === 'export' ? 'refresh' : 'export'" :size="17" />
@@ -835,7 +854,7 @@ async function forgetVault(): Promise<void> {
                 <code class="settings-export-receipt__path">{{ exportResult.path }}</code>
                 <span class="settings-export-receipt__counts">
                   {{ exportResult.noteCount }} notes · {{ exportResult.templateCount }} templates ·
-                  {{ exportResult.snippetCount }} snippets
+                  {{ exportResult.snippetCount }} snippets · {{ exportResult.imageCount }} images
                 </span>
               </div>
             </div>
@@ -882,6 +901,10 @@ async function forgetVault(): Promise<void> {
             <span>Nested folders</span>
           </div>
           <div class="settings-import-review__stat">
+            <strong>{{ formatCount(importReview.images.length) }}</strong>
+            <span>Images</span>
+          </div>
+          <div class="settings-import-review__stat">
             <strong>{{ formatCount(importReview.snippets.length) }}</strong>
             <span>CSS snippets</span>
           </div>
@@ -902,7 +925,7 @@ async function forgetVault(): Promise<void> {
 
         <div v-else class="settings-import-empty" role="note">
           <AppIcon name="info" :size="17" />
-          No Markdown notes were found. You can still import any discovered CSS snippets.
+          No Markdown notes were found. You can still import discovered images and CSS snippets.
         </div>
 
         <details v-if="importReview.warnings.length" class="settings-warning-details settings-warning-details--review">

@@ -14,6 +14,8 @@ import type {
   WorkspaceArchiveResult,
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
+  WorkspaceImportImagesResult,
+  WorkspaceImportSaveResult,
   WorkspaceLoad,
   WorkspaceRecoveryMutationResult,
   WorkspaceRestoreResult,
@@ -141,6 +143,20 @@ export async function saveWorkspace(
   expectedRevision: number,
 ): Promise<WorkspaceSaveResult> {
   return invoke<WorkspaceSaveResult>("workspace_save", { path, vault, expectedRevision });
+}
+
+export async function saveWorkspaceWithImageImport(
+  path: string,
+  vault: VaultData,
+  expectedRevision: number,
+  transactionId: string,
+): Promise<WorkspaceImportSaveResult> {
+  return invoke<WorkspaceImportSaveResult>("workspace_save_with_image_import", {
+    path,
+    vault,
+    expectedRevision,
+    transactionId,
+  });
 }
 
 export async function archiveWorkspaceNote(
@@ -276,8 +292,23 @@ export async function importObsidianVault(path: string): Promise<ImportResult> {
   return invoke<ImportResult>("import_obsidian_vault", { path });
 }
 
+export async function importWorkspaceImages(
+  path: string,
+  sourcePath: string,
+  imagePaths: string[],
+  expectedRevision: number,
+): Promise<WorkspaceImportImagesResult> {
+  return invoke<WorkspaceImportImagesResult>("workspace_import_images", {
+    path,
+    sourcePath,
+    imagePaths,
+    expectedRevision,
+  });
+}
+
 export async function exportObsidianVault(
   parentPath: string,
+  sourcePath: string,
   vaultName: string,
   payload: {
     notes: unknown[];
@@ -287,6 +318,7 @@ export async function exportObsidianVault(
 ): Promise<ExportResult> {
   return invoke<ExportResult>("export_obsidian_vault", {
     parentPath,
+    sourcePath,
     vaultName,
     ...payload,
   });

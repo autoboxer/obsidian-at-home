@@ -1,3 +1,4 @@
+use crate::workspace::{is_supported_image_path, validate_image_bytes, MAX_IMAGE_BYTES};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -11,6 +12,7 @@ use walkdir::{DirEntry, WalkDir};
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_SNIPPET_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TOTAL_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_IMPORTED_IMAGES: usize = 100_000;
 const MAX_IMPORTED_NOTES: usize = 100_000;
 const MAX_WARNINGS: usize = 200;
 
@@ -26,6 +28,12 @@ pub struct ImportedNote {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportedImage {
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultSnippet {
     pub name: String,
     pub css: String,
@@ -37,6 +45,7 @@ pub struct VaultSnippet {
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub vault_name: String,
+    pub images: Vec<ImportedImage>,
     pub notes: Vec<ImportedNote>,
     pub snippets: Vec<VaultSnippet>,
     pub warnings: Vec<String>,
@@ -66,6 +75,7 @@ pub struct ExportTemplate {
 #[serde(rename_all = "camelCase")]
 pub struct ExportResult {
     pub path: String,
+    pub image_count: usize,
     pub note_count: usize,
     pub template_count: usize,
     pub snippet_count: usize,
@@ -106,8 +116,9 @@ pub async fn pick_image_file(app: AppHandle) -> Result<Option<String>, String> {
 
 /// Reads an Obsidian vault without modifying it.
 ///
-/// Markdown is returned byte-for-byte as UTF-8 text. Frontmatter is only inspected to
-/// infer a display title and tags; the caller receives the original content unchanged.
+/// Markdown is returned byte-for-byte as UTF-8 text, and safe image paths are
+/// inventoried for a later confirmed copy. Frontmatter is only inspected to infer a
+/// display title and tags; the caller receives the original content unchanged.
 #[tauri::command]
 pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
     let root = validate_import_root(&path)?;
@@ -118,6 +129,7 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
         .unwrap_or("Imported vault")
         .to_owned();
 
+    let mut images = Vec::new();
     let mut notes = Vec::new();
     let mut warnings = WarningCollector::default();
     let mut total_bytes = 0_u64;
@@ -138,6 +150,18 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
         };
 
         if entry.file_type().is_symlink() || !entry.file_type().is_file() {
+            continue;
+        }
+        if is_supported_image_path(entry.path()) {
+            if images.len() >= MAX_IMPORTED_IMAGES {
+                warnings.push(format!(
+                    "Only the first {MAX_IMPORTED_IMAGES} images can be imported."
+                ));
+                continue;
+            }
+            if let Some(image) = inspect_portable_image(&root, &entry, &mut warnings) {
+                images.push(image);
+            }
             continue;
         }
         if !is_markdown_path(entry.path()) {
@@ -232,29 +256,36 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
         });
     }
 
+    images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let snippets = import_snippets(&root, &mut warnings);
 
     Ok(ImportResult {
         vault_name,
+        images,
         notes,
         snippets,
         warnings: warnings.finish(),
     })
 }
 
-/// Writes a portable Obsidian vault into a newly-created child of `parent_path`.
-/// Existing files and directories are never reused or overwritten.
+/// Writes a portable Obsidian vault, including supported image files, into a
+/// newly-created child of `parent_path`. Existing files and directories are
+/// never reused or overwritten.
 #[tauri::command(rename_all = "camelCase")]
 pub fn export_obsidian_vault(
     parent_path: String,
+    source_path: String,
     vault_name: String,
     notes: Vec<ExportNote>,
     templates: Vec<ExportTemplate>,
     snippets: Vec<VaultSnippet>,
 ) -> Result<ExportResult, String> {
     let parent = validate_export_parent(&parent_path)?;
+    let source_root = validate_import_root(&source_path)?;
     validate_vault_name(&vault_name)?;
+    let mut warnings = WarningCollector::default();
+    let images = collect_portable_images(&source_root, &mut warnings);
 
     let root = create_unique_export_dir(&parent, vault_name.trim()).map_err(|error| {
         format!(
@@ -263,7 +294,6 @@ pub fn export_obsidian_vault(
         )
     })?;
 
-    let mut warnings = WarningCollector::default();
     let mut note_count = 0;
     let mut template_count = 0;
     let mut snippet_count = 0;
@@ -400,8 +430,11 @@ pub fn export_obsidian_vault(
         }
     }
 
+    let image_count = export_portable_images(&source_root, &root, &images, &mut warnings);
+
     Ok(ExportResult {
         path: root.to_string_lossy().into_owned(),
+        image_count,
         note_count,
         template_count,
         snippet_count,
@@ -501,6 +534,7 @@ fn should_visit_note_entry(entry: &DirEntry) -> bool {
         let name = entry.file_name().to_string_lossy();
 
         return !name.eq_ignore_ascii_case(".obsidian")
+            && !name.eq_ignore_ascii_case(".git")
             && !name.eq_ignore_ascii_case(".trash")
             && !name.eq_ignore_ascii_case(".obsidian-at-home");
     }
@@ -514,6 +548,171 @@ fn is_markdown_path(path: &Path) -> bool {
             extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
         })
         .unwrap_or(false)
+}
+
+fn collect_portable_images(
+    root: &Path,
+    warnings: &mut WarningCollector,
+) -> Vec<ImportedImage> {
+    let mut images = Vec::new();
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .max_depth(128)
+        .into_iter()
+        .filter_entry(should_visit_note_entry)
+    {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!("Could not inspect a vault entry: {error}"));
+                continue;
+            }
+        };
+        if entry.file_type().is_symlink()
+            || !entry.file_type().is_file()
+            || !is_supported_image_path(entry.path())
+        {
+            continue;
+        }
+        if images.len() >= MAX_IMPORTED_IMAGES {
+            warnings.push(format!(
+                "Only the first {MAX_IMPORTED_IMAGES} images can be transferred."
+            ));
+            continue;
+        }
+        if let Some(image) = inspect_portable_image(root, &entry, warnings) {
+            images.push(image);
+        }
+    }
+    images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    images
+}
+
+fn inspect_portable_image(
+    root: &Path,
+    entry: &DirEntry,
+    warnings: &mut WarningCollector,
+) -> Option<ImportedImage> {
+    let metadata = match entry.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            warnings.push(format!(
+                "Skipped {} because its metadata could not be read: {error}",
+                display_relative(root, entry.path())
+            ));
+            return None;
+        }
+    };
+    if metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
+        warnings.push(format!(
+            "Skipped {} because images must be between 1 byte and {} MiB.",
+            display_relative(root, entry.path()),
+            MAX_IMAGE_BYTES / 1024 / 1024
+        ));
+        return None;
+    }
+    let Some(relative_path) = entry
+        .path()
+        .strip_prefix(root)
+        .ok()
+        .and_then(path_to_slash_string)
+    else {
+        warnings.push(format!(
+            "Skipped an image whose path is not valid Unicode: {}",
+            entry.path().display()
+        ));
+        return None;
+    };
+    if let Err(reason) = checked_relative_image_path(&relative_path) {
+        warnings.push(format!(
+            "Skipped {relative_path} because its image path is unsafe: {reason}"
+        ));
+        return None;
+    }
+    Some(ImportedImage { relative_path })
+}
+
+fn export_portable_images(
+    source_root: &Path,
+    export_root: &Path,
+    images: &[ImportedImage],
+    warnings: &mut WarningCollector,
+) -> usize {
+    let mut copied = 0;
+    for image in images {
+        let relative = match checked_relative_image_path(&image.relative_path) {
+            Ok(relative) => relative,
+            Err(reason) => {
+                warnings.push(format!(
+                    "Skipped {} because its image path is unsafe: {reason}",
+                    image.relative_path
+                ));
+                continue;
+            }
+        };
+        let source = match resolve_portable_source_image(source_root, &relative) {
+            Ok(source) => source,
+            Err(error) => {
+                warnings.push(format!("Skipped {}: {error}", image.relative_path));
+                continue;
+            }
+        };
+        let bytes = match fs::read(&source) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                warnings.push(format!("Could not read {}: {error}", image.relative_path));
+                continue;
+            }
+        };
+        if let Err(error) = validate_image_bytes(&bytes, Some(&image.relative_path)) {
+            warnings.push(format!("Skipped {}: {error}", image.relative_path));
+            continue;
+        }
+
+        let target = export_root.join(&relative);
+        if let Some(parent) = target.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
+                warnings.push(format!(
+                    "Could not create the folder for {}: {error}",
+                    image.relative_path
+                ));
+                continue;
+            }
+        }
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(file) => file,
+            Err(error) => {
+                warnings.push(format!("Could not export {}: {error}", image.relative_path));
+                continue;
+            }
+        };
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&target);
+            warnings.push(format!("Could not export {}: {error}", image.relative_path));
+            continue;
+        }
+        copied += 1;
+    }
+    copied
+}
+
+fn resolve_portable_source_image(root: &Path, relative: &Path) -> Result<PathBuf, String> {
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("the source image could not be inspected: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err("symbolic links are not followed".to_owned());
+        }
+    }
+    let metadata = fs::symlink_metadata(&current)
+        .map_err(|error| format!("the source image could not be inspected: {error}"))?;
+    if !metadata.is_file() {
+        return Err("the source image is not a regular file".to_owned());
+    }
+    Ok(current)
 }
 
 fn import_snippets(root: &Path, warnings: &mut WarningCollector) -> Vec<VaultSnippet> {
@@ -864,6 +1063,40 @@ fn checked_relative_folder(folder: &str) -> Result<PathBuf, String> {
     Ok(result)
 }
 
+fn checked_relative_image_path(path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() || path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
+        return Err("absolute paths and backslashes are not allowed".to_owned());
+    }
+    let candidate = Path::new(path);
+    if !is_supported_image_path(candidate) {
+        return Err("the file extension is not a supported image type".to_owned());
+    }
+    let file_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .ok_or_else(|| "the image file name is invalid".to_owned())?;
+    if file_name.len() > 255
+        || file_name.ends_with('.')
+        || file_name.ends_with(' ')
+        || file_name.chars().any(|character| {
+            character.is_control()
+                || matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+        || is_windows_reserved_name(file_name)
+    {
+        return Err("the image file name is not portable".to_owned());
+    }
+    let folder = candidate
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    let mut relative = checked_relative_folder(&folder)?;
+    relative.push(file_name);
+    Ok(relative)
+}
+
 fn safe_file_stem(input: &str, fallback: &str) -> String {
     let input = strip_extension_case_insensitive(input.trim(), "md");
     let mut result = String::with_capacity(input.len().min(120));
@@ -1181,7 +1414,9 @@ mod tests {
     fn imports_nested_notes_and_snippet_state() {
         let vault = TempDirectory::new("import");
         fs::create_dir_all(vault.path().join("Projects/Alpha")).unwrap();
+        fs::create_dir_all(vault.path().join("Assets")).unwrap();
         fs::create_dir_all(vault.path().join(".trash")).unwrap();
+        fs::create_dir_all(vault.path().join(".git")).unwrap();
         fs::create_dir_all(
             vault
                 .path()
@@ -1191,10 +1426,20 @@ mod tests {
         fs::create_dir_all(vault.path().join(".obsidian/snippets")).unwrap();
         fs::write(
             vault.path().join("Projects/Alpha/Plan.md"),
-            "---\ntitle: Alpha plan\ntags: [work]\n---\nSee [[Home]].",
+            "---\ntitle: Alpha plan\ntags: [work]\n---\n![Diagram](../../Assets/diagram.png)",
+        )
+        .unwrap();
+        fs::write(
+            vault.path().join("Assets/diagram.png"),
+            b"\x89PNG\r\n\x1a\nportable-image",
         )
         .unwrap();
         fs::write(vault.path().join(".trash/Deleted.md"), "deleted").unwrap();
+        fs::write(
+            vault.path().join(".git/private.png"),
+            b"\x89PNG\r\n\x1a\nprivate-image",
+        )
+        .unwrap();
         fs::write(
             vault
                 .path()
@@ -1218,7 +1463,13 @@ mod tests {
         assert_eq!(result.notes.len(), 1);
         assert_eq!(result.notes[0].folder_path, "Projects/Alpha");
         assert_eq!(result.notes[0].relative_path, "Projects/Alpha/Plan.md");
-        assert!(result.notes[0].content.ends_with("See [[Home]]."));
+        assert!(result.notes[0].content.ends_with("![Diagram](../../Assets/diagram.png)"));
+        assert_eq!(
+            result.images,
+            vec![ImportedImage {
+                relative_path: "Assets/diagram.png".into(),
+            }]
+        );
         assert_eq!(result.snippets.len(), 1);
         assert!(result.snippets[0].enabled);
     }
@@ -1226,8 +1477,16 @@ mod tests {
     #[test]
     fn exports_obsidian_compatible_structure_and_avoids_note_collisions() {
         let parent = TempDirectory::new("export");
+        let source = TempDirectory::new("export-source");
+        fs::create_dir_all(source.path().join("Assets")).unwrap();
+        fs::write(
+            source.path().join("Assets/diagram.png"),
+            b"\x89PNG\r\n\x1a\nportable-image",
+        )
+        .unwrap();
         let result = export_obsidian_vault(
             parent.path().to_string_lossy().into_owned(),
+            source.path().to_string_lossy().into_owned(),
             "Ideas".into(),
             vec![
                 ExportNote {
@@ -1257,6 +1516,7 @@ mod tests {
 
         let root = PathBuf::from(&result.path);
         assert_eq!(result.note_count, 2);
+        assert_eq!(result.image_count, 1);
         assert_eq!(result.template_count, 1);
         assert_eq!(result.snippet_count, 1);
         assert!(root.join("Projects/Alpha/First note.md").is_file());
@@ -1266,6 +1526,10 @@ mod tests {
             "# {{date}}"
         );
         assert!(root.join(".obsidian/snippets/focus.css").is_file());
+        assert_eq!(
+            fs::read(root.join("Assets/diagram.png")).unwrap(),
+            b"\x89PNG\r\n\x1a\nportable-image"
+        );
         let appearance = fs::read_to_string(root.join(".obsidian/appearance.json")).unwrap();
         assert!(appearance.contains("focus"));
     }
@@ -1278,9 +1542,15 @@ mod tests {
         let vault = TempDirectory::new("symlink-vault");
         let outside = TempDirectory::new("symlink-outside");
         fs::write(outside.path().join("Private.md"), "do not import").unwrap();
+        fs::write(
+            outside.path().join("Private.png"),
+            b"\x89PNG\r\n\x1a\nprivate-image",
+        )
+        .unwrap();
         symlink(outside.path(), vault.path().join("linked")).unwrap();
 
         let result = import_obsidian_vault(vault.path().to_string_lossy().into_owned()).unwrap();
         assert!(result.notes.is_empty());
+        assert!(result.images.is_empty());
     }
 }
