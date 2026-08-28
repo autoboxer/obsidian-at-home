@@ -27,6 +27,7 @@ function startDrag(event: DragEvent): void {
   event.dataTransfer.setData("text/plain", props.note.title || "Untitled note");
   treeDragState.noteId = props.note.id;
   treeDragState.folderId = null;
+  treeDragState.imagePath = null;
   dragging.value = true;
 }
 

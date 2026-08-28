@@ -25,8 +25,8 @@ Use the vault name at the top of the left panel to switch between recent vaults,
 
 - **Create vault** makes a new folder for Markdown notes.
 - **Open folder** edits the Markdown files in that folder directly.
-- **Import from Obsidian** copies selected notes into the current vault; it does not change the source folder.
-- **Export portable vault** creates a separate copy that Obsidian can open.
+- **Import from Obsidian** copies selected notes and their image files into the current vault; it does not change the source folder.
+- **Export portable vault** creates a separate copy, including image files, that Obsidian can open.
 
 ## Organize notes
 
@@ -78,7 +78,19 @@ Press Enter at the end of a list item to continue the list. Press Tab or Shift+T
 
 Inside a table, press Tab or Shift+Tab to move between cells. Enter inserts a row below the current row and moves to its first cell; Backspace in the first cell of an empty body row removes that row; Shift+Enter adds a line break inside a cell. Use Up Arrow or Down Arrow to move within a column. Down Arrow from the final row exits below the table.
 
-### 5. Quotes and code blocks
+### 5. Images
+
+In the desktop app, use the image button in the note toolbar, press **⌘/Ctrl Shift I**, or paste an image from the clipboard. The image file is copied into the vault and inserted using standard Markdown such as \`![Diagram](Assets/Diagram.png)\`. Choose whether new images go at the vault root, beside the current note, in a specific vault folder, or in a specific folder that mirrors the note's folder path under **Settings → Current vault**.
+
+Add an Obsidian-compatible suffix to the alt text to control its displayed size:
+
+- \`![Diagram|300](Assets/Diagram.png)\` — 300 pixels wide
+- \`![Diagram|300x200](Assets/Diagram.png)\` — 300 pixels wide and 200 pixels high
+- \`![Diagram|x200](Assets/Diagram.png)\` — 200 pixels high
+
+Images work on their own and inside lists, tasks, blockquotes, and tables. The app escapes the sizing separator when it inserts an image into a table. App-created references also contain an \`#oah-image=...\` fragment; leave it in place so the app can recover a uniquely identifiable image if its file is renamed or moved. Image files remain in the left file tree after their final reference is removed; drag one from the tree into a note to use it again, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed or dragged between folders. Mirrored image folders are app-managed, so their images cannot be manually renamed or moved.
+
+### 6. Quotes and code blocks
 
 > Start a line with \`>\` to create a blockquote.
 
@@ -93,7 +105,7 @@ Type three backticks and press Enter to insert a complete fenced block. Add a su
 - Web and data: \`vue\`, \`html\`, \`xml\`, \`svg\`, \`xhtml\`, \`plist\`, \`css\`, \`json\`, \`yaml\`, \`toml\`, \`graphql\`, \`http\`, and \`markdown\`
 - Tooling: \`dockerfile\`, \`diff\`, \`makefile\`, \`nginx\`, and \`protobuf\`
 
-For a broader syntax reference, see the [CommonMark Markdown Reference](https://commonmark.org/help/). Raw HTML, images, footnotes, and reference-style links are not supported.
+For a broader syntax reference, see the [CommonMark Markdown Reference](https://commonmark.org/help/). Raw HTML, footnotes, and reference-style links are not supported.
 
 ## Useful shortcuts
 
@@ -104,6 +116,8 @@ For a broader syntax reference, see the [CommonMark Markdown Reference](https://
 - **⌘/Ctrl B** — toggle bold text
 - **⌘/Ctrl I** — toggle italic text
 - **⌘/Ctrl K** — create a Markdown link
+- **⌘/Ctrl Shift I** — choose and embed an image
+- **⌘/Ctrl V** — embed an image when the clipboard contains one
 - **⌘/Ctrl Shift X** — toggle strikethrough text
 - **⌘/Ctrl F** — find text in the current note; use Tab/Shift+Tab, Enter/Shift+Enter, or F3/Shift+F3 to move through matches
 - **Select text, then press Backtick** — wrap it as inline code
@@ -214,6 +228,12 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     activeNoteId: "note-getting-started",
     recentNoteIds: ["note-getting-started"],
     selectedFolderId: "all",
+    embeddedImages: [],
+    imageFiles: [],
+    imageEmbedSettings: {
+      location: "vault-root",
+      folderPath: "",
+    },
   };
 }
 

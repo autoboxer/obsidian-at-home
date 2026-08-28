@@ -11,12 +11,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             appearance::list_system_fonts,
             vault::pick_folder,
+            vault::pick_image_file,
             vault::import_obsidian_vault,
             vault::export_obsidian_vault,
             workspace::workspace_bootstrap,
             workspace::workspace_open,
             workspace::workspace_create,
             workspace::workspace_save,
+            workspace::workspace_save_with_image_import,
             workspace::workspace_archive_note,
             workspace::workspace_restore_recently_deleted_note,
             workspace::workspace_delete_recently_deleted_notes,
@@ -24,6 +26,12 @@ pub fn run() {
             workspace::workspace_save_editor_positions,
             workspace::workspace_forget,
             workspace::workspace_revision,
+            workspace::workspace_embed_image_file,
+            workspace::workspace_embed_vault_image,
+            workspace::workspace_relocate_image,
+            workspace::workspace_embed_image_bytes,
+            workspace::workspace_read_image,
+            workspace::workspace_import_images,
         ])
         .run(tauri::generate_context!())
         .expect("Obsidian At Home failed to start");

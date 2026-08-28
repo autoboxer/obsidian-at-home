@@ -24,6 +24,7 @@ import { liveMarkdownHeadingFoldingExtension } from "./liveMarkdownHeadingFoldin
 import {
   HorizontalRuleWidget,
   ListMarkerWidget,
+  MarkdownImageWidget,
   QuoteMarkerWidget,
   renderedListMarker,
   TaskWidget,
@@ -36,7 +37,8 @@ import {
   TableCellBreakWidget,
   TableDelimiterWidget,
 } from "./liveMarkdownRegionWidgets";
-import { sanitizeLinkUrl } from "./markdown";
+import { sanitizeImageUrl, sanitizeLinkUrl } from "./markdown";
+import { parseMarkdownImageAt } from "./markdownImages";
 import { parseWikiLinks } from "./wikiLinks";
 import type {
   Extension,
@@ -52,6 +54,7 @@ import type {
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import type { InlineMarkupKind } from "./inlineMarkup";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
+import type { MarkdownImageSourceResolver } from "./liveMarkdownCodeMirrorWidgets";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
 import type {
   LiveMarkdownTable,
@@ -63,6 +66,7 @@ export interface LiveMarkdownOptions {
   readonly documentId: string;
   readonly openLink: (href: string) => void;
   readonly openWiki: (target: string, heading?: string) => void;
+  readonly resolveImageSource?: MarkdownImageSourceResolver;
   readonly wikiLinkIsResolved: (target: string) => boolean;
 }
 
@@ -105,6 +109,8 @@ interface LiveMarkdownModel {
 }
 
 const LIST_INDENT_STEP_EM = 1.65;
+const defaultMarkdownImageSource: MarkdownImageSourceResolver = (image) =>
+  sanitizeImageUrl(image.destination);
 const inlineMarkupSpanCache = new WeakMap<Text, InlineMarkupSpan[]>();
 const inlineMarkupFirstClick = new WeakMap<
   EditorView,
@@ -1011,6 +1017,8 @@ function parseLiveMarkdownModel(
     excludedRanges,
     wikiRanges,
     inlineMarkupExcludedRanges,
+    options,
+    wikiResolutionVersion,
   );
 
   return model;
@@ -1467,6 +1475,7 @@ function supportedMarkdownLinkRanges(
       }
       if (
         reference.name !== "Autolink" &&
+        reference.name !== "Image" &&
         reference.name !== "Link"
       ) {
         return undefined;
@@ -1534,6 +1543,8 @@ function addInlineDecorations(
   excludedRanges: readonly LiveMarkdownRange[],
   wikiRanges: readonly LiveMarkdownRange[],
   inlineMarkupExcludedRanges: readonly LiveMarkdownRange[],
+  options: LiveMarkdownOptions,
+  resolutionVersion: number,
 ): void {
   const syntaxSpans: InlineMarkupSpan[] = [];
 
@@ -1557,6 +1568,17 @@ function addInlineDecorations(
       }
       if (rangeOverlapsAny(range, wikiRanges)) {
         return undefined;
+      }
+      if (node.name === "Image") {
+        addMarkdownImageDecoration(
+          model,
+          node,
+          value,
+          options,
+          resolutionVersion,
+        );
+
+        return false;
       }
       const span = inlineMarkupSpan(node, state);
       if (span) {
@@ -1584,6 +1606,36 @@ function addInlineDecorations(
   for (const span of pairedSpans) {
     addInlineMarkupDecoration(model, span);
   }
+}
+
+function addMarkdownImageDecoration(
+  model: LiveMarkdownModel,
+  node: SyntaxNodeRef,
+  value: string,
+  options: LiveMarkdownOptions,
+  resolutionVersion: number,
+): void {
+  const image = parseMarkdownImageAt(value, node.from);
+  if (!image || image.end + 1 !== node.to) {
+    return;
+  }
+
+  const resolveSource = options.resolveImageSource ?? defaultMarkdownImageSource;
+  const range = { from: node.from, to: node.to };
+  addConstruct(model, range.from, range.to, [{
+    ...range,
+    widget: new MarkdownImageWidget(
+      image,
+      resolveSource,
+      range.from,
+      range.to,
+      resolutionVersion,
+    ),
+  }], [], {
+    atomicRanges: [range],
+    boundaryReveal: "construct",
+    revealWhenSelectedWithin: true,
+  });
 }
 
 function addInlineMarkupDecoration(

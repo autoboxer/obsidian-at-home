@@ -16,7 +16,7 @@
 
 Notes stay as Markdown files in folders you choose. No account is required, and notes are not sent to a server.
 
-This is not a complete Obsidian replacement: cloud sync, attachments, graph view, automation, and community plugins are not supported.
+This is not a complete Obsidian replacement: cloud sync, non-image attachments, graph view, automation, and community plugins are not supported.
 
 > [!NOTE]
 > This project is not affiliated with or endorsed by Obsidian or Dynalist Inc.
@@ -26,6 +26,7 @@ This is not a complete Obsidian replacement: cloud sync, attachments, graph view
 - Create, open, and switch between vaults of ordinary `.md` and `.markdown` files.
 - Organize notes in nested folders with drag-and-drop and right-click file actions.
 - Write in a unified live Markdown editor with inline formatting, interactive task checkboxes, tables, spellcheck, syntax-highlighted fenced code blocks, and find-in-note.
+- Embed local images from a file or the clipboard, resize them in Markdown, and keep their files with the vault.
 - Move through note history with back and forward controls, or revisit notes from **Recent notes**.
 - Return to each note's cursor and scroll position, even after restarting the app.
 - Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
@@ -42,10 +43,18 @@ Each vault is a folder on your computer. Notes are ordinary Markdown files you c
 
 Open an existing Markdown or Obsidian vault directly, or use Settings to:
 
-- **Import from Obsidian** copies notes, folders, and CSS snippets into the current vault. Notes can be merged or replaced; the source is unchanged.
-- **Export portable vault** creates an Obsidian-compatible copy of notes, templates, and CSS snippets without overwriting existing folders.
+- **Import from Obsidian** copies notes, folders, supported image files, and CSS snippets into the current vault. Notes can be merged or replaced; the source is unchanged.
+- **Export portable vault** creates an Obsidian-compatible copy of notes, image files, templates, and CSS snippets without overwriting existing folders.
 
-Neither option copies attachments, Canvas files, themes, plugins, hotkeys, or workspace settings. They are not backup or sync tools.
+Neither option copies non-image attachments, Canvas files, themes, plugins, hotkeys, or workspace settings. They are not backup or sync tools.
+
+### Embedded images
+
+Use the image button, press `Ctrl/Cmd` + `Shift` + `I`, or paste an image from the clipboard. Images use standard Markdown paths such as `![Diagram](Assets/Diagram.png)`. Optional Obsidian-compatible alt-text suffixes set the displayed width, height, or both: `![Diagram|300](...)`, `![Diagram|x200](...)`, and `![Diagram|300x200](...)`.
+
+Settings can store new images at the vault root, beside the containing note, in a chosen vault-relative folder, or in that chosen folder with the note's folder path mirrored below it. App-created references include an `#oah-image=...` fragment so the app can recover a uniquely identifiable renamed or moved image while retaining a portable relative path for other Markdown readers.
+
+Supported image files appear in the left file tree. Drag an image from the tree into a note to insert another reference without duplicating the file, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed from the tree or dragged between folders; references update with the file. A mirrored image folder is app-managed, so its images cannot be manually renamed or moved. Removing the final reference does not delete the image, so an unused image remains available in the tree until it is removed from the vault explicitly.
 
 ## Build and install
 

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { formatCommandShortcut } from "../lib/keyboard";
+import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
 import {
   createFolder,
   createNote,
   FOLDER_DRAG_MIME,
+  isMirrorManagedImage,
   moveFolder,
+  moveVaultImageToFolder,
   moveNoteToFolder,
   NOTE_DRAG_MIME,
   openRecentlyDeletedWorkspace,
@@ -20,6 +23,7 @@ import {
 } from "../stores/vault";
 import AppIcon from "./AppIcon.vue";
 import VaultTreeFolder from "./VaultTreeFolder.vue";
+import VaultTreeImage from "./VaultTreeImage.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
 
 const createNoteShortcut = formatCommandShortcut("N");
@@ -87,6 +91,21 @@ const rootNotes = computed(() => [...visibleNotes.value]
   .filter((note) => note.folderId === null)
   .sort((a, b) => a.title.localeCompare(b.title)));
 
+const visibleImages = computed(() => {
+  if (vaultState.selectedFolderId !== "all") {
+    return [];
+  }
+  const filter = uiState.noteFilter.trim().toLocaleLowerCase();
+
+  return [...vaultState.imageFiles]
+    .filter((image) => !filter || image.relativePath.toLocaleLowerCase().includes(filter))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+});
+
+const rootImages = computed(() => visibleImages.value.filter((image) =>
+  !image.relativePath.includes("/"),
+));
+
 const emptyTreeMessage = computed(() => {
   if (vaultState.selectedFolderId === "recent") {
     return "No recent notes";
@@ -124,9 +143,9 @@ const emptyTreeIcon = computed(() => {
 });
 
 watch(
-  () => [treeDragState.noteId, treeDragState.folderId] as const,
-  ([noteId, folderId]) => {
-    if (!noteId && !folderId) {
+  () => [treeDragState.noteId, treeDragState.folderId, treeDragState.imagePath] as const,
+  ([noteId, folderId, imagePath]) => {
+    if (!noteId && !folderId && !imagePath) {
       rootDropActive.value = false;
       rootDropInvalid.value = false;
     }
@@ -167,9 +186,10 @@ function openVaultChooser(): void {
 function isTreeDrag(event: DragEvent): boolean {
   const types = Array.from(event.dataTransfer?.types ?? []);
 
-  return Boolean(treeDragState.noteId || treeDragState.folderId)
+  return Boolean(treeDragState.noteId || treeDragState.folderId || treeDragState.imagePath)
     || types.includes(NOTE_DRAG_MIME)
-    || types.includes(FOLDER_DRAG_MIME);
+    || types.includes(FOLDER_DRAG_MIME)
+    || types.includes(VAULT_IMAGE_DRAG_MIME);
 }
 
 function handleRootDragEnter(event: DragEvent): void {
@@ -204,7 +224,7 @@ function handleRootDragLeave(event: DragEvent): void {
   rootDropInvalid.value = false;
 }
 
-function handleRootDrop(event: DragEvent): void {
+async function handleRootDrop(event: DragEvent): Promise<void> {
   rootDropActive.value = false;
   const invalid = rootDropInvalid.value || isInvalidRootFolderDrop();
   rootDropInvalid.value = false;
@@ -216,22 +236,39 @@ function handleRootDrop(event: DragEvent): void {
   if (invalid) {
     treeDragState.noteId = null;
     treeDragState.folderId = null;
+    treeDragState.imagePath = null;
 
     return;
   }
   const noteId = event.dataTransfer?.getData(NOTE_DRAG_MIME).trim() || treeDragState.noteId;
   const folderId = event.dataTransfer?.getData(FOLDER_DRAG_MIME).trim() || treeDragState.folderId;
-  if (noteId) {
-    moveNoteToFolder(noteId, null);
+  const imagePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim()
+    || treeDragState.imagePath;
+  const image = imagePath
+    ? vaultState.imageFiles.find((candidate) => candidate.relativePath === imagePath)
+    : undefined;
+  if (image) {
+    await moveVaultImageToFolder(image, null);
+  } else if (noteId) {
+    await moveNoteToFolder(noteId, null);
   } else if (folderId) {
     moveFolder(folderId, null);
   }
   treeDragState.noteId = null;
   treeDragState.folderId = null;
+  treeDragState.imagePath = null;
   rootExpanded.value = true;
 }
 
 function isInvalidRootFolderDrop(): boolean {
+  if (treeDragState.imagePath) {
+    const image = vaultState.imageFiles.find((candidate) =>
+      candidate.relativePath === treeDragState.imagePath
+    );
+    if (image) {
+      return isMirrorManagedImage(image.relativePath) || !image.relativePath.includes("/");
+    }
+  }
   if (!treeDragState.folderId) {
     return false;
   }
@@ -381,7 +418,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
                 type="button"
                 class="vault-tree-root-main"
                 :aria-expanded="rootExpanded"
-                title="Vault root · Drop notes or folders here to move them to the root"
+                title="Vault root · Drop notes, folders, or images here to move them to the root"
                 @click="rootExpanded = !rootExpanded"
                 @keydown="handleRootKeydown"
               >
@@ -399,12 +436,19 @@ function handleRootKeydown(event: KeyboardEvent): void {
                   :key="folder.id"
                   :folder="folder"
                   :notes="visibleNotes"
+                  :images="visibleImages"
                   :depth="1"
                   :show-empty-folders="showEmptyFolders"
                 />
                 <VaultTreeNote v-for="note in rootNotes" :key="note.id" :note="note" :depth="1" />
+                <VaultTreeImage
+                  v-for="image in rootImages"
+                  :key="image.relativePath"
+                  :image="image"
+                  :depth="1"
+                />
 
-                <div v-if="!visibleNotes.length" class="vault-tree-empty">
+                <div v-if="!visibleNotes.length && !visibleImages.length" class="vault-tree-empty">
                   <AppIcon :name="emptyTreeIcon" :size="18" />
                   <span>{{ emptyTreeMessage }}</span>
                 </div>
@@ -427,7 +471,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
     </div>
 
     <footer class="explorer-footer">
-      <span>{{ vaultState.notes.length }} notes</span>
+      <span>{{ vaultState.notes.length }} notes · {{ vaultState.imageFiles.length }} images</span>
     </footer>
   </aside>
 </template>

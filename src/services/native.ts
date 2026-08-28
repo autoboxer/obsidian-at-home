@@ -1,7 +1,11 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { writeText as writeNativeClipboardText } from "@tauri-apps/plugin-clipboard-manager";
+import {
+  readImage as readNativeClipboardImage,
+  writeText as writeNativeClipboardText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import type {
   ExportResult,
+  ImageEmbedSettings,
   ImportResult,
   Note,
   NoteEditorPosition,
@@ -9,7 +13,12 @@ import type {
   VaultDescriptor,
   WorkspaceArchiveResult,
   WorkspaceBootstrap,
+  WorkspaceEmbedImageResult,
+  WorkspaceImageNoteUpdate,
+  WorkspaceImportImagesResult,
+  WorkspaceImportSaveResult,
   WorkspaceLoad,
+  WorkspaceRelocateImageResult,
   WorkspaceRecoveryMutationResult,
   WorkspaceRestoreResult,
   WorkspaceSaveResult,
@@ -28,6 +37,43 @@ export async function writeClipboardText(value: string): Promise<void> {
     throw new Error("Clipboard access is unavailable in this browser.");
   }
   await navigator.clipboard.writeText(value);
+}
+
+export async function readClipboardImagePng(): Promise<Uint8Array> {
+  if (!isTauri()) {
+    throw new Error("Clipboard image access is available in the desktop app.");
+  }
+
+  const image = await readNativeClipboardImage();
+  try {
+    const [{ width, height }, rgba] = await Promise.all([image.size(), image.rgba()]);
+    if (!width || !height || rgba.length !== width * height * 4) {
+      throw new Error("The clipboard image could not be decoded.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("The clipboard image could not be prepared.");
+    }
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(rgba), width, height),
+      0,
+      0,
+    );
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (value) => value ? resolve(value) : reject(new Error("The clipboard image could not be encoded.")),
+        "image/png",
+      );
+    });
+
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    await image.close().catch(() => undefined);
+  }
 }
 
 export async function applyAppZoom(scaleFactor: number): Promise<void> {
@@ -50,13 +96,19 @@ export interface SystemFont {
   monospaced: boolean;
 }
 
-async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+type NativeInvokeArgs = Record<string, unknown> | number[] | ArrayBuffer | Uint8Array;
+
+async function invoke<T>(
+  command: string,
+  args?: NativeInvokeArgs,
+  options?: { headers: Record<string, string> },
+): Promise<T> {
   const tauriInvoke = window.__TAURI__?.core?.invoke;
   if (!tauriInvoke) {
     throw new Error("Native vault access is available in the Obsidian At Home desktop app.");
   }
 
-  return tauriInvoke<T>(command, args);
+  return tauriInvoke<T>(command, args, options);
 }
 
 export async function listSystemFonts(): Promise<SystemFont[]> {
@@ -65,6 +117,10 @@ export async function listSystemFonts(): Promise<SystemFont[]> {
 
 export async function pickFolder(): Promise<string | null> {
   return invoke<string | null>("pick_folder");
+}
+
+export async function pickImageFile(): Promise<string | null> {
+  return invoke<string | null>("pick_image_file");
 }
 
 export async function bootstrapWorkspace(defaults: VaultData): Promise<WorkspaceBootstrap> {
@@ -89,6 +145,20 @@ export async function saveWorkspace(
   expectedRevision: number,
 ): Promise<WorkspaceSaveResult> {
   return invoke<WorkspaceSaveResult>("workspace_save", { path, vault, expectedRevision });
+}
+
+export async function saveWorkspaceWithImageImport(
+  path: string,
+  vault: VaultData,
+  expectedRevision: number,
+  transactionId: string,
+): Promise<WorkspaceImportSaveResult> {
+  return invoke<WorkspaceImportSaveResult>("workspace_save_with_image_import", {
+    path,
+    vault,
+    expectedRevision,
+    transactionId,
+  });
 }
 
 export async function archiveWorkspaceNote(
@@ -165,12 +235,118 @@ export async function getWorkspaceRevision(path: string): Promise<number> {
   return invoke<number>("workspace_revision", { path });
 }
 
+export async function embedWorkspaceImageFile(
+  path: string,
+  sourcePath: string,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedImageResult> {
+  return invoke<WorkspaceEmbedImageResult>("workspace_embed_image_file", {
+    path,
+    sourcePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function embedWorkspaceVaultImage(
+  path: string,
+  imageRelativePath: string,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedImageResult> {
+  return invoke<WorkspaceEmbedImageResult>("workspace_embed_vault_image", {
+    path,
+    imageRelativePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function relocateWorkspaceImage(
+  path: string,
+  imageRelativePath: string,
+  targetRelativePath: string,
+  assetId: string,
+  noteUpdates: WorkspaceImageNoteUpdate[],
+  expectedRevision: number,
+  managedByNoteMove = false,
+): Promise<WorkspaceRelocateImageResult> {
+  return invoke<WorkspaceRelocateImageResult>("workspace_relocate_image", {
+    path,
+    imageRelativePath,
+    targetRelativePath,
+    assetId,
+    noteUpdates,
+    expectedRevision,
+    managedByNoteMove,
+  });
+}
+
+export async function embedWorkspaceImageBytes(
+  path: string,
+  fileName: string,
+  bytes: Uint8Array,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedImageResult> {
+  const metadata = encodeURIComponent(JSON.stringify({
+    path,
+    fileName,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  }));
+
+  return invoke<WorkspaceEmbedImageResult>(
+    "workspace_embed_image_bytes",
+    bytes,
+    { headers: { "x-oah-image-metadata": metadata } },
+  );
+}
+
+export async function readWorkspaceImage(
+  path: string,
+  noteRelativePath: string,
+  destination: string,
+  assetId?: string,
+): Promise<Uint8Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array>("workspace_read_image", {
+    path,
+    assetId,
+    noteRelativePath,
+    destination,
+  });
+
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+}
+
 export async function importObsidianVault(path: string): Promise<ImportResult> {
   return invoke<ImportResult>("import_obsidian_vault", { path });
 }
 
+export async function importWorkspaceImages(
+  path: string,
+  sourcePath: string,
+  imagePaths: string[],
+  expectedRevision: number,
+): Promise<WorkspaceImportImagesResult> {
+  return invoke<WorkspaceImportImagesResult>("workspace_import_images", {
+    path,
+    sourcePath,
+    imagePaths,
+    expectedRevision,
+  });
+}
+
 export async function exportObsidianVault(
   parentPath: string,
+  sourcePath: string,
   vaultName: string,
   payload: {
     notes: unknown[];
@@ -180,6 +356,7 @@ export async function exportObsidianVault(
 ): Promise<ExportResult> {
   return invoke<ExportResult>("export_obsidian_vault", {
     parentPath,
+    sourcePath,
     vaultName,
     ...payload,
   });

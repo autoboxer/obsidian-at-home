@@ -3,6 +3,11 @@ import { leadingFrontmatterEnd } from "./frontmatter";
 import { markdownHeadingSlug } from "./headingLinks";
 import { highlightCode } from "./highlight";
 import { findClosingInlineMarkupDelimiter } from "./inlineMarkup";
+import {
+  markdownImageStyle,
+  parseMarkdownImageAt,
+  type ParsedMarkdownImage,
+} from "./markdownImages";
 import { parseWikiLinkAt } from "./wikiLinks";
 
 export interface MarkdownRenderOptions {
@@ -13,6 +18,7 @@ export interface MarkdownRenderOptions {
   ) => Note | boolean | null | undefined;
   headingIdPrefix?: string;
   externalLinksInNewTab?: boolean;
+  resolveImage?: (image: ParsedMarkdownImage) => string | null | undefined;
 }
 
 interface RenderContext {
@@ -395,6 +401,15 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
         continue;
       }
 
+      if (character === "!") {
+        const image = parseMarkdownImageAt(source, index);
+        if (image) {
+          html += renderMarkdownImage(image, context);
+          index = image.end;
+          continue;
+        }
+      }
+
       if (character === "[") {
         const markdownLink = parseMarkdownLink(source, index, context, depth);
         if (markdownLink) {
@@ -466,6 +481,54 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
   }
 
   return html;
+}
+
+function renderMarkdownImage(
+  image: ParsedMarkdownImage,
+  context: RenderContext,
+): string {
+  const resolved = context.options.resolveImage
+    ? context.options.resolveImage(image)
+    : image.destination;
+  const source = resolved ? sanitizeImageUrl(resolved) : undefined;
+  if (!source) {
+    return `<span class="unresolved-image">${escapeHtml(image.alt || "Image")}</span>`;
+  }
+
+  const titleAttribute = image.title
+    ? ` title="${escapeHtml(image.title)}"`
+    : "";
+  const style = markdownImageStyle(image);
+  const styleAttribute = style ? ` style="${style}"` : "";
+
+  return `<img class="markdown-image" src="${escapeHtml(source)}" alt="${escapeHtml(
+    image.alt,
+  )}"${titleAttribute}${styleAttribute} loading="lazy" decoding="async">`;
+}
+
+/** Return a browser-safe image URL, or `undefined`. */
+export function sanitizeImageUrl(value: string): string | undefined {
+  const url = value
+    .trim()
+    .replace(/^<|>$/g, "")
+    .replace(/[\u0000-\u001f\u007f]/g, "");
+  if (!url || url.includes("\\")) {
+    return undefined;
+  }
+
+  const compact = url.replace(/[\s\u00a0]+/g, "").toLocaleLowerCase();
+  if (/^data:/i.test(compact)) {
+    return /^data:image\/(?:avif|bmp|gif|jpeg|png|webp);base64,/i.test(compact)
+      ? url
+      : undefined;
+  }
+
+  const scheme = compact.match(/^([a-z][a-z0-9+.-]*):/i)?.[1];
+  if (scheme && !["blob", "http", "https"].includes(scheme)) {
+    return undefined;
+  }
+
+  return url;
 }
 
 function parseMarkdownLink(

@@ -7,7 +7,23 @@ import {
   parseMarkdownHeadingTarget,
 } from "../lib/headingLinks";
 import { formatCommandShortcut } from "../lib/keyboard";
+import {
+  imageAltFromPath,
+  pastedImageFileName,
+} from "../lib/imageEmbeds";
+import {
+  formatMarkdownImage,
+  relativeImageDestination,
+} from "../lib/markdownImages";
 import { resolveWikiLink } from "../lib/wikiLinks";
+import {
+  embedWorkspaceImageBytes,
+  embedWorkspaceImageFile,
+  embedWorkspaceVaultImage,
+  isTauri,
+  pickImageFile,
+  readClipboardImagePng,
+} from "../services/native";
 import {
   editorPositionVaultId,
   getNoteEditorPosition,
@@ -15,6 +31,7 @@ import {
 } from "../stores/editorPositions";
 import {
   activeNote,
+  applyEmbeddedImageResult,
   backNavigationNote,
   canNavigateBack,
   canNavigateForward,
@@ -24,21 +41,31 @@ import {
   deleteNote,
   folderPath,
   forwardNavigationNote,
+  flushVault,
   navigateBack,
   navigateForward,
+  moveNoteToFolder,
   notify,
   selectNote,
   togglePinned,
   uiState,
   updateNote,
+  vaultImageInsertRequest,
   vaultSession,
   vaultState,
 } from "../stores/vault";
-import type { NoteEditorPosition } from "../types";
+import type {
+  ImageInsertionCapture,
+  Note,
+  NoteEditorPosition,
+  WorkspaceEmbedImageResult,
+} from "../types";
 import AppIcon from "./AppIcon.vue";
 import SourceEditor from "./SourceEditor.vue";
 
 const createNoteShortcut = formatCommandShortcut("N");
+const embedImageShortcut = formatCommandShortcut("Shift+I");
+const nativeAvailable = isTauri();
 const tagInputOpen = ref(false);
 const tagInput = ref("");
 const tagField = ref<HTMLInputElement>();
@@ -48,8 +75,12 @@ const quickFolderOpen = ref(false);
 const quickFolderName = ref("");
 const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
+const imageEmbedBusy = ref(false);
 const sourceEditor = ref<{
+  cancelImageInsertion: (capture: ImageInsertionCapture) => void;
+  captureImageInsertion: () => ImageInsertionCapture | undefined;
   focusDocumentOffset: (offset: number) => boolean;
+  insertEmbeddedImage: (capture: ImageInsertionCapture, markdownImage: string) => boolean;
 }>();
 
 const noteTitles = computed(() => vaultState.notes.map((note) => note.title));
@@ -187,12 +218,224 @@ function linkedNoteLabel(target: string): string {
   return target.trim().replace(/\.md$/i, "") || "current note";
 }
 
-function setFolder(event: Event): void {
+interface ImageEmbedContext {
+  note: Note;
+  noteRelativePath: string;
+  vaultPath: string;
+}
+
+function imageEmbedError(error: unknown): string {
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return "The image could not be embedded.";
+}
+
+function imageEmbedContext(capture: ImageInsertionCapture): ImageEmbedContext | undefined {
+  const note = vaultState.notes.find((candidate) => candidate.id === capture.noteId);
+  const vaultPath = vaultSession.backend === "native" ? vaultSession.path : null;
+  if (!nativeAvailable || !note || !vaultPath || activeNote.value?.id !== note.id) {
+    return undefined;
+  }
+
+  return {
+    note,
+    noteRelativePath: note.relativePath,
+    vaultPath,
+  };
+}
+
+async function storeAndInsertImage(
+  capture: ImageInsertionCapture,
+  embed: (
+    context: ImageEmbedContext,
+    expectedRevision: number,
+  ) => Promise<WorkspaceEmbedImageResult>,
+): Promise<boolean> {
+  const context = imageEmbedContext(capture);
+  if (!context) {
+    throw new Error("Images can be embedded into an open note in a desktop vault.");
+  }
+  if (!(await flushVault())) {
+    throw new Error(vaultSession.error || "Save the current note before embedding an image.");
+  }
+  if (
+    vaultSession.path !== context.vaultPath
+    || activeNote.value?.id !== context.note.id
+  ) {
+    throw new Error("The note or vault changed before the image could be embedded.");
+  }
+  context.noteRelativePath = context.note.relativePath;
+  if (!context.noteRelativePath) {
+    throw new Error("The note does not have a saved file path for the embedded image.");
+  }
+
+  const result = await embed(context, vaultSession.revision);
+  applyEmbeddedImageResult(result);
+  const selectedAlt = capture.selectedText.trim();
+  const alt = selectedAlt && !/[\r\n]/.test(selectedAlt) && selectedAlt.length <= 240
+    ? selectedAlt
+    : imageAltFromPath(result.image.relativePath);
+  const markdownImage = formatMarkdownImage({
+    alt,
+    assetId: result.image.id,
+    destination: relativeImageDestination(
+      context.noteRelativePath,
+      result.image.relativePath,
+    ),
+    inTable: capture.inTable,
+  });
+  const inserted = sourceEditor.value?.insertEmbeddedImage(capture, markdownImage) ?? false;
+  if (!inserted) {
+    notify("The image was saved, but its Markdown reference could not be inserted.", "warning");
+
+    return false;
+  }
+
+  if (result.warnings.length) {
+    notify(result.warnings[0]!, "warning");
+  } else {
+    notify(`Embedded ${imageAltFromPath(result.image.relativePath)}`, "success");
+  }
+
+  return true;
+}
+
+async function embedImageFromFile(capture: ImageInsertionCapture): Promise<void> {
+  if (imageEmbedBusy.value) {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    notify("Wait for the current image to finish embedding.", "warning");
+
+    return;
+  }
+
+  imageEmbedBusy.value = true;
+  try {
+    const context = imageEmbedContext(capture);
+    if (!context) {
+      throw new Error("Images can be embedded into an open note in a desktop vault.");
+    }
+    if (!(await flushVault())) {
+      throw new Error(vaultSession.error || "Save the current note before embedding an image.");
+    }
+    const sourcePath = await pickImageFile();
+    if (!sourcePath) {
+      return;
+    }
+    if (vaultSession.path !== context.vaultPath || activeNote.value?.id !== context.note.id) {
+      throw new Error("The note or vault changed before the image could be embedded.");
+    }
+    await storeAndInsertImage(capture, (current, expectedRevision) =>
+      embedWorkspaceImageFile(
+        current.vaultPath,
+        sourcePath,
+        current.noteRelativePath,
+        { ...vaultState.imageEmbedSettings },
+        expectedRevision,
+      )
+    );
+  } catch (error) {
+    notify(imageEmbedError(error), "warning");
+  } finally {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    imageEmbedBusy.value = false;
+  }
+}
+
+async function embedImageFromClipboard(
+  capture: ImageInsertionCapture,
+  file?: File,
+): Promise<void> {
+  if (imageEmbedBusy.value) {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    notify("Wait for the current image to finish embedding.", "warning");
+
+    return;
+  }
+
+  imageEmbedBusy.value = true;
+  try {
+    const bytes = file
+      ? new Uint8Array(await file.arrayBuffer())
+      : await readClipboardImagePng();
+    const fileName = file?.name?.trim() || pastedImageFileName();
+    await storeAndInsertImage(capture, (context, expectedRevision) =>
+      embedWorkspaceImageBytes(
+        context.vaultPath,
+        fileName,
+        bytes,
+        context.noteRelativePath,
+        { ...vaultState.imageEmbedSettings },
+        expectedRevision,
+      )
+    );
+  } catch (error) {
+    notify(imageEmbedError(error), "warning");
+  } finally {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    imageEmbedBusy.value = false;
+  }
+}
+
+async function embedImageFromVault(
+  capture: ImageInsertionCapture,
+  relativePath: string,
+): Promise<void> {
+  if (imageEmbedBusy.value) {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    notify("Wait for the current image to finish embedding.", "warning");
+
+    return;
+  }
+
+  imageEmbedBusy.value = true;
+  try {
+    await storeAndInsertImage(capture, (context, expectedRevision) =>
+      embedWorkspaceVaultImage(
+        context.vaultPath,
+        relativePath,
+        context.noteRelativePath,
+        { ...vaultState.imageEmbedSettings },
+        expectedRevision,
+      )
+    );
+  } catch (error) {
+    notify(imageEmbedError(error), "warning");
+  } finally {
+    sourceEditor.value?.cancelImageInsertion(capture);
+    imageEmbedBusy.value = false;
+  }
+}
+
+function requestImageFromToolbar(): void {
+  const capture = sourceEditor.value?.captureImageInsertion();
+  if (capture) {
+    void embedImageFromFile(capture);
+  }
+}
+
+async function insertRequestedVaultImage(): Promise<void> {
+  const relativePath = vaultImageInsertRequest.relativePath;
+  await nextTick();
+  const capture = sourceEditor.value?.captureImageInsertion();
+  if (!capture || !relativePath) {
+    notify("Place the cursor in an open note before inserting an image", "warning");
+
+    return;
+  }
+  await embedImageFromVault(capture, relativePath);
+}
+
+async function setFolder(event: Event): Promise<void> {
   if (!activeNote.value) {
     return;
   }
   const value = (event.target as HTMLSelectElement).value;
-  updateNote(activeNote.value.id, { folderId: value || null });
+  await moveNoteToFolder(activeNote.value.id, value || null);
 }
 
 function openTagInput(): void {
@@ -317,6 +560,11 @@ watch(
   },
 );
 
+watch(
+  () => vaultImageInsertRequest.id,
+  () => void insertRequestedVaultImage(),
+);
+
 watch(tagInput, () => {
   tagSuggestionIndex.value = -1;
 });
@@ -429,6 +677,17 @@ watch(tagInput, () => {
       </div>
 
       <div v-if="activeNote" class="editor-toolbar-actions">
+        <button
+          class="icon-button"
+          type="button"
+          data-note-action="embed-image"
+          :disabled="!nativeAvailable || imageEmbedBusy || vaultSession.busy"
+          aria-label="Embed image"
+          :title="`Embed image · ${embedImageShortcut}`"
+          @click="requestImageFromToolbar"
+        >
+          <AppIcon name="image" :size="16" />
+        </button>
         <button
           class="icon-button"
           type="button"
@@ -553,14 +812,21 @@ watch(tagInput, () => {
             :key="editorKey"
             ref="sourceEditor"
             :initial-position="savedEditorPosition(activeNote.id, activeNote.content)"
+            :embedded-images="vaultState.embeddedImages"
+            :image-refresh-token="uiState.imageRefreshToken"
             :model-value="activeNote.content"
             :note-id="activeNote.id"
+            :note-relative-path="activeNote.relativePath"
             :note-titles="noteTitles"
             :show-frontmatter="uiState.frontmatterVisible"
             :vault-id="positionVaultId"
+            :vault-path="vaultSession.path"
             @editor-position="rememberEditorPosition"
             @open-link="openRenderedLink"
             @open-wiki="openWikiLink"
+            @paste-image="embedImageFromClipboard"
+            @vault-image-drop="embedImageFromVault"
+            @request-embed-image="embedImageFromFile"
             @update:model-value="setContent"
           />
         </div>

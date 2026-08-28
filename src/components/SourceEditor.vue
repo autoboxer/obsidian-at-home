@@ -75,27 +75,48 @@ import {
   wrapInlineCode,
   wrapMarkdownLink,
 } from "../lib/markdownFormatting";
+import {
+  decodeMarkdownImageDestination,
+  imageMediaTypeForPath,
+  NOTE_IMAGE_DRAG_MIME,
+  VAULT_IMAGE_DRAG_MIME,
+} from "../lib/imageEmbeds";
+import { sanitizeImageUrl } from "../lib/markdown";
+import { parseMarkdownImageAt } from "../lib/markdownImages";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
+import { isTauri, readWorkspaceImage } from "../services/native";
 import type { Extension, SelectionRange } from "@codemirror/state";
 import type { Command, ViewUpdate } from "@codemirror/view";
 import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
+import type { ParsedMarkdownImage } from "../lib/markdownImages";
 import type { LiveMarkdownTextEdit } from "../lib/liveMarkdown";
-import type { NoteEditorPosition } from "../types";
+import type {
+  EmbeddedImage,
+  ImageInsertionCapture,
+  NoteEditorPosition,
+} from "../types";
 import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
   initialPosition?: NoteEditorPosition;
+  embeddedImages: EmbeddedImage[];
+  imageRefreshToken: number;
   modelValue: string;
   noteId: string;
+  noteRelativePath: string;
   noteTitles: string[];
   showFrontmatter: boolean;
   vaultId: string;
+  vaultPath: string | null;
 }>();
 
 const emit = defineEmits<{
   editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
+  pasteImage: [capture: ImageInsertionCapture, file?: File];
+  requestEmbedImage: [capture: ImageInsertionCapture];
+  vaultImageDrop: [capture: ImageInsertionCapture, relativePath: string];
   "update:modelValue": [value: string];
 }>();
 
@@ -118,6 +139,18 @@ let positionCaptureEnabled = false;
 let removePositionCapture: (() => boolean) | undefined;
 let closeEditorHistory: ReturnType<typeof openNoteEditorHistory>["close"] | undefined;
 let viewportRestoreFrame: number | undefined;
+let imageInsertionSequence = 0;
+let imageResolverDisposed = false;
+let imageResolverGeneration = 0;
+
+interface PendingImageInsertion extends ImageInsertionCapture {
+  from: number;
+  to: number;
+}
+
+const pendingImageInsertions = new Map<string, PendingImageInsertion>();
+const imageSourcePromises = new Map<string, Promise<string>>();
+const imageObjectUrls = new Set<string>();
 
 const positionCaptureKey = {};
 const renderReadyKey = {};
@@ -786,6 +819,67 @@ function setRenderedListTextStart(
   return true;
 }
 
+async function resolveLiveMarkdownImageSource(
+  image: ParsedMarkdownImage,
+): Promise<string | undefined> {
+  const source = sanitizeImageUrl(image.destination);
+  if (!source) {
+    return undefined;
+  }
+  if (
+    !isTauri()
+    || !props.vaultPath
+    || /^[a-z][a-z0-9+.-]*:/i.test(source)
+    || source.startsWith("//")
+  ) {
+    return source;
+  }
+
+  const generation = imageResolverGeneration;
+  const cacheKey = `${generation}\u0000${props.vaultPath}\u0000${props.noteRelativePath}\u0000${
+    image.assetId ?? ""
+  }\u0000${image.destination}`;
+  const cached = imageSourcePromises.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = (async () => {
+    const bytes = await readWorkspaceImage(
+      props.vaultPath!,
+      props.noteRelativePath,
+      decodeMarkdownImageDestination(image.destination),
+      image.assetId,
+    );
+    if (imageResolverDisposed || generation !== imageResolverGeneration) {
+      throw new Error("The image changed before it finished loading.");
+    }
+    const mediaType = props.embeddedImages.find((asset) => asset.id === image.assetId)?.mediaType
+      ?? imageMediaTypeForPath(image.destination);
+    const url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
+    imageObjectUrls.add(url);
+
+    return url;
+  })();
+  imageSourcePromises.set(cacheKey, pending);
+  pending.catch(() => {
+    if (imageSourcePromises.get(cacheKey) === pending) {
+      imageSourcePromises.delete(cacheKey);
+    }
+  });
+
+  return pending;
+}
+
+function clearLiveMarkdownImageSources(): void {
+  imageResolverGeneration += 1;
+  imageSourcePromises.clear();
+  for (const url of imageObjectUrls) {
+    URL.revokeObjectURL(url);
+  }
+  imageObjectUrls.clear();
+}
+
 onMounted(() => {
   const host = editorHost.value;
   if (!host) {
@@ -829,6 +923,7 @@ onMounted(() => {
       documentId: `${props.vaultId}\u0000${props.noteId}`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
+      resolveImageSource: resolveLiveMarkdownImageSource,
       wikiLinkIsResolved: inlineWikiLinkIsResolved,
     }),
     codeMirrorDocumentSearchExtension,
@@ -889,6 +984,7 @@ onMounted(() => {
         shift: selectToTableCellTextRight,
       },
       { key: "Mod-b", run: toggleBold },
+      { key: "Mod-Shift-i", run: requestImageEmbed },
       { key: "Mod-i", run: toggleItalic },
       { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
       { key: "Mod-Shift-x", run: toggleStrikethrough },
@@ -909,6 +1005,13 @@ onMounted(() => {
     ])),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        for (const insertion of pendingImageInsertions.values()) {
+          const empty = insertion.from === insertion.to;
+          insertion.from = update.changes.mapPos(insertion.from, -1);
+          insertion.to = update.changes.mapPos(insertion.to, empty ? -1 : 1);
+        }
+      }
       const localDocumentChange = update.docChanged && update.transactions.some(
         (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
       );
@@ -1018,6 +1121,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  imageResolverDisposed = true;
+  pendingImageInsertions.clear();
+  clearLiveMarkdownImageSources();
   const view = editorView.value;
   const captureWasActive = removePositionCapture?.() ?? false;
   removePositionCapture = undefined;
@@ -1146,6 +1252,16 @@ watch(
   { deep: true },
 );
 
+watch(
+  () => props.imageRefreshToken,
+  () => {
+    clearLiveMarkdownImageSources();
+    editorView.value?.dispatch({
+      effects: refreshLiveMarkdownEffect.of(null),
+    });
+  },
+);
+
 function openLiveMarkdownLink(href: string): void {
   emit("openLink", href);
 }
@@ -1189,7 +1305,92 @@ function focusDocumentOffset(offset: number): boolean {
   return true;
 }
 
-defineExpose({ focusDocumentOffset });
+function captureImageInsertion(
+  view = editorView.value,
+): ImageInsertionCapture | undefined {
+  if (!view || view.state.selection.ranges.length !== 1) {
+    return undefined;
+  }
+
+  const selection = view.state.selection.main;
+  const inTable = liveMarkdownDocumentModel(view.state).tables.some((table) =>
+    selection.from >= table.from && selection.to <= table.to
+  );
+  imageInsertionSequence += 1;
+  const token = `${Date.now().toString(36)}-${imageInsertionSequence.toString(36)}`;
+  const insertion: PendingImageInsertion = {
+    from: selection.from,
+    inTable,
+    noteId: props.noteId,
+    selectedText: view.state.sliceDoc(selection.from, selection.to),
+    to: selection.to,
+    token,
+  };
+  pendingImageInsertions.set(token, insertion);
+
+  return {
+    inTable: insertion.inTable,
+    noteId: insertion.noteId,
+    selectedText: insertion.selectedText,
+    token: insertion.token,
+  };
+}
+
+function cancelImageInsertion(capture: ImageInsertionCapture): void {
+  pendingImageInsertions.delete(capture.token);
+}
+
+function insertEmbeddedImage(
+  capture: ImageInsertionCapture,
+  markdownImage: string,
+): boolean {
+  const view = editorView.value;
+  const insertion = pendingImageInsertions.get(capture.token);
+  pendingImageInsertions.delete(capture.token);
+  if (
+    !view
+    || !insertion
+    || insertion.noteId !== props.noteId
+    || insertion.from < 0
+    || insertion.to < insertion.from
+    || insertion.to > view.state.doc.length
+    || view.state.sliceDoc(insertion.from, insertion.to) !== insertion.selectedText
+  ) {
+    return false;
+  }
+
+  const cursor = insertion.from + markdownImage.length;
+  view.dispatch({
+    changes: {
+      from: insertion.from,
+      to: insertion.to,
+      insert: markdownImage,
+    },
+    selection: EditorSelection.cursor(cursor),
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  view.focus();
+
+  return true;
+}
+
+function requestImageEmbed(view: EditorView): boolean {
+  const capture = captureImageInsertion(view);
+  if (!capture) {
+    return false;
+  }
+  emit("requestEmbedImage", capture);
+
+  return true;
+}
+
+defineExpose({
+  cancelImageInsertion,
+  captureImageInsertion,
+  focusDocumentOffset,
+  insertEmbeddedImage,
+});
 
 function normalizeInlineLinkTarget(value: string): string {
   return normalizeWikiTarget(value)
@@ -1848,6 +2049,138 @@ function blockPendingEditorInteraction(event: Event): void {
   }
 }
 
+function handleSourceEditorPaste(event: ClipboardEvent): void {
+  if (!editorRenderReady.value) {
+    blockPendingEditorInteraction(event);
+
+    return;
+  }
+
+  const clipboard = event.clipboardData;
+  if (!clipboard) {
+    return;
+  }
+  const imageItem = Array.from(clipboard.items).find((item) =>
+    item.kind === "file" && item.type.toLocaleLowerCase().startsWith("image/")
+  );
+  const imageSignaled = Boolean(imageItem)
+    || Array.from(clipboard.types).some((type) =>
+      type === "Files" || type.toLocaleLowerCase().startsWith("image/")
+    );
+  if (!imageSignaled) {
+    return;
+  }
+
+  const capture = captureImageInsertion();
+  if (!capture) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  emit("pasteImage", capture, imageItem?.getAsFile() ?? undefined);
+}
+
+function handleSourceEditorDragOver(event: DragEvent): void {
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  const movingWithinNote = types.includes(NOTE_IMAGE_DRAG_MIME);
+  if (!movingWithinNote && !types.includes(VAULT_IMAGE_DRAG_MIME)) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = movingWithinNote ? "move" : "copy";
+  }
+}
+
+function handleSourceEditorDrop(event: DragEvent): void {
+  const internalImage = parseInternalImageDrag(
+    event.dataTransfer?.getData(NOTE_IMAGE_DRAG_MIME),
+  );
+  const relativePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
+  const view = editorView.value;
+  if ((!internalImage && !relativePath) || !view || !editorRenderReady.value) {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
+    ?? view.state.selection.main.head;
+  if (internalImage) {
+    moveImageReferenceWithinNote(view, internalImage.from, internalImage.to, position);
+
+    return;
+  }
+  view.dispatch({
+    selection: EditorSelection.cursor(position),
+    scrollIntoView: true,
+    userEvent: "select.pointer",
+  });
+  const capture = captureImageInsertion(view);
+  if (capture) {
+    emit("vaultImageDrop", capture, relativePath);
+  }
+}
+
+function parseInternalImageDrag(
+  value: string | undefined,
+): { from: number; to: number } | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as { from?: unknown; to?: unknown };
+    if (
+      Number.isSafeInteger(parsed.from)
+      && Number.isSafeInteger(parsed.to)
+      && (parsed.from as number) >= 0
+      && (parsed.to as number) > (parsed.from as number)
+    ) {
+      return { from: parsed.from as number, to: parsed.to as number };
+    }
+  } catch {
+    // Ignore malformed drag data from outside this editor.
+  }
+
+  return undefined;
+}
+
+function moveImageReferenceWithinNote(
+  view: EditorView,
+  from: number,
+  to: number,
+  position: number,
+): void {
+  if (
+    from < 0
+    || to > view.state.doc.length
+    || from >= to
+    || (position >= from && position <= to)
+  ) {
+    view.focus();
+
+    return;
+  }
+  const source = view.state.sliceDoc(from, to);
+  const image = parseMarkdownImageAt(source, 0);
+  if (!image || image.end + 1 !== source.length) {
+    view.focus();
+
+    return;
+  }
+  const insertionStart = position < from ? position : position - (to - from);
+  const changes = position < from
+    ? [{ from: position, insert: source }, { from, to, insert: "" }]
+    : [{ from, to, insert: "" }, { from: position, insert: source }];
+  view.dispatch({
+    changes,
+    selection: EditorSelection.cursor(insertionStart + source.length),
+    scrollIntoView: true,
+    userEvent: "input.move",
+  });
+  view.focus();
+}
+
 function handleSourceEditorKeydown(event: KeyboardEvent): void {
   if (!editorRenderReady.value) {
     blockPendingEditorInteraction(event);
@@ -1870,7 +2203,9 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
     @beforeinput.capture="blockPendingEditorInteraction"
     @compositionstart.capture="blockPendingEditorInteraction"
     @keydown.capture="handleSourceEditorKeydown"
-    @paste.capture="blockPendingEditorInteraction"
+    @paste.capture="handleSourceEditorPaste"
+    @dragover.capture="handleSourceEditorDragOver"
+    @drop.capture="handleSourceEditorDrop"
   >
     <div ref="editorHost" class="code-mirror-host" />
 

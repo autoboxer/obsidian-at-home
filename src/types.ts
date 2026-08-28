@@ -62,6 +62,36 @@ export interface CssSnippet {
   builtIn?: boolean;
 }
 
+export type ImageEmbedLocation =
+  | "vault-root"
+  | "note-folder"
+  | "specified-folder"
+  | "specified-folder-mirrored";
+
+export interface ImageEmbedSettings {
+  location: ImageEmbedLocation;
+  folderPath: string;
+}
+
+export interface EmbeddedImage {
+  id: string;
+  relativePath: string;
+  mediaType: string;
+}
+
+export interface VaultImageFile {
+  assetId?: string;
+  relativePath: string;
+  mediaType: string;
+}
+
+export interface ImageInsertionCapture {
+  inTable: boolean;
+  noteId: string;
+  selectedText: string;
+  token: string;
+}
+
 export interface VaultData {
   name: string;
   notes: Note[];
@@ -71,6 +101,9 @@ export interface VaultData {
   activeNoteId: string | null;
   recentNoteIds: string[];
   selectedFolderId: "all" | "favorites" | "recent";
+  embeddedImages: EmbeddedImage[];
+  imageFiles: VaultImageFile[];
+  imageEmbedSettings: ImageEmbedSettings;
 }
 
 export interface VaultDescriptor {
@@ -96,6 +129,7 @@ export interface WorkspaceBootstrap {
 }
 
 export interface WorkspaceSaveResult {
+  notePaths?: Record<string, string>;
   revision: number;
   savedAt: number;
   warnings: string[];
@@ -112,6 +146,22 @@ export interface WorkspaceRestoreResult extends WorkspaceSaveResult {
 
 export interface WorkspaceRecoveryMutationResult extends WorkspaceSaveResult {
   removedIds: string[];
+}
+
+export interface WorkspaceEmbedImageResult extends WorkspaceSaveResult {
+  image: EmbeddedImage;
+}
+
+export interface WorkspaceImageNoteUpdate {
+  noteId: string;
+  relativePath: string;
+  expectedContent: string;
+  content: string;
+}
+
+export interface WorkspaceRelocateImageResult extends WorkspaceSaveResult {
+  image: EmbeddedImage;
+  previousRelativePath: string;
 }
 
 export interface VaultSessionState {
@@ -157,6 +207,10 @@ export interface ImportedNote {
   tags: string[];
 }
 
+export interface ImportedImage {
+  relativePath: string;
+}
+
 export interface ImportedSnippet {
   name: string;
   css: string;
@@ -165,6 +219,7 @@ export interface ImportedSnippet {
 
 export interface ImportResult {
   vaultName: string;
+  images: ImportedImage[];
   notes: ImportedNote[];
   snippets: ImportedSnippet[];
   warnings: string[];
@@ -190,8 +245,21 @@ export interface ExportSnippet {
 
 export interface ExportResult {
   path: string;
+  imageCount: number;
   noteCount: number;
   templateCount: number;
   snippetCount: number;
   warnings: string[];
+}
+
+export interface WorkspaceImportImagesResult extends WorkspaceSaveResult {
+  imageCount: number;
+  imageFiles: VaultImageFile[];
+  pathMappings: Record<string, string>;
+  transactionId?: string;
+}
+
+export interface WorkspaceImportSaveResult extends WorkspaceSaveResult {
+  saved: boolean;
+  error?: string;
 }
