@@ -87,6 +87,7 @@ import type {
   MarkdownAttachmentMetadata,
   ParsedMarkdownAttachment,
 } from "../lib/markdownAttachments";
+import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
 import { parseMarkdownImageAt } from "../lib/markdownImages";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import { isTauri, readWorkspaceImage } from "../services/native";
@@ -122,6 +123,12 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  activateAttachment: [
+    assetId: string | undefined,
+    relativePath: string,
+    mediaType: string | undefined,
+    openingDisabled: boolean | undefined,
+  ];
   editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
@@ -129,6 +136,7 @@ const emit = defineEmits<{
   requestEmbedAttachment: [capture: AttachmentInsertionCapture];
   requestEmbedImage: [capture: ImageInsertionCapture];
   vaultImageDrop: [capture: ImageInsertionCapture, relativePath: string];
+  vaultAttachmentDrop: [capture: AttachmentInsertionCapture, relativePath: string];
   "update:modelValue": [value: string];
 }>();
 
@@ -932,6 +940,7 @@ onMounted(() => {
     literalApostropheExtension,
     tableDelimiterHyphenExtension,
     liveMarkdownExtension({
+      activateAttachment: activateLiveMarkdownAttachment,
       documentId: `${props.vaultId}\u0000${props.noteId}`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
@@ -1313,8 +1322,26 @@ function resolveLiveMarkdownAttachmentMetadata(
   return {
     byteLength: tracked?.byteLength ?? file?.byteLength,
     mediaType: tracked?.mediaType ?? file?.mediaType,
+    openingDisabled: tracked?.openingDisabled ?? file?.openingDisabled,
     relativePath: tracked?.relativePath ?? file?.relativePath ?? relativePath,
   };
+}
+
+function activateLiveMarkdownAttachment(
+  attachment: ParsedMarkdownAttachment,
+  metadata: MarkdownAttachmentMetadata | null | undefined,
+): void {
+  const relativePath = metadata?.relativePath
+    ?? resolveMarkdownImagePath(props.noteRelativePath, attachment.destination);
+  if (relativePath) {
+    emit(
+      "activateAttachment",
+      attachment.assetId,
+      relativePath,
+      metadata?.mediaType,
+      metadata?.openingDisabled,
+    );
+  }
 }
 
 function focusDocumentOffset(offset: number): boolean {
@@ -2160,7 +2187,11 @@ function handleSourceEditorPaste(event: ClipboardEvent): void {
 function handleSourceEditorDragOver(event: DragEvent): void {
   const types = Array.from(event.dataTransfer?.types ?? []);
   const movingWithinNote = types.includes(NOTE_IMAGE_DRAG_MIME);
-  if (!movingWithinNote && !types.includes(VAULT_IMAGE_DRAG_MIME)) {
+  if (
+    !movingWithinNote
+    && !types.includes(VAULT_IMAGE_DRAG_MIME)
+    && !types.includes(VAULT_ATTACHMENT_DRAG_MIME)
+  ) {
     return;
   }
   event.preventDefault();
@@ -2175,8 +2206,15 @@ function handleSourceEditorDrop(event: DragEvent): void {
     event.dataTransfer?.getData(NOTE_IMAGE_DRAG_MIME),
   );
   const relativePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
+  const attachmentRelativePath = event.dataTransfer
+    ?.getData(VAULT_ATTACHMENT_DRAG_MIME)
+    .trim() ?? "";
   const view = editorView.value;
-  if ((!internalImage && !relativePath) || !view || !editorRenderReady.value) {
+  if (
+    (!internalImage && !relativePath && !attachmentRelativePath)
+    || !view
+    || !editorRenderReady.value
+  ) {
     return;
   }
   event.preventDefault();
@@ -2193,8 +2231,16 @@ function handleSourceEditorDrop(event: DragEvent): void {
     scrollIntoView: true,
     userEvent: "select.pointer",
   });
-  const capture = captureImageInsertion(view);
-  if (capture) {
+  if (attachmentRelativePath) {
+    const capture = captureAttachmentInsertion(view);
+    if (capture) {
+      emit("vaultAttachmentDrop", capture, attachmentRelativePath);
+    }
+  } else {
+    const capture = captureImageInsertion(view);
+    if (!capture) {
+      return;
+    }
     emit("vaultImageDrop", capture, relativePath);
   }
 }

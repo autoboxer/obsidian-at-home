@@ -13,6 +13,8 @@ import type {
   VaultData,
   VaultDescriptor,
   WorkspaceArchiveResult,
+  WorkspaceAttachmentCopyResult,
+  WorkspaceAttachmentNoteUpdate,
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
   WorkspaceEmbedAttachmentResult,
@@ -21,6 +23,7 @@ import type {
   WorkspaceImportSaveResult,
   WorkspaceLoad,
   WorkspaceRelocateImageResult,
+  WorkspaceRelocateAttachmentResult,
   WorkspaceRecoveryMutationResult,
   WorkspaceRestoreResult,
   WorkspaceSaveResult,
@@ -322,6 +325,52 @@ export async function relocateWorkspaceImage(
     noteUpdates,
     expectedRevision,
     managedByNoteMove,
+  });
+}
+
+export async function relocateWorkspaceAttachment(
+  path: string,
+  attachmentRelativePath: string,
+  targetRelativePath: string,
+  assetId: string,
+  noteUpdates: WorkspaceAttachmentNoteUpdate[],
+  expectedRevision: number,
+  managedByNoteMove = false,
+): Promise<WorkspaceRelocateAttachmentResult> {
+  return invoke<WorkspaceRelocateAttachmentResult>("workspace_relocate_attachment", {
+    path,
+    attachmentRelativePath,
+    targetRelativePath,
+    assetId,
+    noteUpdates,
+    expectedRevision,
+    managedByNoteMove,
+  });
+}
+
+export async function openWorkspaceAttachment(
+  path: string,
+  attachmentRelativePath: string,
+  assetId?: string,
+): Promise<void> {
+  await invoke<void>("workspace_open_attachment", {
+    path,
+    attachmentRelativePath,
+    assetId,
+  });
+}
+
+export async function saveWorkspaceAttachmentCopy(
+  path: string,
+  attachmentRelativePath: string,
+  assetId?: string,
+  preferredDirectory?: string,
+): Promise<WorkspaceAttachmentCopyResult | null> {
+  return invoke<WorkspaceAttachmentCopyResult | null>("workspace_save_attachment_copy", {
+    path,
+    attachmentRelativePath,
+    assetId,
+    preferredDirectory,
   });
 }
 

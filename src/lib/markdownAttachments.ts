@@ -16,24 +16,50 @@ const MARKDOWN_EXTENSIONS = new Set(["markdown", "md"]);
 const EXECUTABLE_EXTENSIONS = new Set([
   "app",
   "appimage",
+  "appx",
+  "appxbundle",
   "bat",
   "bin",
   "cmd",
+  "command",
   "com",
+  "cpl",
   "deb",
   "desktop",
   "dmg",
   "exe",
   "fish",
+  "hta",
   "jar",
+  "js",
+  "jse",
+  "lnk",
+  "msc",
   "msi",
+  "msix",
+  "msixbundle",
+  "msp",
+  "mst",
+  "pif",
   "pkg",
   "ps1",
+  "psm1",
+  "py",
+  "pyw",
+  "reg",
   "rpm",
   "run",
+  "scr",
   "sh",
+  "tool",
+  "vbe",
+  "vbs",
+  "wsf",
+  "wsh",
   "zsh",
 ]);
+
+export const VAULT_ATTACHMENT_DRAG_MIME = "application/x-obsidian-at-home-vault-attachment";
 
 export interface ParsedMarkdownAttachment {
   assetId?: string;
@@ -48,6 +74,7 @@ export interface ParsedMarkdownAttachment {
 export interface MarkdownAttachmentMetadata {
   byteLength?: number;
   mediaType?: string;
+  openingDisabled?: boolean;
   relativePath?: string;
 }
 
@@ -164,8 +191,26 @@ export function markdownAttachmentPresentation(
     iconLabel: attachmentIconLabel(extension, metadata?.mediaType),
     name,
     sizeLabel: formatAttachmentSize(metadata?.byteLength),
-    typeLabel: attachmentTypeLabel(extension, metadata?.mediaType),
+    typeLabel: attachmentTypeLabel(
+      extension,
+      metadata?.mediaType,
+      metadata?.openingDisabled,
+    ),
   };
+}
+
+export function markdownAttachmentIsArchive(
+  destination: string,
+  mediaType?: string,
+): boolean {
+  return isArchive(attachmentExtension(destination), mediaType);
+}
+
+export function markdownAttachmentIsExecutable(
+  destination: string,
+  openingDisabled = false,
+): boolean {
+  return openingDisabled || EXECUTABLE_EXTENSIONS.has(attachmentExtension(destination));
 }
 
 function isPortableAttachmentDestination(
@@ -267,9 +312,15 @@ function attachmentIconLabel(extension: string, mediaType?: string): string {
   return extension ? extension.slice(0, 4).toLocaleUpperCase() : "FILE";
 }
 
-function attachmentTypeLabel(extension: string, mediaType?: string): string {
-  if (EXECUTABLE_EXTENSIONS.has(extension)) {
-    return `${extension.toLocaleUpperCase()} executable · Opening disabled`;
+function attachmentTypeLabel(
+  extension: string,
+  mediaType?: string,
+  openingDisabled = false,
+): string {
+  if (openingDisabled || EXECUTABLE_EXTENSIONS.has(extension)) {
+    return extension
+      ? `${extension.toLocaleUpperCase()} executable · Opening disabled`
+      : "Executable file · Opening disabled";
   }
   if (mediaType === "application/pdf" || extension === "pdf") {
     return "PDF document";

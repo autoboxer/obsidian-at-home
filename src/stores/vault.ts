@@ -11,6 +11,8 @@ import {
 } from "../lib/markdownImages";
 import {
   formatMarkdownAttachment,
+  markdownAttachmentIsArchive,
+  markdownAttachmentIsExecutable,
   parseMarkdownAttachments,
   relativeAttachmentDestination,
 } from "../lib/markdownAttachments";
@@ -45,12 +47,15 @@ import {
   getWorkspaceRevision,
   importWorkspaceImages,
   isTauri,
+  openWorkspaceAttachment,
   openWorkspace,
   pickFolder,
   pruneRecentlyDeletedNotes,
+  relocateWorkspaceAttachment,
   relocateWorkspaceImage,
   restoreRecentlyDeletedNote as restoreRecentlyDeletedNoteNative,
   saveWorkspace,
+  saveWorkspaceAttachmentCopy,
   saveWorkspaceWithImageImport,
 } from "../services/native";
 import type {
@@ -73,9 +78,11 @@ import type {
   VaultSessionState,
   WorkspaceEmbedAttachmentResult,
   WorkspaceEmbedImageResult,
+  WorkspaceAttachmentNoteUpdate,
   WorkspaceImageNoteUpdate,
   WorkspaceLoad,
   WorkspaceRelocateImageResult,
+  WorkspaceRelocateAttachmentResult,
   WorkspaceSaveResult,
 } from "../types";
 
@@ -96,20 +103,31 @@ type FolderSelection = VaultData["selectedFolderId"];
 type SmartFolderSelection = "all" | "favorites" | "recent";
 type SaveStatus = "saved" | "saving" | "error";
 type ToastTone = "neutral" | "success" | "warning";
+interface ToastAction {
+  label: string;
+  run: () => void;
+}
 
 export const NOTE_DRAG_MIME = "application/x-obsidian-at-home-note-id";
 export const FOLDER_DRAG_MIME = "application/x-obsidian-at-home-folder-id";
 export const treeDragState = reactive<{
+  attachmentPath: string | null;
   noteId: string | null;
   folderId: string | null;
   imagePath: string | null;
 }>({
+  attachmentPath: null,
   noteId: null,
   folderId: null,
   imagePath: null,
 });
 
 export const vaultImageInsertRequest = reactive({
+  id: 0,
+  relativePath: "",
+});
+
+export const vaultAttachmentInsertRequest = reactive({
   id: 0,
   relativePath: "",
 });
@@ -129,7 +147,7 @@ interface UiState {
   saveStatus: SaveStatus;
   lastSavedAt: number;
   zoom: number;
-  toast: { id: number; message: string; tone: ToastTone } | null;
+  toast: { action?: ToastAction; id: number; message: string; tone: ToastTone } | null;
 }
 
 interface SearchState {
@@ -980,6 +998,9 @@ export async function moveNoteToFolder(noteId: string, folderId: string | null):
   const mirrorImages = note.relativePath
     ? mirrorImagesThatFollowNote(note)
     : [];
+  const mirrorAttachments = note.relativePath
+    ? mirrorAttachmentsThatFollowNote(note)
+    : [];
   const projectedPath = note.relativePath
     ? projectedNoteRelativePath({ ...note, folderId }, vaultState.folders, note.relativePath)
     : "";
@@ -1008,6 +1029,31 @@ export async function moveNoteToFolder(noteId: string, folderId: string | null):
       targetPaths.add(targetPath);
     }
   }
+  const projectedAttachmentMirrorFolder = projectedPath
+    ? mirroredAttachmentFolderForNotePath(projectedPath)
+    : undefined;
+  if (projectedAttachmentMirrorFolder !== undefined) {
+    const movingPaths = new Set(
+      mirrorAttachments.map((attachment) => attachment.relativePath.toLocaleLowerCase()),
+    );
+    const targetPaths = new Set<string>();
+    for (const attachment of mirrorAttachments) {
+      const fileName = attachment.relativePath.split("/").at(-1) || "Attachment";
+      const targetPath = `${projectedAttachmentMirrorFolder}/${fileName}`.toLocaleLowerCase();
+      if (
+        targetPaths.has(targetPath)
+        || vaultState.attachmentFiles.some((candidate) =>
+          candidate.relativePath.toLocaleLowerCase() === targetPath
+          && !movingPaths.has(targetPath)
+        )
+      ) {
+        notify("A mirrored attachment already uses the note's destination folder", "warning");
+
+        return false;
+      }
+      targetPaths.add(targetPath);
+    }
+  }
 
   updateNote(noteId, { folderId });
   if (vaultSession.backend === "native" && !(await flushVault())) {
@@ -1030,9 +1076,23 @@ export async function moveNoteToFolder(noteId: string, folderId: string | null):
       }
     }
   }
+  const attachmentMirrorFolder = movedNote?.relativePath
+    ? mirroredAttachmentFolderForNotePath(movedNote.relativePath)
+    : undefined;
+  if (attachmentMirrorFolder !== undefined) {
+    for (const attachment of mirrorAttachments) {
+      const fileName = attachment.relativePath.split("/").at(-1) || "Attachment";
+      if (!(await relocateVaultAttachment(attachment, attachmentMirrorFolder, fileName, {
+        managedByNoteMove: true,
+        announce: false,
+      }))) {
+        mirrorMoveFailed = true;
+      }
+    }
+  }
   notify(
     mirrorMoveFailed
-      ? `Moved to ${folder?.name ?? "Vault root"}, but a mirrored image stayed in its previous folder`
+      ? `Moved to ${folder?.name ?? "Vault root"}, but a mirrored asset stayed in its previous folder`
       : `Moved to ${folder?.name ?? "Vault root"}`,
     mirrorMoveFailed ? "warning" : "success",
   );
@@ -1321,9 +1381,9 @@ export function renameFolder(id: string, name: string): void {
     return;
   }
 
-  if (folderContainsImages(id)) {
+  if (folderContainsAssets(id)) {
     notify(
-      "Move contained images or change mirrored-image storage before renaming this folder",
+      "Move contained assets or change mirrored storage before renaming this folder",
       "warning",
     );
 
@@ -1379,9 +1439,9 @@ export function moveFolder(folderId: string, parentId: string | null): boolean {
     return false;
   }
 
-  if (folderContainsImages(folderId)) {
+  if (folderContainsAssets(folderId)) {
     notify(
-      "Move contained images or change mirrored-image storage before moving this folder",
+      "Move contained assets or change mirrored storage before moving this folder",
       "warning",
     );
 
@@ -1404,9 +1464,9 @@ export function deleteFolder(id: string): void {
   if (!folder) {
     return;
   }
-  if (folderContainsImages(id)) {
+  if (folderContainsAssets(id)) {
     notify(
-      "Move contained images or change mirrored-image storage before removing this folder",
+      "Move contained assets or change mirrored storage before removing this folder",
       "warning",
     );
 
@@ -1875,7 +1935,7 @@ function safeNoteFileStem(value: string): string {
     : result;
 }
 
-function folderContainsImages(folderId: string): boolean {
+function folderContainsAssets(folderId: string): boolean {
   const path = folderPath(folderId);
   if (!path) {
     return false;
@@ -1890,10 +1950,27 @@ function folderContainsImages(folderId: string): boolean {
     }
   }
 
-  return vaultState.imageFiles.some((image) => {
+  const containsImage = vaultState.imageFiles.some((image) => {
     const imagePath = image.relativePath.toLocaleLowerCase();
 
     return [...imageFolders].some((folder) => imagePath.startsWith(`${folder}/`));
+  });
+  const attachmentFolders = new Set([path.toLocaleLowerCase()]);
+  if (vaultState.attachmentEmbedSettings.location === "specified-folder-mirrored") {
+    const mirrorRoot = vaultState.attachmentEmbedSettings.folderPath
+      .trim()
+      .replace(/^\/+|\/+$/g, "");
+    if (mirrorRoot) {
+      attachmentFolders.add(`${mirrorRoot}/${path}`.toLocaleLowerCase());
+    }
+  }
+
+  return containsImage || vaultState.attachmentFiles.some((attachment) => {
+    const attachmentPath = attachment.relativePath.toLocaleLowerCase();
+
+    return [...attachmentFolders].some((folder) =>
+      attachmentPath.startsWith(`${folder}/`)
+    );
   });
 }
 
@@ -1965,6 +2042,62 @@ function mirrorImagesThatFollowNote(note: Note): VaultImageFile[] {
     return parentKey === mirrorFolderKey
       && referencedPaths.has(imagePathKey)
       && !pathsReferencedByOtherNotes.has(imagePathKey);
+  });
+}
+
+function mirroredAttachmentFolderForNotePath(noteRelativePath: string): string | undefined {
+  if (vaultState.attachmentEmbedSettings.location !== "specified-folder-mirrored") {
+    return undefined;
+  }
+  const mirrorRoot = vaultState.attachmentEmbedSettings.folderPath
+    .trim()
+    .replace(/^\/+|\/+$/g, "");
+  if (!mirrorRoot) {
+    return undefined;
+  }
+  const noteFolder = noteRelativePath.split("/").slice(0, -1).join("/");
+
+  return noteFolder ? `${mirrorRoot}/${noteFolder}` : mirrorRoot;
+}
+
+function mirrorAttachmentsThatFollowNote(note: Note): VaultAttachmentFile[] {
+  const mirrorFolder = mirroredAttachmentFolderForNotePath(note.relativePath);
+  if (mirrorFolder === undefined) {
+    return [];
+  }
+  const mirrorFolderKey = mirrorFolder.toLocaleLowerCase();
+  const referencedPaths = new Set(
+    parseMarkdownAttachments(note.content)
+      .map((attachment) => trackedAttachmentPath(attachment.assetId)
+        ?? resolveMarkdownImagePath(note.relativePath, attachment.destination))
+      .filter((path): path is string => Boolean(path))
+      .map((path) => path.toLocaleLowerCase()),
+  );
+  const pathsReferencedByOtherNotes = new Set<string>();
+  for (const candidate of vaultState.notes) {
+    if (candidate.id === note.id) {
+      continue;
+    }
+    for (const reference of parseMarkdownAttachments(candidate.content)) {
+      const path = trackedAttachmentPath(reference.assetId)
+        ?? resolveMarkdownImagePath(candidate.relativePath, reference.destination);
+      if (path) {
+        pathsReferencedByOtherNotes.add(path.toLocaleLowerCase());
+      }
+    }
+  }
+
+  return vaultState.attachmentFiles.filter((attachment) => {
+    const attachmentPathKey = attachment.relativePath.toLocaleLowerCase();
+    const parentKey = attachment.relativePath
+      .split("/")
+      .slice(0, -1)
+      .join("/")
+      .toLocaleLowerCase();
+
+    return parentKey === mirrorFolderKey
+      && referencedPaths.has(attachmentPathKey)
+      && !pathsReferencedByOtherNotes.has(attachmentPathKey);
   });
 }
 
@@ -2160,6 +2293,320 @@ function applyRelocatedImageResult(
   applyWorkspaceSaveResult(result);
 }
 
+export function isMirrorManagedAttachment(relativePath: string): boolean {
+  if (vaultState.attachmentEmbedSettings.location !== "specified-folder-mirrored") {
+    return false;
+  }
+  const folder = vaultState.attachmentEmbedSettings.folderPath
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .toLocaleLowerCase();
+  const path = relativePath.toLocaleLowerCase();
+
+  return Boolean(folder) && path.startsWith(`${folder}/`);
+}
+
+export function requestInsertVaultAttachment(attachment: VaultAttachmentFile): void {
+  if (vaultSession.backend !== "native" || !vaultSession.path || !activeNote.value) {
+    notify("Open a note in a desktop vault before inserting a file", "warning");
+
+    return;
+  }
+  vaultAttachmentInsertRequest.relativePath = attachment.relativePath;
+  vaultAttachmentInsertRequest.id += 1;
+}
+
+export async function renameVaultAttachment(
+  attachment: VaultAttachmentFile,
+  fileName: string,
+): Promise<boolean> {
+  const parent = attachment.relativePath.split("/").slice(0, -1).join("/");
+
+  return relocateVaultAttachment(attachment, parent, fileName);
+}
+
+export async function moveVaultAttachmentToFolder(
+  attachment: VaultAttachmentFile,
+  folderId: string | null,
+): Promise<boolean> {
+  const fileName = attachment.relativePath.split("/").at(-1) || "Attachment";
+
+  return relocateVaultAttachment(attachment, folderPath(folderId), fileName);
+}
+
+async function relocateVaultAttachment(
+  attachment: VaultAttachmentFile,
+  targetFolderPath: string,
+  requestedFileName: string,
+  options: { announce?: boolean; managedByNoteMove?: boolean } = {},
+): Promise<boolean> {
+  const managedByNoteMove = Boolean(options.managedByNoteMove);
+  if (isMirrorManagedAttachment(attachment.relativePath) && !managedByNoteMove) {
+    notify(
+      "Mirrored attachments follow their note folders and cannot be renamed or moved",
+      "warning",
+    );
+
+    return false;
+  }
+  const fileName = requestedFileName.trim();
+  if (!isSafeAttachmentFileName(fileName)) {
+    notify("Enter a safe non-Markdown, non-image file name", "warning");
+
+    return false;
+  }
+  const targetRelativePath = targetFolderPath
+    ? `${targetFolderPath}/${fileName}`
+    : fileName;
+  if (targetRelativePath === attachment.relativePath) {
+    return false;
+  }
+  const targetKey = targetRelativePath.toLocaleLowerCase();
+  if (vaultState.attachmentFiles.some((candidate) =>
+    candidate.relativePath.toLocaleLowerCase() === targetKey
+    && candidate.relativePath.toLocaleLowerCase()
+      !== attachment.relativePath.toLocaleLowerCase()
+  )) {
+    notify("A file with that name already exists there", "warning");
+
+    return false;
+  }
+  if (vaultSession.backend !== "native" || !vaultSession.path) {
+    notify("Attachment files can be reorganized in the desktop app", "warning");
+
+    return false;
+  }
+
+  return runExclusiveVaultDataOperation(false, async () => {
+    if (!(await flushVault())) {
+      return false;
+    }
+    const currentAttachment = vaultState.attachmentFiles.find((candidate) =>
+      (attachment.assetId && candidate.assetId === attachment.assetId)
+      || candidate.relativePath.toLocaleLowerCase()
+        === attachment.relativePath.toLocaleLowerCase()
+    );
+    if (
+      !currentAttachment
+      || (isMirrorManagedAttachment(currentAttachment.relativePath) && !managedByNoteMove)
+    ) {
+      notify("That attachment can no longer be moved", "warning");
+
+      return false;
+    }
+
+    const assetId = currentAttachment.assetId || createId("attachment");
+    const noteUpdates = vaultState.notes.flatMap((note): WorkspaceAttachmentNoteUpdate[] => {
+      const content = rewriteAttachmentReferences(
+        note.content,
+        note.relativePath,
+        currentAttachment.relativePath,
+        targetRelativePath,
+        currentAttachment.assetId,
+        assetId,
+      );
+
+      return content === note.content ? [] : [{
+        noteId: note.id,
+        relativePath: note.relativePath,
+        expectedContent: note.content,
+        content,
+      }];
+    });
+
+    try {
+      const result = await relocateWorkspaceAttachment(
+        vaultSession.path!,
+        currentAttachment.relativePath,
+        targetRelativePath,
+        assetId,
+        noteUpdates,
+        vaultSession.revision,
+        managedByNoteMove,
+      );
+      applyRelocatedAttachmentResult(result, noteUpdates);
+      uiState.attachmentRefreshToken += 1;
+      if (options.announce !== false) {
+        notify(
+          targetFolderPath
+            ? `Moved attachment to ${targetFolderPath}`
+            : "Moved attachment to Vault root",
+          "success",
+        );
+      }
+
+      return true;
+    } catch (error) {
+      const message = errorMessage(error, "The attachment could not be moved.");
+      vaultSession.error = message;
+      vaultSession.conflict = isRevisionConflict(message);
+      notify(message, "warning");
+
+      return false;
+    }
+  });
+}
+
+function applyRelocatedAttachmentResult(
+  result: WorkspaceRelocateAttachmentResult,
+  noteUpdates: WorkspaceAttachmentNoteUpdate[],
+): void {
+  const updatesById = new Map(noteUpdates.map((update) => [update.noteId, update.content]));
+  applyVaultMutation(() => {
+    for (const note of vaultState.notes) {
+      const content = updatesById.get(note.id);
+      if (content !== undefined) {
+        note.content = content;
+        note.updatedAt = Date.now();
+      }
+    }
+    const oldPathKey = result.previousRelativePath.toLocaleLowerCase();
+    const oldFileIndex = vaultState.attachmentFiles.findIndex((candidate) =>
+      candidate.assetId === result.attachment.id
+      || candidate.relativePath.toLocaleLowerCase() === oldPathKey
+    );
+    if (oldFileIndex >= 0) {
+      vaultState.attachmentFiles.splice(oldFileIndex, 1);
+    }
+    const oldEmbeddedIndex = vaultState.embeddedAttachments.findIndex((candidate) =>
+      candidate.id === result.attachment.id
+      || candidate.relativePath.toLocaleLowerCase() === oldPathKey
+    );
+    if (oldEmbeddedIndex >= 0) {
+      vaultState.embeddedAttachments.splice(oldEmbeddedIndex, 1);
+    }
+    vaultState.embeddedAttachments.push(result.attachment);
+    upsertWorkspaceAttachmentFile({
+      assetId: result.attachment.id,
+      relativePath: result.attachment.relativePath,
+      mediaType: result.attachment.mediaType,
+      byteLength: result.attachment.byteLength,
+      openingDisabled: result.attachment.openingDisabled,
+    });
+  });
+  applyWorkspaceSaveResult(result);
+}
+
+function rewriteAttachmentReferences(
+  content: string,
+  noteRelativePath: string,
+  sourceRelativePath: string,
+  targetRelativePath: string,
+  previousAssetId: string | undefined,
+  assetId: string,
+): string {
+  const replacements: Array<{ from: number; to: number; value: string }> = [];
+  const sourceName = sourceRelativePath.split("/").at(-1) || "Attachment";
+  const targetName = targetRelativePath.split("/").at(-1) || "Attachment";
+  for (const attachment of parseMarkdownAttachments(content)) {
+    const trackedPath = trackedAttachmentPath(attachment.assetId);
+    const resolvedPath = resolveMarkdownImagePath(noteRelativePath, attachment.destination);
+    const matchesAsset = Boolean(previousAssetId && attachment.assetId === previousAssetId);
+    const matchesPath = !trackedPath
+      && resolvedPath?.toLocaleLowerCase() === sourceRelativePath.toLocaleLowerCase();
+    if (matchesAsset || matchesPath) {
+      replacements.push({
+        from: attachment.start,
+        to: attachment.end + 1,
+        value: formatMarkdownAttachment({
+          label: attachment.label === sourceName ? targetName : attachment.label,
+          assetId,
+          destination: relativeAttachmentDestination(noteRelativePath, targetRelativePath),
+          ...(attachment.title !== undefined ? { title: attachment.title } : {}),
+          inTable: attachment.raw.includes("\\|"),
+        }),
+      });
+    }
+  }
+
+  return applyMarkdownReplacements(content, replacements);
+}
+
+function trackedAttachmentPath(assetId: string | undefined): string | undefined {
+  if (!assetId) {
+    return undefined;
+  }
+
+  return vaultState.embeddedAttachments.find((attachment) => attachment.id === assetId)
+    ?.relativePath
+    ?? vaultState.attachmentFiles.find((attachment) => attachment.assetId === assetId)
+      ?.relativePath;
+}
+
+const ARCHIVE_COPY_DIRECTORY_KEY = "obsidian-at-home.archive-copy-directory.v1";
+
+export async function activateVaultAttachment(
+  attachment: Pick<
+    VaultAttachmentFile,
+    "assetId" | "mediaType" | "openingDisabled" | "relativePath"
+  >,
+): Promise<void> {
+  if (vaultSession.backend !== "native" || !vaultSession.path) {
+    notify("Attachment files can be opened in the desktop app", "warning");
+
+    return;
+  }
+  if (markdownAttachmentIsExecutable(
+    attachment.relativePath,
+    attachment.openingDisabled,
+  )) {
+    notify("Opening executable or installer attachments is not supported", "warning");
+
+    return;
+  }
+  try {
+    if (markdownAttachmentIsArchive(attachment.relativePath, attachment.mediaType)) {
+      let preferredDirectory: string | undefined;
+      try {
+        preferredDirectory = window.localStorage.getItem(ARCHIVE_COPY_DIRECTORY_KEY)
+          || undefined;
+      } catch {
+        // A Downloads default remains available when browser storage is unavailable.
+      }
+      const result = await saveWorkspaceAttachmentCopy(
+        vaultSession.path,
+        attachment.relativePath,
+        attachment.assetId,
+        preferredDirectory,
+      );
+      if (!result) {
+        return;
+      }
+      const directory = parentSystemPath(result.path);
+      if (directory) {
+        try {
+          window.localStorage.setItem(ARCHIVE_COPY_DIRECTORY_KEY, directory);
+        } catch {
+          // Remembering the folder is helpful but not required for a successful copy.
+        }
+      }
+      notify("Saved an archive copy outside the vault", "success", {
+        label: "Reveal copy",
+        run: () => {
+          void revealItemInDir(result.path).catch((error) =>
+            notify(errorMessage(error, "The archive copy could not be revealed."), "warning")
+          );
+        },
+      });
+
+      return;
+    }
+    await openWorkspaceAttachment(
+      vaultSession.path,
+      attachment.relativePath,
+      attachment.assetId,
+    );
+  } catch (error) {
+    notify(errorMessage(error, "The attachment could not be opened."), "warning");
+  }
+}
+
+function parentSystemPath(path: string): string | undefined {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+
+  return index > 0 ? path.slice(0, index) : undefined;
+}
+
 function rewriteImageReferences(
   content: string,
   noteRelativePath: string,
@@ -2283,6 +2730,26 @@ function isSafeImageFileName(value: string): boolean {
   return Boolean(extension && ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"].includes(extension));
 }
 
+function isSafeAttachmentFileName(value: string): boolean {
+  if (
+    !value
+    || value !== value.trim()
+    || value === "."
+    || value === ".."
+    || utf8ByteLength(value) > 180
+    || value.endsWith(".")
+    || /[\u0000-\u001f\u007f/\\:*?"<>|]/u.test(value)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(value)
+  ) {
+    return false;
+  }
+  const extension = value.split(".").at(-1)?.toLocaleLowerCase();
+
+  return !extension
+    || !["md", "markdown", "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"]
+      .includes(extension);
+}
+
 export function noteCountForFolder(id: string): number {
   const ids = new Set([id, ...descendantFolderIds(id)]);
 
@@ -2295,9 +2762,13 @@ export function folderChildren(parentId: string | null): Folder[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function notify(message: string, tone: ToastTone = "neutral"): void {
+export function notify(
+  message: string,
+  tone: ToastTone = "neutral",
+  action?: ToastAction,
+): void {
   clearTimeout(toastTimer);
-  uiState.toast = { id: Date.now(), message, tone };
+  uiState.toast = { id: Date.now(), message, tone, ...(action ? { action } : {}) };
   toastTimer = setTimeout(() => {
     uiState.toast = null;
   }, 3200);
@@ -2543,6 +3014,7 @@ export function applyEmbeddedAttachmentResult(
       relativePath: result.attachment.relativePath,
       mediaType: result.attachment.mediaType,
       byteLength: result.attachment.byteLength,
+      openingDisabled: result.attachment.openingDisabled,
     });
   });
   applyWorkspaceSaveResult(result);
@@ -3309,6 +3781,7 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
       && typeof attachment.mediaType === "string"
       && Number.isSafeInteger(attachment.byteLength)
       && attachment.byteLength >= 0
+      && typeof attachment.openingDisabled === "boolean"
     )
     : [];
   const attachmentFiles = Array.isArray(input.attachmentFiles)
@@ -3319,6 +3792,7 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
       && typeof attachment.mediaType === "string"
       && Number.isSafeInteger(attachment.byteLength)
       && attachment.byteLength >= 0
+      && typeof attachment.openingDisabled === "boolean"
     )
     : [];
   const attachmentEmbedSettings = normalizeImageEmbedSettings(input.attachmentEmbedSettings);

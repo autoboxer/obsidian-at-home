@@ -1310,7 +1310,8 @@ pre {
 
 .vault-tree-folder-row,
 .vault-tree-note,
-.vault-tree-image {
+.vault-tree-image,
+.vault-tree-attachment {
   position: relative;
   display: flex;
   width: max-content;
@@ -1335,7 +1336,9 @@ pre {
 .vault-tree-folder-row:hover,
 .vault-tree-note:hover,
 .vault-tree-image:hover,
-.vault-tree-image:focus-within {
+.vault-tree-image:focus-within,
+.vault-tree-attachment:hover,
+.vault-tree-attachment:focus-within {
   background: rgba(255, 255, 255, 0.035);
   color: var(--text-soft);
 }
@@ -1647,14 +1650,16 @@ pre {
   min-width: 166px;
 }
 
-.vault-tree-image {
+.vault-tree-image,
+.vault-tree-attachment {
   gap: 0;
   min-width: 100%;
   padding: 0 7px 0 calc(var(--tree-depth, 0) * 14px + 23px);
   font-size: 11.5px;
 }
 
-.vault-tree-image-main {
+.vault-tree-image-main,
+.vault-tree-attachment-main {
   display: flex;
   min-width: 0;
   height: 100%;
@@ -1666,23 +1671,27 @@ pre {
   text-align: left;
 }
 
-.vault-tree-image.is-dragging {
+.vault-tree-image.is-dragging,
+.vault-tree-attachment.is-dragging {
   cursor: grabbing;
   opacity: 0.46;
   transform: scale(0.985);
 }
 
-.vault-tree-image-icon {
+.vault-tree-image-icon,
+.vault-tree-attachment-icon {
   flex: none;
   color: var(--text-faint);
 }
 
-.vault-tree-image-lock {
+.vault-tree-image-lock,
+.vault-tree-attachment-lock {
   flex: none;
   color: var(--text-faint);
 }
 
-.vault-tree-image-title {
+.vault-tree-image-title,
+.vault-tree-attachment-title {
   min-width: 0;
   flex: 1;
   max-width: 190px;
@@ -1691,14 +1700,16 @@ pre {
   white-space: nowrap;
 }
 
-.vault-tree-image-menu-anchor {
+.vault-tree-image-menu-anchor,
+.vault-tree-attachment-menu-anchor {
   position: relative;
   width: 20px;
   height: 100%;
   flex: none;
 }
 
-.vault-tree-image-more {
+.vault-tree-image-more,
+.vault-tree-attachment-more {
   display: grid;
   width: 20px;
   height: 22px;
@@ -1711,27 +1722,34 @@ pre {
 
 .vault-tree-image:hover .vault-tree-image-more,
 .vault-tree-image:focus-within .vault-tree-image-more,
-.vault-tree-image-more:focus-visible {
+.vault-tree-image-more:focus-visible,
+.vault-tree-attachment:hover .vault-tree-attachment-more,
+.vault-tree-attachment:focus-within .vault-tree-attachment-more,
+.vault-tree-attachment-more:focus-visible {
   opacity: 1;
 }
 
-.vault-tree-image-more:hover {
+.vault-tree-image-more:hover,
+.vault-tree-attachment-more:hover {
   background: var(--surface-control-hover);
   color: var(--text-soft);
 }
 
-.vault-tree-image-popover {
+.vault-tree-image-popover,
+.vault-tree-attachment-popover {
   top: 26px;
   right: -2px;
   min-width: 188px;
 }
 
-.vault-tree-image-popover button:disabled {
+.vault-tree-image-popover button:disabled,
+.vault-tree-attachment-popover button:disabled {
   cursor: default;
   opacity: 0.55;
 }
 
-.vault-tree-image-rename {
+.vault-tree-image-rename,
+.vault-tree-attachment-rename {
   display: flex;
   min-width: 0;
   height: 25px;
@@ -1745,7 +1763,8 @@ pre {
   color: var(--text-muted);
 }
 
-.vault-tree-image-rename input {
+.vault-tree-image-rename input,
+.vault-tree-attachment-rename input {
   width: 100%;
   min-width: 0;
   height: 100%;
@@ -2692,6 +2711,29 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attachment-card__action {
+  flex: none;
+  padding: 0.34em 0.52em;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface-control);
+  color: var(--text-soft);
+  font-family: var(--font-ui);
+  font-size: 0.76em;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.attachment-card__action:hover:not(:disabled) {
+  background: var(--surface-control-hover);
+  color: var(--text);
+}
+
+.attachment-card__action:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .attachment-card__name {
@@ -6391,6 +6433,22 @@ pre {
   color: var(--amber);
 }
 
+.app-toast-action {
+  flex: none;
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface-control);
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.app-toast-action:hover {
+  background: var(--surface-control-hover);
+  color: var(--text);
+}
+
 .toast-enter-active,
 .toast-leave-active {
   transition: opacity 180ms ease, transform 180ms cubic-bezier(0.2, 0.75, 0.2, 1);
@@ -7292,6 +7350,8 @@ pre {
 .vault-tree-note:hover,
 .vault-tree-image:hover,
 .vault-tree-image:focus-within,
+.vault-tree-attachment:hover,
+.vault-tree-attachment:focus-within,
 .vault-tree-folder-add:hover,
 .vault-tree-folder-more:hover,
 .tag-chip button:hover,
@@ -7406,7 +7466,9 @@ pre {
 .vault-tree-folder-row:hover,
 .vault-tree-note:hover,
 .vault-tree-image:hover,
-.vault-tree-image:focus-within {
+.vault-tree-image:focus-within,
+.vault-tree-attachment:hover,
+.vault-tree-attachment:focus-within {
   color: var(--text-soft);
 }
 

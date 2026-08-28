@@ -58,6 +58,7 @@ import type { InlineMarkupKind } from "./inlineMarkup";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
 import type { MarkdownImageSourceResolver } from "./liveMarkdownCodeMirrorWidgets";
 import type { MarkdownAttachmentMetadataResolver } from "./liveMarkdownCodeMirrorWidgets";
+import type { MarkdownAttachmentAction } from "./liveMarkdownCodeMirrorWidgets";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
 import type {
   LiveMarkdownTable,
@@ -66,6 +67,7 @@ import type {
 } from "./liveMarkdownTable";
 
 export interface LiveMarkdownOptions {
+  readonly activateAttachment?: MarkdownAttachmentAction;
   readonly documentId: string;
   readonly openLink: (href: string) => void;
   readonly openWiki: (target: string, heading?: string) => void;
@@ -1646,6 +1648,7 @@ function addMarkdownAttachmentDecoration(
       range.from,
       range.to,
       resolutionVersion,
+      options.activateAttachment,
     ),
   }], [], {
     atomicRanges: [range],

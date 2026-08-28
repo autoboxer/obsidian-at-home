@@ -1,6 +1,8 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { NOTE_IMAGE_DRAG_MIME } from "./imageEmbeds";
 import {
+  markdownAttachmentIsArchive,
+  markdownAttachmentIsExecutable,
   markdownAttachmentPresentation,
   type MarkdownAttachmentMetadata,
   type ParsedMarkdownAttachment,
@@ -261,6 +263,11 @@ export type MarkdownAttachmentMetadataResolver = (
   attachment: ParsedMarkdownAttachment,
 ) => MarkdownAttachmentMetadata | null | undefined;
 
+export type MarkdownAttachmentAction = (
+  attachment: ParsedMarkdownAttachment,
+  metadata: MarkdownAttachmentMetadata | null | undefined,
+) => void;
+
 export class MarkdownAttachmentWidget extends WidgetType {
   constructor(
     private readonly attachment: ParsedMarkdownAttachment,
@@ -268,6 +275,7 @@ export class MarkdownAttachmentWidget extends WidgetType {
     private readonly from: number,
     private readonly to: number,
     private readonly resolutionVersion: number,
+    private readonly activateAttachment?: MarkdownAttachmentAction,
   ) {
     super();
   }
@@ -276,10 +284,12 @@ export class MarkdownAttachmentWidget extends WidgetType {
     return this.attachment.raw === other.attachment.raw
       && this.metadata?.byteLength === other.metadata?.byteLength
       && this.metadata?.mediaType === other.metadata?.mediaType
+      && this.metadata?.openingDisabled === other.metadata?.openingDisabled
       && this.metadata?.relativePath === other.metadata?.relativePath
       && this.from === other.from
       && this.to === other.to
-      && this.resolutionVersion === other.resolutionVersion;
+      && this.resolutionVersion === other.resolutionVersion
+      && this.activateAttachment === other.activateAttachment;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -293,6 +303,15 @@ export class MarkdownAttachmentWidget extends WidgetType {
     const copy = document.createElement("span");
     const name = document.createElement("span");
     const details = document.createElement("span");
+    const action = document.createElement("button");
+    const archive = markdownAttachmentIsArchive(
+      this.metadata?.relativePath ?? this.attachment.destination,
+      this.metadata?.mediaType,
+    );
+    const executable = markdownAttachmentIsExecutable(
+      this.metadata?.relativePath ?? this.attachment.destination,
+      this.metadata?.openingDisabled,
+    );
 
     card.className = "live-attachment-card";
     card.dataset.attachmentAssetId = this.attachment.assetId ?? "";
@@ -312,7 +331,27 @@ export class MarkdownAttachmentWidget extends WidgetType {
     details.className = "attachment-card__details";
     details.textContent = `${presentation.typeLabel} · ${presentation.sizeLabel}`;
     copy.append(name, details);
-    card.append(icon, copy);
+    action.className = "attachment-card__action";
+    action.type = "button";
+    action.disabled = executable;
+    action.textContent = executable
+      ? "Unavailable"
+      : archive ? "Save a copy…" : "Open";
+    action.title = executable
+      ? "Opening executable or installer attachments is not supported"
+      : archive ? "Save a copy outside the vault" : "Open with the default application";
+    action.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    action.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!executable) {
+        this.activateAttachment?.(this.attachment, this.metadata);
+      }
+    });
+    card.append(icon, copy, action);
     card.addEventListener("mousedown", (event) => {
       if (event.button === 0) {
         event.stopPropagation();

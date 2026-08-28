@@ -95,6 +95,7 @@ export interface EmbeddedAttachment {
   relativePath: string;
   mediaType: string;
   byteLength: number;
+  openingDisabled: boolean;
 }
 
 export interface VaultAttachmentFile {
@@ -102,6 +103,7 @@ export interface VaultAttachmentFile {
   relativePath: string;
   mediaType: string;
   byteLength: number;
+  openingDisabled: boolean;
 }
 
 export interface AssetInsertionCapture {
@@ -188,9 +190,20 @@ export interface WorkspaceImageNoteUpdate {
   content: string;
 }
 
+export type WorkspaceAttachmentNoteUpdate = WorkspaceImageNoteUpdate;
+
 export interface WorkspaceRelocateImageResult extends WorkspaceSaveResult {
   image: EmbeddedImage;
   previousRelativePath: string;
+}
+
+export interface WorkspaceRelocateAttachmentResult extends WorkspaceSaveResult {
+  attachment: EmbeddedAttachment;
+  previousRelativePath: string;
+}
+
+export interface WorkspaceAttachmentCopyResult {
+  path: string;
 }
 
 export interface VaultSessionState {

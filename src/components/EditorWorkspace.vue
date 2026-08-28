@@ -39,6 +39,7 @@ import {
 } from "../stores/editorPositions";
 import {
   activeNote,
+  activateVaultAttachment,
   applyEmbeddedAttachmentResult,
   applyEmbeddedImageResult,
   backNavigationNote,
@@ -59,6 +60,7 @@ import {
   togglePinned,
   uiState,
   updateNote,
+  vaultAttachmentInsertRequest,
   vaultImageInsertRequest,
   vaultSession,
   vaultState,
@@ -586,6 +588,32 @@ async function insertRequestedVaultImage(): Promise<void> {
   await embedImageFromVault(capture, relativePath);
 }
 
+async function insertRequestedVaultAttachment(): Promise<void> {
+  const relativePath = vaultAttachmentInsertRequest.relativePath;
+  await nextTick();
+  const capture = sourceEditor.value?.captureAttachmentInsertion();
+  if (!capture || !relativePath) {
+    notify("Place the cursor in an open note before inserting a file", "warning");
+
+    return;
+  }
+  await embedAttachmentFromVault(capture, relativePath);
+}
+
+function activateEmbeddedAttachment(
+  assetId: string | undefined,
+  relativePath: string,
+  mediaType: string | undefined,
+  openingDisabled: boolean | undefined,
+): void {
+  void activateVaultAttachment({
+    ...(assetId ? { assetId } : {}),
+    relativePath,
+    mediaType: mediaType ?? "application/octet-stream",
+    openingDisabled: openingDisabled ?? false,
+  });
+}
+
 async function setFolder(event: Event): Promise<void> {
   if (!activeNote.value) {
     return;
@@ -719,6 +747,11 @@ watch(
 watch(
   () => vaultImageInsertRequest.id,
   () => void insertRequestedVaultImage(),
+);
+
+watch(
+  () => vaultAttachmentInsertRequest.id,
+  () => void insertRequestedVaultAttachment(),
 );
 
 watch(tagInput, () => {
@@ -992,10 +1025,12 @@ watch(tagInput, () => {
             :vault-id="positionVaultId"
             :vault-path="vaultSession.path"
             @editor-position="rememberEditorPosition"
+            @activate-attachment="activateEmbeddedAttachment"
             @open-link="openRenderedLink"
             @open-wiki="openWikiLink"
             @paste-image="embedImageFromClipboard"
             @request-embed-attachment="embedAttachmentFromFile"
+            @vault-attachment-drop="embedAttachmentFromVault"
             @vault-image-drop="embedImageFromVault"
             @request-embed-image="embedImageFromFile"
             @update:model-value="setContent"
