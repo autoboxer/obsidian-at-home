@@ -1,5 +1,6 @@
 import { markdownLanguage } from "@codemirror/lang-markdown";
 import { leadingFrontmatterEnd } from "./frontmatter";
+import { parseInlineMarkdownLinkAt } from "./markdownLinks";
 
 const ASSET_FRAGMENT_PREFIX = "oah-image=";
 const MAX_IMAGE_DIMENSION = 10_000;
@@ -32,39 +33,22 @@ export function parseMarkdownImageAt(
   source: string,
   start: number,
 ): ParsedMarkdownImage | undefined {
-  if (!source.startsWith("![", start)) {
+  const link = parseInlineMarkdownLinkAt(source, start, true);
+  if (!link) {
     return undefined;
   }
 
-  const labelEnd = findClosingLabel(source, start + 2);
-  if (labelEnd < 0 || source[labelEnd + 1] !== "(") {
-    return undefined;
-  }
-
-  const destinationEnd = findClosingDestination(source, labelEnd + 2);
-  if (destinationEnd < 0) {
-    return undefined;
-  }
-
-  const destinationParts = parseDestination(
-    source.slice(labelEnd + 2, destinationEnd).trim(),
-  );
-  if (!destinationParts) {
-    return undefined;
-  }
-
-  const label = unescapeMarkdownPunctuation(source.slice(start + 2, labelEnd));
-  const { alt, ...size } = parseImageLabel(label);
-  const asset = splitAssetFragment(destinationParts.destination);
+  const { alt, ...size } = parseImageLabel(link.label);
+  const asset = splitAssetFragment(link.destination);
 
   return {
     alt,
     destination: asset.destination,
-    end: destinationEnd,
-    raw: source.slice(start, destinationEnd + 1),
+    end: link.end,
+    raw: link.raw,
     start,
     ...(asset.assetId ? { assetId: asset.assetId } : {}),
-    ...(destinationParts.title ? { title: destinationParts.title } : {}),
+    ...(link.title ? { title: link.title } : {}),
     ...size,
   };
 }
@@ -141,95 +125,6 @@ export function markdownImageStyle(
   ].filter(Boolean);
 
   return declarations.length ? declarations.join("; ") : undefined;
-}
-
-function findClosingLabel(source: string, start: number): number {
-  let depth = 1;
-  for (let index = start; index < source.length; index += 1) {
-    const character = source[index]!;
-    if (character === "\n" || character === "\r") {
-      return -1;
-    }
-    if (character === "\\") {
-      index += 1;
-    } else if (character === "[") {
-      depth += 1;
-    } else if (character === "]") {
-      depth -= 1;
-      if (!depth) {
-        return index;
-      }
-    }
-  }
-
-  return -1;
-}
-
-function findClosingDestination(source: string, start: number): number {
-  let depth = 1;
-  let angleDestination = source[start] === "<";
-  let quote: "\"" | "'" | undefined;
-
-  for (let index = start; index < source.length; index += 1) {
-    const character = source[index]!;
-    if (character === "\n" || character === "\r") {
-      return -1;
-    }
-    if (character === "\\") {
-      index += 1;
-      continue;
-    }
-    if (angleDestination) {
-      if (character === ">") {
-        angleDestination = false;
-      }
-      continue;
-    }
-    if (quote) {
-      if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    const previousCharacter = source[index - 1];
-    const followsTitleSeparator = index > start
-      && (previousCharacter === " " || previousCharacter === "\t");
-    if (
-      (character === "\"" || character === "'")
-      && depth === 1
-      && followsTitleSeparator
-    ) {
-      quote = character;
-    } else if (character === "(") {
-      depth += 1;
-    } else if (character === ")") {
-      depth -= 1;
-      if (!depth) {
-        return index;
-      }
-    }
-  }
-
-  return -1;
-}
-
-function parseDestination(
-  raw: string,
-): { destination: string; title?: string } | undefined {
-  const match = raw.match(
-    /^(<(?:\\.|[^>\\])+>|\S+?)(?:\s+(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|\(((?:\\.|[^)\\])*)\)))?$/,
-  );
-  if (!match) {
-    return undefined;
-  }
-
-  const destination = match[1]!.replace(/^<|>$/g, "");
-  const title = match[2] ?? match[3] ?? match[4];
-
-  return {
-    destination,
-    ...(title === undefined ? {} : { title: unescapeMarkdownPunctuation(title) }),
-  };
 }
 
 function parseImageLabel(label: string): { alt: string } & MarkdownImageSize {
@@ -309,13 +204,6 @@ function splitAssetFragment(destination: string): {
     assetId,
     destination: destination.slice(0, markerIndex),
   };
-}
-
-function unescapeMarkdownPunctuation(value: string): string {
-  return value.replace(
-    /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g,
-    "$1",
-  );
 }
 
 function escapeImageAlt(value: string, inTable: boolean): string {

@@ -1,5 +1,10 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { NOTE_IMAGE_DRAG_MIME } from "./imageEmbeds";
+import {
+  markdownAttachmentPresentation,
+  type MarkdownAttachmentMetadata,
+  type ParsedMarkdownAttachment,
+} from "./markdownAttachments";
 import type { Rect } from "@codemirror/view";
 import type { LiveMarkdownBlock } from "./liveMarkdown";
 import type { ParsedMarkdownImage } from "./markdownImages";
@@ -251,6 +256,76 @@ export class WikiLinkWidget extends WidgetType {
 export type MarkdownImageSourceResolver = (
   image: ParsedMarkdownImage,
 ) => Promise<string | null | undefined> | string | null | undefined;
+
+export type MarkdownAttachmentMetadataResolver = (
+  attachment: ParsedMarkdownAttachment,
+) => MarkdownAttachmentMetadata | null | undefined;
+
+export class MarkdownAttachmentWidget extends WidgetType {
+  constructor(
+    private readonly attachment: ParsedMarkdownAttachment,
+    private readonly metadata: MarkdownAttachmentMetadata | null | undefined,
+    private readonly from: number,
+    private readonly to: number,
+    private readonly resolutionVersion: number,
+  ) {
+    super();
+  }
+
+  eq(other: MarkdownAttachmentWidget): boolean {
+    return this.attachment.raw === other.attachment.raw
+      && this.metadata?.byteLength === other.metadata?.byteLength
+      && this.metadata?.mediaType === other.metadata?.mediaType
+      && this.metadata?.relativePath === other.metadata?.relativePath
+      && this.from === other.from
+      && this.to === other.to
+      && this.resolutionVersion === other.resolutionVersion;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const document = view.dom.ownerDocument;
+    const presentation = markdownAttachmentPresentation(
+      this.attachment,
+      this.metadata ?? undefined,
+    );
+    const card = document.createElement("span");
+    const icon = document.createElement("span");
+    const copy = document.createElement("span");
+    const name = document.createElement("span");
+    const details = document.createElement("span");
+
+    card.className = "live-attachment-card";
+    card.dataset.attachmentAssetId = this.attachment.assetId ?? "";
+    card.dataset.attachmentDestination = this.attachment.destination;
+    card.setAttribute("contenteditable", "false");
+    card.setAttribute("role", "group");
+    card.setAttribute(
+      "aria-label",
+      `${presentation.name}, ${presentation.typeLabel}, ${presentation.sizeLabel}`,
+    );
+    icon.className = "attachment-card__icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = presentation.iconLabel;
+    copy.className = "attachment-card__copy";
+    name.className = "attachment-card__name";
+    name.textContent = presentation.name;
+    details.className = "attachment-card__details";
+    details.textContent = `${presentation.typeLabel} · ${presentation.sizeLabel}`;
+    copy.append(name, details);
+    card.append(icon, copy);
+    card.addEventListener("mousedown", (event) => {
+      if (event.button === 0) {
+        event.stopPropagation();
+        view.focus();
+      }
+    });
+    card.addEventListener("click", (event) =>
+      revealWidgetSource(view, card, event, this.from, this.to)
+    );
+
+    return card;
+  }
+}
 
 export class MarkdownImageWidget extends WidgetType {
   constructor(

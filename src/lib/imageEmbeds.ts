@@ -69,11 +69,14 @@ export function resolveMarkdownImagePath(
   noteRelativePath: string,
   destination: string,
 ): string | undefined {
+  if (!destination || destination.includes("#") || destination.includes("?")) {
+    return undefined;
+  }
   const decoded = decodeMarkdownImageDestination(destination);
   if (
     !decoded
+    || decoded.startsWith("//")
     || decoded.includes("\\")
-    || decoded.includes("#")
     || decoded.includes("?")
     || /[\u0000-\u001f\u007f]/u.test(decoded)
     || /^[A-Za-z][A-Za-z\d+.-]*:/u.test(decoded)
