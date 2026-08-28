@@ -20,13 +20,13 @@ const TRANSACTIONS_DIRECTORY: &str = "transactions";
 const TRANSACTION_MANIFEST_FILE: &str = "manifest.json";
 const RECENTLY_DELETED_DIRECTORY: &str = "recently-deleted";
 const RECENTLY_DELETED_SNAPSHOT_VERSION: u32 = 1;
-const STATE_VERSION: u32 = 3;
+const STATE_VERSION: u32 = 4;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
 const TRANSACTION_VERSION: u32 = 4;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
-const MAX_IMAGE_ASSETS: usize = 100_000;
+const MAX_VAULT_ASSETS: usize = 100_000;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
 const MAX_RECENT_NOTES: usize = 10;
@@ -354,7 +354,22 @@ struct StoredRecentlyDeletedNote {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct StoredImageAsset {
+enum VaultAssetKind {
+    Image,
+    Attachment,
+}
+
+impl Default for VaultAssetKind {
+    fn default() -> Self {
+        Self::Image
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StoredVaultAsset {
+    #[serde(default)]
+    kind: VaultAssetKind,
     relative_path: String,
     media_type: String,
     fingerprint: FileFingerprint,
@@ -392,8 +407,8 @@ struct WorkspaceState {
     recent_note_ids: Vec<String>,
     #[serde(default)]
     recently_deleted_notes: BTreeMap<String, StoredRecentlyDeletedNote>,
-    #[serde(default)]
-    image_assets: BTreeMap<String, StoredImageAsset>,
+    #[serde(default, alias = "imageAssets")]
+    assets: BTreeMap<String, StoredVaultAsset>,
     #[serde(default)]
     image_embed_settings: ImageEmbedSettings,
     #[serde(default = "default_folder_selection")]
@@ -417,7 +432,7 @@ impl Default for WorkspaceState {
             active_note_id: None,
             recent_note_ids: Vec::new(),
             recently_deleted_notes: BTreeMap::new(),
-            image_assets: BTreeMap::new(),
+            assets: BTreeMap::new(),
             image_embed_settings: ImageEmbedSettings::default(),
             selected_folder_id: default_folder_selection(),
             last_committed_transaction_id: None,
@@ -1348,7 +1363,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
     } else {
         defaults.snippets.clone()
     };
-    let embedded_images = reconcile_image_assets(&root, &mut state.image_assets, &mut warnings);
+    let embedded_images = reconcile_image_assets(&root, &mut state.assets, &mut warnings);
     let tracked_image_ids = embedded_images
         .iter()
         .map(|image| (portable_path_key(&image.relative_path), image.id.clone()))
@@ -1415,7 +1430,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         active_note_id: active_note_id.clone(),
         recent_note_ids: recent_note_ids.clone(),
         recently_deleted_notes: recently_deleted_state,
-        image_assets: state.image_assets.clone(),
+        assets: state.assets.clone(),
         image_embed_settings: image_embed_settings.clone(),
         selected_folder_id: selected_folder_id.clone(),
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
@@ -1800,7 +1815,7 @@ fn save_workspace_files_with_recovery(
         active_note_id: vault.active_note_id.clone(),
         recent_note_ids,
         recently_deleted_notes,
-        image_assets: old_state.image_assets.clone(),
+        assets: old_state.assets.clone(),
         image_embed_settings: normalize_image_embed_settings(&vault.image_embed_settings)?,
         selected_folder_id: vault.selected_folder_id.clone(),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
@@ -2756,8 +2771,9 @@ fn embed_workspace_image(
     let fingerprint = fingerprint_bytes(bytes);
 
     if let Some(relative_path) = existing_relative_path.as_deref() {
-        if let Some((id, stored)) = state.image_assets.iter_mut().find(|(_, stored)| {
-            portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
+        if let Some((id, stored)) = state.assets.iter_mut().find(|(_, stored)| {
+            stored.kind == VaultAssetKind::Image
+                && portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
         }) {
             if stored.relative_path != relative_path {
                 let old_path = resolve_workspace_image_file(root, &stored.relative_path, true)?;
@@ -2789,9 +2805,9 @@ fn embed_workspace_image(
         }
     }
 
-    if state.image_assets.len() >= MAX_IMAGE_ASSETS {
+    if state.assets.len() >= MAX_VAULT_ASSETS {
         return Err(format!(
-            "This vault already tracks the maximum of {MAX_IMAGE_ASSETS} embedded images."
+            "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded images."
         ));
     }
 
@@ -2811,7 +2827,7 @@ fn embed_workspace_image(
         relative_path
     };
 
-    let mut used_ids = state.image_assets.keys().cloned().collect::<HashSet<_>>();
+    let mut used_ids = state.assets.keys().cloned().collect::<HashSet<_>>();
     let id_seed = format!(
         "{relative_path}:{}:{}:{}",
         fingerprint.length,
@@ -2832,9 +2848,10 @@ fn embed_workspace_image(
     };
     state.version = STATE_VERSION;
     state.image_embed_settings = settings;
-    state.image_assets.insert(
+    state.assets.insert(
         id.clone(),
-        StoredImageAsset {
+        StoredVaultAsset {
+            kind: VaultAssetKind::Image,
             relative_path: relative_path.clone(),
             media_type: media_type.to_owned(),
             fingerprint,
@@ -2884,7 +2901,7 @@ fn relocate_workspace_image(
     if image_relative_path == target_relative_path {
         return Err("The image is already at that path.".to_owned());
     }
-    if !is_valid_image_asset_id(asset_id) {
+    if !is_valid_asset_id(asset_id) {
         return Err("The image has an invalid stable ID.".to_owned());
     }
 
@@ -2955,18 +2972,23 @@ fn relocate_workspace_image(
         return Err(format!("A file named {target_relative_path} already exists."));
     }
 
-    if let Some(stored) = old_state.image_assets.get(asset_id) {
+    if let Some(stored) = old_state.assets.get(asset_id) {
+        if stored.kind != VaultAssetKind::Image {
+            return Err("The stable image record refers to a different file type.".to_owned());
+        }
         if portable_path_key(&stored.relative_path) != portable_path_key(image_relative_path) {
             return Err("The stable image record no longer points to that file. Reload the vault.".to_owned());
         }
     } else {
-        if old_state.image_assets.len() >= MAX_IMAGE_ASSETS {
+        if old_state.assets.len() >= MAX_VAULT_ASSETS {
             return Err(format!(
-                "This vault already tracks the maximum of {MAX_IMAGE_ASSETS} embedded images."
+                "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded images."
             ));
         }
-        if old_state.image_assets.values().any(|stored| {
-            portable_path_key(&stored.relative_path) == portable_path_key(image_relative_path)
+        if old_state.assets.values().any(|stored| {
+            stored.kind == VaultAssetKind::Image
+                && portable_path_key(&stored.relative_path)
+                    == portable_path_key(image_relative_path)
         }) {
             return Err("The image's stable record changed. Reload the vault.".to_owned());
         }
@@ -3062,9 +3084,10 @@ fn relocate_workspace_image(
 
     let mut state = old_state.clone();
     state.version = STATE_VERSION;
-    state.image_assets.insert(
+    state.assets.insert(
         asset_id.to_owned(),
-        StoredImageAsset {
+        StoredVaultAsset {
+            kind: VaultAssetKind::Image,
             relative_path: target_relative_path.to_owned(),
             media_type: media_type.to_owned(),
             fingerprint: fingerprint_bytes(&bytes),
@@ -3232,10 +3255,15 @@ fn read_workspace_image(
         return Err("Workspace metadata is unreadable or newer than this app.".to_owned());
     }
     let mut state = stored_state.unwrap_or_default();
-    let valid_asset_id = asset_id.filter(|id| is_valid_image_asset_id(id));
-    let tracked_asset_id = valid_asset_id.filter(|id| state.image_assets.contains_key(*id));
+    let valid_asset_id = asset_id.filter(|id| is_valid_asset_id(id));
+    let tracked_asset_id = valid_asset_id.filter(|id| {
+        state
+            .assets
+            .get(*id)
+            .is_some_and(|asset| asset.kind == VaultAssetKind::Image)
+    });
     if let Some(relative_path) = tracked_asset_id
-        .and_then(|id| state.image_assets.get(id))
+        .and_then(|id| state.assets.get(id))
         .map(|asset| asset.relative_path.as_str())
     {
         if let Ok(bytes) = read_relative_workspace_image(root, relative_path) {
@@ -3243,9 +3271,9 @@ fn read_workspace_image(
         }
     }
     if tracked_asset_id.is_some() {
-        let _ = reconcile_image_assets(root, &mut state.image_assets, &mut warnings);
+        let _ = reconcile_image_assets(root, &mut state.assets, &mut warnings);
         if let Some(relative_path) = tracked_asset_id
-            .and_then(|id| state.image_assets.get(id))
+            .and_then(|id| state.assets.get(id))
             .map(|asset| asset.relative_path.as_str())
         {
             if let Ok(bytes) = read_relative_workspace_image(root, relative_path) {
@@ -3333,9 +3361,9 @@ fn begin_workspace_image_import(
     image_paths: &[String],
     expected_revision: u64,
 ) -> Result<WorkspaceImportImagesResult, String> {
-    if image_paths.len() > MAX_IMAGE_ASSETS {
+    if image_paths.len() > MAX_VAULT_ASSETS {
         return Err(format!(
-            "Only {MAX_IMAGE_ASSETS} images can be imported at once."
+            "Only {MAX_VAULT_ASSETS} images can be imported at once."
         ));
     }
     let mut transaction = prepare_workspace_image_import(root, expected_revision)?;
@@ -4308,7 +4336,7 @@ fn validate_image_relative_path(relative_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn is_valid_image_asset_id(id: &str) -> bool {
+fn is_valid_asset_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 180
         && id
@@ -4393,16 +4421,16 @@ fn hex_value(value: u8) -> Option<u8> {
 
 fn reconcile_image_assets(
     root: &Path,
-    assets: &mut BTreeMap<String, StoredImageAsset>,
+    assets: &mut BTreeMap<String, StoredVaultAsset>,
     warnings: &mut WarningCollector,
 ) -> Vec<EmbeddedImage> {
-    if assets.len() > MAX_IMAGE_ASSETS {
+    if assets.len() > MAX_VAULT_ASSETS {
         warnings.push(format!(
-            "Only the first {MAX_IMAGE_ASSETS} embedded image records were loaded."
+            "Only the first {MAX_VAULT_ASSETS} embedded image records were loaded."
         ));
         let retained = assets
             .keys()
-            .take(MAX_IMAGE_ASSETS)
+            .take(MAX_VAULT_ASSETS)
             .cloned()
             .collect::<HashSet<_>>();
         assets.retain(|id, _| retained.contains(id));
@@ -4410,9 +4438,15 @@ fn reconcile_image_assets(
     let invalid_ids = assets
         .iter()
         .filter_map(|(id, asset)| {
-            (!is_valid_image_asset_id(id)
-                || validate_image_relative_path(&asset.relative_path).is_err())
-            .then(|| id.clone())
+            let path_is_invalid = match asset.kind {
+                VaultAssetKind::Image => {
+                    validate_image_relative_path(&asset.relative_path).is_err()
+                }
+                VaultAssetKind::Attachment => {
+                    validate_relative_path(&asset.relative_path, false).is_err()
+                }
+            };
+            (!is_valid_asset_id(id) || path_is_invalid).then(|| id.clone())
         })
         .collect::<Vec<_>>();
     for id in invalid_ids {
@@ -4422,7 +4456,10 @@ fn reconcile_image_assets(
 
     let mut assigned_paths = HashSet::new();
     let mut missing_ids = Vec::new();
-    for (id, asset) in assets.iter_mut() {
+    for (id, asset) in assets
+        .iter_mut()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Image)
+    {
         let path = match resolve_workspace_image_file(root, &asset.relative_path, false) {
             Ok(path) => path,
             Err(_) => {
@@ -4538,6 +4575,7 @@ fn reconcile_image_assets(
 
     assets
         .iter()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Image)
         .map(|(id, asset)| EmbeddedImage {
             id: id.clone(),
             relative_path: asset.relative_path.clone(),
@@ -4612,9 +4650,9 @@ fn scan_workspace_files(
             continue;
         }
         if is_supported_image_path(entry.path()) {
-            if images.len() >= MAX_IMAGE_ASSETS {
+            if images.len() >= MAX_VAULT_ASSETS {
                 warnings.push(format!(
-                    "Only the first {MAX_IMAGE_ASSETS} image files are shown in the vault tree."
+                    "Only the first {MAX_VAULT_ASSETS} image files are shown in the vault tree."
                 ));
                 continue;
             }
@@ -8478,6 +8516,74 @@ mod tests {
     }
 
     #[test]
+    fn version_three_image_assets_migrate_to_vault_assets() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nlegacy-image-asset";
+        let workspace = TestWorkspace::new("state-v3-image-asset-migration");
+        fs::write(workspace.root.join("Legacy.png"), PNG)
+            .expect("legacy image should be written");
+        fs::create_dir(workspace.root.join(STATE_DIRECTORY))
+            .expect("state directory should be created");
+        let legacy_state = serde_json::json!({
+            "version": 3,
+            "name": "Legacy vault",
+            "imageAssets": {
+                "image-legacy": {
+                    "relativePath": "Legacy.png",
+                    "mediaType": "image/png",
+                    "fingerprint": fingerprint_bytes(PNG),
+                    "modifiedNanos": 0
+                }
+            }
+        });
+        fs::write(
+            workspace.root.join(STATE_DIRECTORY).join(STATE_FILE),
+            serde_json::to_vec_pretty(&legacy_state).expect("legacy state should encode"),
+        )
+        .expect("legacy state should be written");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Fallback"))
+            .expect("legacy workspace should load");
+        assert_eq!(
+            loaded.vault.embedded_images,
+            vec![EmbeddedImage {
+                id: "image-legacy".to_owned(),
+                relative_path: "Legacy.png".to_owned(),
+                media_type: "image/png".to_owned(),
+            }],
+        );
+
+        let migrated: serde_json::Value = serde_json::from_slice(
+            &fs::read(workspace.root.join(STATE_DIRECTORY).join(STATE_FILE))
+                .expect("migrated state should be readable"),
+        )
+        .expect("migrated state should decode");
+        assert_eq!(migrated["version"], STATE_VERSION);
+        assert!(migrated.get("imageAssets").is_none());
+        assert_eq!(migrated["assets"]["image-legacy"]["kind"], "image");
+    }
+
+    #[test]
+    fn image_reconciliation_leaves_attachment_assets_untouched() {
+        let workspace = TestWorkspace::new("attachment-survives-image-reconciliation");
+        let attachment = StoredVaultAsset {
+            kind: VaultAssetKind::Attachment,
+            relative_path: "Files/Archive.zip".to_owned(),
+            media_type: "application/zip".to_owned(),
+            fingerprint: fingerprint_bytes(b"not-yet-managed"),
+            modified_nanos: 0,
+        };
+        let mut assets = BTreeMap::from([("asset-archive".to_owned(), attachment.clone())]);
+
+        assert!(reconcile_image_assets(
+            &workspace.root,
+            &mut assets,
+            &mut WarningCollector::default(),
+        )
+        .is_empty());
+        assert_eq!(assets.get("asset-archive"), Some(&attachment));
+    }
+
+    #[test]
     fn version_two_transactions_default_recovery_targets() {
         let manifest: TransactionManifest = serde_json::from_value(serde_json::json!({
             "version": 2,
@@ -9809,7 +9915,7 @@ mod tests {
         assert_eq!(
             state
                 .expect("state should remain readable")
-                .image_assets
+                .assets
                 .get(&embedded.image.id)
                 .expect("asset should remain indexed")
                 .relative_path,
@@ -9958,7 +10064,7 @@ mod tests {
         let mut warnings = WarningCollector::default();
         let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
         assert_eq!(
-            state.unwrap().image_assets[&embedded.image.id].relative_path,
+            state.unwrap().assets[&embedded.image.id].relative_path,
             "Other Images/Renamed.png",
         );
     }
@@ -10014,7 +10120,7 @@ mod tests {
         let mut warnings = WarningCollector::default();
         let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
         assert_eq!(
-            state.unwrap().image_assets["image-loose"].relative_path,
+            state.unwrap().assets["image-loose"].relative_path,
             "Archive/Loose 2.png",
         );
         assert_eq!(fs::read_to_string(workspace.root.join("Note.md")).unwrap(), updated);
@@ -10035,9 +10141,10 @@ mod tests {
             location: ImageEmbedLocation::SpecifiedFolderMirrored,
             folder_path: "Images".to_owned(),
         };
-        state.image_assets.insert(
+        state.assets.insert(
             "image-managed".to_owned(),
-            StoredImageAsset {
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
                 relative_path: "Images/Notes/Photo.png".to_owned(),
                 media_type: "image/png".to_owned(),
                 fingerprint: fingerprint_bytes(PNG),
@@ -10080,9 +10187,10 @@ mod tests {
             location: ImageEmbedLocation::SpecifiedFolderMirrored,
             folder_path: "Images".to_owned(),
         };
-        state.image_assets.insert(
+        state.assets.insert(
             "image-managed".to_owned(),
-            StoredImageAsset {
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
                 relative_path: "Images/Notes/Photo.png".to_owned(),
                 media_type: "image/png".to_owned(),
                 fingerprint: fingerprint_bytes(PNG),
