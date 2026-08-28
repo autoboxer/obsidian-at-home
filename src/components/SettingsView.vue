@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { validateImageFolderPath } from "../lib/imageEmbeds";
-import type { ExportResult, ImageEmbedLocation, ImportResult } from "../types";
+import { validateAssetFolderPath } from "../lib/imageEmbeds";
+import type {
+  AttachmentEmbedLocation,
+  ExportResult,
+  ImageEmbedLocation,
+  ImportResult,
+} from "../types";
 import {
   appearanceState,
   fontOptions,
@@ -55,6 +60,10 @@ const feedback = ref<Feedback | null>(null);
 const replaceConfirming = ref(false);
 const clearConfirming = ref(false);
 const forgetConfirming = ref(false);
+const attachmentFolderDraft = ref(
+  vaultState.attachmentEmbedSettings.folderPath || "Attachments",
+);
+const attachmentFolderError = ref("");
 const imageFolderDraft = ref(vaultState.imageEmbedSettings.folderPath || "Attachments");
 const imageFolderError = ref("");
 
@@ -123,6 +132,19 @@ watch(
   },
 );
 
+watch(
+  [
+    () => vaultSession.path,
+    () => vaultState.attachmentEmbedSettings.location,
+    () => vaultState.attachmentEmbedSettings.folderPath,
+  ],
+  () => {
+    attachmentFolderDraft.value = vaultState.attachmentEmbedSettings.folderPath
+      || "Attachments";
+    attachmentFolderError.value = "";
+  },
+);
+
 function updateAppearanceFont(event: Event): void {
   const select = event.currentTarget as HTMLSelectElement;
   setAppearanceFont(select.value);
@@ -137,7 +159,7 @@ function updateImageEmbedLocation(event: Event): void {
   const location = (event.currentTarget as HTMLSelectElement).value as ImageEmbedLocation;
   imageFolderError.value = "";
   if (location === "specified-folder" || location === "specified-folder-mirrored") {
-    const validated = validateImageFolderPath(imageFolderDraft.value || "Attachments");
+    const validated = validateAssetFolderPath(imageFolderDraft.value || "Attachments");
     imageFolderDraft.value = validated.error ? "Attachments" : validated.value;
     vaultState.imageEmbedSettings = {
       folderPath: imageFolderDraft.value,
@@ -151,7 +173,7 @@ function updateImageEmbedLocation(event: Event): void {
 }
 
 function saveImageFolderPath(): void {
-  const validated = validateImageFolderPath(imageFolderDraft.value);
+  const validated = validateAssetFolderPath(imageFolderDraft.value);
   if (validated.error) {
     imageFolderError.value = validated.error;
 
@@ -163,6 +185,43 @@ function saveImageFolderPath(): void {
   vaultState.imageEmbedSettings = {
     folderPath: validated.value,
     location: vaultState.imageEmbedSettings.location === "specified-folder-mirrored"
+      ? "specified-folder-mirrored"
+      : "specified-folder",
+  };
+}
+
+function updateAttachmentEmbedLocation(event: Event): void {
+  const location = (event.currentTarget as HTMLSelectElement).value as AttachmentEmbedLocation;
+  attachmentFolderError.value = "";
+  if (location === "specified-folder" || location === "specified-folder-mirrored") {
+    const validated = validateAssetFolderPath(
+      attachmentFolderDraft.value || "Attachments",
+    );
+    attachmentFolderDraft.value = validated.error ? "Attachments" : validated.value;
+    vaultState.attachmentEmbedSettings = {
+      folderPath: attachmentFolderDraft.value,
+      location,
+    };
+
+    return;
+  }
+
+  vaultState.attachmentEmbedSettings = { folderPath: "", location };
+}
+
+function saveAttachmentFolderPath(): void {
+  const validated = validateAssetFolderPath(attachmentFolderDraft.value);
+  if (validated.error) {
+    attachmentFolderError.value = validated.error;
+
+    return;
+  }
+
+  attachmentFolderDraft.value = validated.value;
+  attachmentFolderError.value = "";
+  vaultState.attachmentEmbedSettings = {
+    folderPath: validated.value,
+    location: vaultState.attachmentEmbedSettings.location === "specified-folder-mirrored"
       ? "specified-folder-mirrored"
       : "specified-folder",
   };
@@ -696,6 +755,66 @@ async function forgetVault(): Promise<void> {
             </small>
             <small v-else-if="vaultState.imageEmbedSettings.location === 'specified-folder-mirrored'">
               Note folders are recreated below this folder, such as Images/Projects.
+            </small>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-image-storage">
+        <span class="settings-image-storage__icon">
+          <AppIcon name="paperclip" :size="18" />
+        </span>
+        <div class="settings-image-storage__copy">
+          <label for="settings-attachment-location">Embedded file location</label>
+          <p id="settings-attachment-location-help">
+            Choose where newly embedded non-image files are stored. Existing files are not moved.
+          </p>
+        </div>
+        <div class="settings-image-storage__controls">
+          <select
+            id="settings-attachment-location"
+            :value="vaultState.attachmentEmbedSettings.location"
+            :disabled="!nativeAvailable || !vaultSession.path"
+            aria-describedby="settings-attachment-location-help"
+            @change="updateAttachmentEmbedLocation"
+          >
+            <option value="vault-root">Vault root</option>
+            <option value="note-folder">Same folder as the note</option>
+            <option value="specified-folder">A specific vault folder</option>
+            <option value="specified-folder-mirrored">A specific folder, mirroring note folders</option>
+          </select>
+          <label
+            v-if="vaultState.attachmentEmbedSettings.location === 'specified-folder'
+              || vaultState.attachmentEmbedSettings.location === 'specified-folder-mirrored'"
+            class="settings-image-folder-field"
+          >
+            <span>Vault-relative folder</span>
+            <input
+              v-model="attachmentFolderDraft"
+              type="text"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="Attachments/Files"
+              :aria-invalid="Boolean(attachmentFolderError)"
+              :aria-describedby="attachmentFolderError
+                ? 'settings-attachment-folder-error'
+                : undefined"
+              @blur="saveAttachmentFolderPath"
+              @keydown.enter.prevent="saveAttachmentFolderPath"
+            />
+            <small
+              v-if="attachmentFolderError"
+              id="settings-attachment-folder-error"
+              role="alert"
+            >
+              {{ attachmentFolderError }}
+            </small>
+            <small
+              v-else-if="vaultState.attachmentEmbedSettings.location
+                === 'specified-folder-mirrored'"
+            >
+              Note folders are recreated below this folder, such as Files/Projects.
             </small>
           </label>
         </div>

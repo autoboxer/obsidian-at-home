@@ -114,6 +114,21 @@ pub async fn pick_image_file(app: AppHandle) -> Result<Option<String>, String> {
         .transpose()
 }
 
+/// Opens the native picker for a regular file that can be copied into a vault.
+#[tauri::command]
+pub async fn pick_attachment_file(app: AppHandle) -> Result<Option<String>, String> {
+    let selected = app.dialog().file().blocking_pick_file();
+    selected
+        .map(|path| {
+            path.into_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|error| {
+                    format!("The selected attachment is not a local filesystem path: {error}")
+                })
+        })
+        .transpose()
+}
+
 /// Reads an Obsidian vault without modifying it.
 ///
 /// Markdown is returned byte-for-byte as UTF-8 text, and safe image paths are

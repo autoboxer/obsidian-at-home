@@ -9,16 +9,18 @@ const WINDOWS_RESERVED_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i
 export const VAULT_IMAGE_DRAG_MIME = "application/x-obsidian-at-home-image";
 export const NOTE_IMAGE_DRAG_MIME = "application/x-obsidian-at-home-note-image";
 
-export interface ValidatedImageFolderPath {
+export interface ValidatedAssetFolderPath {
   error?: string;
   value: string;
 }
+
+export type ValidatedImageFolderPath = ValidatedAssetFolderPath;
 
 export function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
-export function validateImageFolderPath(input: string): ValidatedImageFolderPath {
+export function validateAssetFolderPath(input: string): ValidatedAssetFolderPath {
   const value = input.trim().replace(/^\/+|\/+$/g, "");
   if (!value) {
     return {
@@ -56,6 +58,8 @@ export function validateImageFolderPath(input: string): ValidatedImageFolderPath
 
   return { value: components.map((component) => component.trim()).join("/") };
 }
+
+export const validateImageFolderPath = validateAssetFolderPath;
 
 export function decodeMarkdownImageDestination(value: string): string {
   try {

@@ -4,6 +4,7 @@ import {
   writeText as writeNativeClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import type {
+  AttachmentEmbedSettings,
   ExportResult,
   ImageEmbedSettings,
   ImportResult,
@@ -14,6 +15,7 @@ import type {
   WorkspaceArchiveResult,
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
+  WorkspaceEmbedAttachmentResult,
   WorkspaceImageNoteUpdate,
   WorkspaceImportImagesResult,
   WorkspaceImportSaveResult,
@@ -121,6 +123,10 @@ export async function pickFolder(): Promise<string | null> {
 
 export async function pickImageFile(): Promise<string | null> {
   return invoke<string | null>("pick_image_file");
+}
+
+export async function pickAttachmentFile(): Promise<string | null> {
+  return invoke<string | null>("pick_attachment_file");
 }
 
 export async function bootstrapWorkspace(defaults: VaultData): Promise<WorkspaceBootstrap> {
@@ -261,6 +267,38 @@ export async function embedWorkspaceVaultImage(
   return invoke<WorkspaceEmbedImageResult>("workspace_embed_vault_image", {
     path,
     imageRelativePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function embedWorkspaceAttachmentFile(
+  path: string,
+  sourcePath: string,
+  noteRelativePath: string,
+  settings: AttachmentEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedAttachmentResult> {
+  return invoke<WorkspaceEmbedAttachmentResult>("workspace_embed_attachment_file", {
+    path,
+    sourcePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function embedWorkspaceVaultAttachment(
+  path: string,
+  attachmentRelativePath: string,
+  noteRelativePath: string,
+  settings: AttachmentEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedAttachmentResult> {
+  return invoke<WorkspaceEmbedAttachmentResult>("workspace_embed_vault_attachment", {
+    path,
+    attachmentRelativePath,
     noteRelativePath,
     settings,
     expectedRevision,

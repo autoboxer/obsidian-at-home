@@ -123,6 +123,34 @@ export function formatMarkdownAttachment(
   return `[${label}](${destination}${title})`;
 }
 
+/** Resolve an attachment path relative to the Markdown file that contains it. */
+export function relativeAttachmentDestination(
+  noteRelativePath: string,
+  attachmentRelativePath: string,
+): string {
+  const noteParts = splitPortablePath(noteRelativePath);
+  const attachmentParts = splitPortablePath(attachmentRelativePath);
+  noteParts.pop();
+
+  let shared = 0;
+  while (
+    shared < noteParts.length
+    && shared < attachmentParts.length
+    && noteParts[shared] === attachmentParts[shared]
+  ) {
+    shared += 1;
+  }
+
+  return [
+    ...noteParts.slice(shared).map(() => ".."),
+    ...attachmentParts.slice(shared),
+  ].join("/") || attachmentParts.at(-1) || "attachment";
+}
+
+export function attachmentLabelFromPath(relativePath: string): string {
+  return attachmentFileName(relativePath) || "Attachment";
+}
+
 export function markdownAttachmentPresentation(
   attachment: ParsedMarkdownAttachment,
   metadata?: MarkdownAttachmentMetadata,
@@ -342,4 +370,8 @@ function encodeMarkdownDestination(value: string): string {
 
 function escapeMarkdownTitle(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/[\r\n]+/g, " ");
+}
+
+function splitPortablePath(value: string): string[] {
+  return value.split("/").filter((part) => part && part !== ".");
 }

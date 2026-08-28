@@ -26,6 +26,7 @@ const REGISTRY_VERSION: u32 = 1;
 const TRANSACTION_VERSION: u32 = 4;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_VAULT_ASSETS: usize = 100_000;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
@@ -39,6 +40,7 @@ const MAX_RECENTLY_DELETED_BYTES: u64 = MAX_TOTAL_NOTE_BYTES;
 const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
+const ATTACHMENT_COPY_BUFFER_BYTES: usize = 256 * 1024;
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -121,6 +123,8 @@ pub struct ImageEmbedSettings {
     pub folder_path: String,
 }
 
+pub type AttachmentEmbedSettings = ImageEmbedSettings;
+
 impl Default for ImageEmbedSettings {
     fn default() -> Self {
         Self {
@@ -149,6 +153,25 @@ pub struct VaultImageFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EmbeddedAttachment {
+    pub id: String,
+    pub relative_path: String,
+    pub media_type: String,
+    pub byte_length: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultAttachmentFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    pub relative_path: String,
+    pub media_type: String,
+    pub byte_length: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultData {
     pub name: String,
     #[serde(default)]
@@ -169,6 +192,12 @@ pub struct VaultData {
     pub image_files: Vec<VaultImageFile>,
     #[serde(default)]
     pub image_embed_settings: ImageEmbedSettings,
+    #[serde(default)]
+    pub embedded_attachments: Vec<EmbeddedAttachment>,
+    #[serde(default)]
+    pub attachment_files: Vec<VaultAttachmentFile>,
+    #[serde(default)]
+    pub attachment_embed_settings: AttachmentEmbedSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -276,6 +305,15 @@ pub struct WorkspaceRecoveryMutationResult {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceEmbedImageResult {
     pub image: EmbeddedImage,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEmbedAttachmentResult {
+    pub attachment: EmbeddedAttachment,
     pub revision: u64,
     pub saved_at: u64,
     pub warnings: Vec<String>,
@@ -411,6 +449,8 @@ struct WorkspaceState {
     assets: BTreeMap<String, StoredVaultAsset>,
     #[serde(default)]
     image_embed_settings: ImageEmbedSettings,
+    #[serde(default)]
+    attachment_embed_settings: AttachmentEmbedSettings,
     #[serde(default = "default_folder_selection")]
     selected_folder_id: String,
     #[serde(default)]
@@ -434,6 +474,7 @@ impl Default for WorkspaceState {
             recently_deleted_notes: BTreeMap::new(),
             assets: BTreeMap::new(),
             image_embed_settings: ImageEmbedSettings::default(),
+            attachment_embed_settings: AttachmentEmbedSettings::default(),
             selected_folder_id: default_folder_selection(),
             last_committed_transaction_id: None,
             last_committed_image_import_id: None,
@@ -523,6 +564,13 @@ struct ScannedFolder {
 struct ScannedImage {
     relative_path: String,
     media_type: String,
+}
+
+#[derive(Debug)]
+struct ScannedAttachment {
+    relative_path: String,
+    media_type: String,
+    byte_length: u64,
 }
 
 #[derive(Debug)]
@@ -1085,6 +1133,66 @@ pub fn workspace_embed_vault_image(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_attachment_file(
+    app: AppHandle,
+    path: String,
+    source_path: String,
+    note_relative_path: String,
+    settings: AttachmentEmbedSettings,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    let source = validate_attachment_source_file(&source_path)?;
+    let existing_relative_path = source
+        .strip_prefix(&root)
+        .ok()
+        .and_then(path_to_slash_string)
+        .filter(|relative| validate_attachment_relative_path(relative).is_ok());
+
+    embed_workspace_attachment(
+        &root,
+        &note_relative_path,
+        settings,
+        &source,
+        existing_relative_path.as_deref(),
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_vault_attachment(
+    app: AppHandle,
+    path: String,
+    attachment_relative_path: String,
+    note_relative_path: String,
+    settings: AttachmentEmbedSettings,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    validate_attachment_relative_path(&attachment_relative_path)?;
+    let source = resolve_workspace_asset_file(
+        &root,
+        &attachment_relative_path,
+        false,
+    )?;
+
+    embed_workspace_attachment(
+        &root,
+        &note_relative_path,
+        settings,
+        &source,
+        Some(&attachment_relative_path),
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn workspace_relocate_image(
     app: AppHandle,
     path: String,
@@ -1220,7 +1328,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         );
     }
     let mut state = stored_state.unwrap_or_default();
-    let (scanned_notes, scanned_folders, scanned_images) =
+    let (scanned_notes, scanned_folders, scanned_images, scanned_attachments) =
         scan_workspace_files(&root, &mut warnings)?;
 
     let mut used_note_ids = HashSet::new();
@@ -1378,6 +1486,28 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             media_type: image.media_type,
         })
         .collect();
+    let embedded_attachments =
+        reconcile_attachment_assets(&root, &mut state.assets, &mut warnings);
+    let tracked_attachment_ids = embedded_attachments
+        .iter()
+        .map(|attachment| {
+            (
+                portable_path_key(&attachment.relative_path),
+                attachment.id.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let attachment_files = scanned_attachments
+        .into_iter()
+        .map(|attachment| VaultAttachmentFile {
+            asset_id: tracked_attachment_ids
+                .get(&portable_path_key(&attachment.relative_path))
+                .cloned(),
+            relative_path: attachment.relative_path,
+            media_type: attachment.media_type,
+            byte_length: attachment.byte_length,
+        })
+        .collect();
     let image_embed_settings = match normalize_image_embed_settings(&state.image_embed_settings) {
         Ok(settings) => settings,
         Err(error) => {
@@ -1385,6 +1515,14 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             ImageEmbedSettings::default()
         }
     };
+    let attachment_embed_settings =
+        match normalize_attachment_embed_settings(&state.attachment_embed_settings) {
+            Ok(settings) => settings,
+            Err(error) => {
+                warnings.push(format!("Reset invalid attachment embed settings: {error}"));
+                AttachmentEmbedSettings::default()
+            }
+        };
     let vault_name = display_vault_name(
         if state_was_present && !state.name.trim().is_empty() {
             &state.name
@@ -1432,6 +1570,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         recently_deleted_notes: recently_deleted_state,
         assets: state.assets.clone(),
         image_embed_settings: image_embed_settings.clone(),
+        attachment_embed_settings: attachment_embed_settings.clone(),
         selected_folder_id: selected_folder_id.clone(),
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
         last_committed_image_import_id: state.last_committed_image_import_id.clone(),
@@ -1472,6 +1611,9 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             embedded_images,
             image_files,
             image_embed_settings,
+            embedded_attachments,
+            attachment_files,
+            attachment_embed_settings,
         },
         descriptor: VaultDescriptor {
             name: vault_name,
@@ -1817,6 +1959,9 @@ fn save_workspace_files_with_recovery(
         recently_deleted_notes,
         assets: old_state.assets.clone(),
         image_embed_settings: normalize_image_embed_settings(&vault.image_embed_settings)?,
+        attachment_embed_settings: normalize_attachment_embed_settings(
+            &vault.attachment_embed_settings,
+        )?,
         selected_folder_id: vault.selected_folder_id.clone(),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
         last_committed_image_import_id: pending_image_import_id
@@ -2736,6 +2881,69 @@ fn image_destination_folder(
     }
 }
 
+fn normalize_attachment_embed_settings(
+    settings: &AttachmentEmbedSettings,
+) -> Result<AttachmentEmbedSettings, String> {
+    match settings.location {
+        ImageEmbedLocation::VaultRoot => Ok(AttachmentEmbedSettings::default()),
+        ImageEmbedLocation::NoteFolder => Ok(AttachmentEmbedSettings {
+            location: ImageEmbedLocation::NoteFolder,
+            folder_path: String::new(),
+        }),
+        ImageEmbedLocation::SpecifiedFolder => {
+            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
+            if folder_path.is_empty() {
+                return Err("Choose a vault-relative folder for embedded files.".to_owned());
+            }
+            validate_relative_path(&folder_path, false)?;
+            Ok(AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path,
+            })
+        }
+        ImageEmbedLocation::SpecifiedFolderMirrored => {
+            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
+            if folder_path.is_empty() {
+                return Err("Choose a vault-relative folder for embedded files.".to_owned());
+            }
+            validate_relative_path(&folder_path, false)?;
+            Ok(AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolderMirrored,
+                folder_path,
+            })
+        }
+    }
+}
+
+fn attachment_destination_folder(
+    note_relative_path: &str,
+    settings: &AttachmentEmbedSettings,
+) -> Result<String, String> {
+    validate_markdown_relative_path(note_relative_path)?;
+    let settings = normalize_attachment_embed_settings(settings)?;
+    match settings.location {
+        ImageEmbedLocation::VaultRoot => Ok(String::new()),
+        ImageEmbedLocation::NoteFolder => Ok(Path::new(note_relative_path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(path_to_slash_string)
+            .unwrap_or_default()),
+        ImageEmbedLocation::SpecifiedFolder => Ok(settings.folder_path),
+        ImageEmbedLocation::SpecifiedFolderMirrored => {
+            let note_folder = Path::new(note_relative_path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .and_then(path_to_slash_string)
+                .unwrap_or_default();
+            Ok(if note_folder.is_empty() {
+                settings.folder_path
+            } else {
+                format!("{}/{note_folder}", settings.folder_path)
+            })
+        }
+    }
+}
+
 fn embed_workspace_image(
     root: &Path,
     note_relative_path: &str,
@@ -2873,6 +3081,147 @@ fn embed_workspace_image(
             id,
             relative_path,
             media_type: media_type.to_owned(),
+        },
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+fn embed_workspace_attachment(
+    root: &Path,
+    note_relative_path: &str,
+    settings: AttachmentEmbedSettings,
+    source: &Path,
+    existing_relative_path: Option<&str>,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let settings = normalize_attachment_embed_settings(&settings)?;
+    let destination_folder = attachment_destination_folder(note_relative_path, &settings)?;
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The selected attachment name is not valid Unicode.".to_owned())?;
+    let safe_name = safe_attachment_file_name(file_name)?;
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err(
+            "Embedded files cannot be changed while workspace metadata is unreadable or newer than this app."
+                .to_owned(),
+        );
+    }
+    recover_workspace_transactions(root, stored_state.as_ref(), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before embedding the file."
+                .to_owned(),
+        );
+    }
+
+    let mut state = stored_state.unwrap_or_default();
+    let existing_relative_path = existing_relative_path
+        .map(str::to_owned)
+        .filter(|path| validate_attachment_relative_path(path).is_ok());
+    if let Some(relative_path) = existing_relative_path.as_deref() {
+        if let Some((id, stored)) = state.assets.iter_mut().find(|(_, stored)| {
+            stored.kind == VaultAssetKind::Attachment
+                && portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
+        }) {
+            if stored.relative_path != relative_path {
+                let old_path = resolve_workspace_asset_file(root, &stored.relative_path, true)?;
+                if old_path.exists() {
+                    return Err(format!(
+                        "The vault contains attachment paths that differ only by letter case near {relative_path}."
+                    ));
+                }
+                stored.relative_path = relative_path.to_owned();
+            }
+            let fingerprint = fingerprint_attachment_file(source)?;
+            stored.media_type = attachment_media_type_for_path(Path::new(relative_path)).to_owned();
+            stored.fingerprint = fingerprint.clone();
+            stored.modified_nanos = file_modified_nanos_for_path(source)?;
+            let attachment = EmbeddedAttachment {
+                id: id.clone(),
+                relative_path: relative_path.to_owned(),
+                media_type: stored.media_type.clone(),
+                byte_length: fingerprint.length,
+            };
+            state.version = STATE_VERSION;
+            state.attachment_embed_settings = settings;
+            write_workspace_state(root, &state)?;
+
+            return Ok(WorkspaceEmbedAttachmentResult {
+                attachment,
+                revision: revision_for_root(root)?,
+                saved_at: now_millis(),
+                warnings: warnings.finish(),
+            });
+        }
+    }
+
+    if state.assets.len() >= MAX_VAULT_ASSETS {
+        return Err(format!(
+            "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded files."
+        ));
+    }
+
+    let mut copied_attachment = false;
+    let (relative_path, fingerprint) = if let Some(relative_path) = existing_relative_path {
+        (relative_path, fingerprint_attachment_file(source)?)
+    } else {
+        if !destination_folder.is_empty() {
+            ensure_directory_path(root, &destination_folder)?;
+        }
+        let relative_path = unique_attachment_relative_path(
+            root,
+            &destination_folder,
+            &safe_name,
+        )?;
+        let target = resolve_workspace_asset_file(root, &relative_path, true)?;
+        let fingerprint = copy_attachment_file_durable(source, &target)?;
+        copied_attachment = true;
+        (relative_path, fingerprint)
+    };
+    let modified_nanos = file_modified_nanos_for_path(
+        &resolve_workspace_asset_file(root, &relative_path, false)?,
+    )?;
+    let media_type = attachment_media_type_for_path(Path::new(&relative_path)).to_owned();
+    let mut used_ids = state.assets.keys().cloned().collect::<HashSet<_>>();
+    let id_seed = format!(
+        "{relative_path}:{}:{}:{}",
+        fingerprint.length,
+        fingerprint.hash,
+        now_millis(),
+    );
+    let id = fresh_id("asset", &id_seed, &mut used_ids);
+    state.version = STATE_VERSION;
+    state.attachment_embed_settings = settings;
+    state.assets.insert(
+        id.clone(),
+        StoredVaultAsset {
+            kind: VaultAssetKind::Attachment,
+            relative_path: relative_path.clone(),
+            media_type: media_type.clone(),
+            fingerprint: fingerprint.clone(),
+            modified_nanos,
+        },
+    );
+    if let Err(error) = write_workspace_state(root, &state) {
+        if copied_attachment {
+            if let Ok(target) = resolve_workspace_asset_file(root, &relative_path, false) {
+                let _ = remove_file_durable(&target);
+            }
+        }
+        return Err(error);
+    }
+
+    Ok(WorkspaceEmbedAttachmentResult {
+        attachment: EmbeddedAttachment {
+            id,
+            relative_path,
+            media_type,
+            byte_length: fingerprint.length,
         },
         revision: revision_for_root(root)?,
         saved_at: now_millis(),
@@ -4130,6 +4479,172 @@ fn validate_image_source_file(input: &str) -> Result<PathBuf, String> {
         .map_err(|error| format!("The selected image could not be resolved: {error}"))
 }
 
+fn validate_attachment_source_file(input: &str) -> Result<PathBuf, String> {
+    if input.trim().is_empty() {
+        return Err("Choose a file to embed.".to_owned());
+    }
+    let path = Path::new(input);
+    if !path.is_absolute() {
+        return Err("The selected attachment path must be absolute.".to_owned());
+    }
+    validate_attachment_relative_path(
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "The selected attachment name is not valid Unicode.".to_owned())?,
+    )?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("The selected attachment could not be opened: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Choose a regular file, not a folder, symbolic link, or special file.".to_owned());
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "The selected attachment is larger than {} GiB.",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+        ));
+    }
+    path.canonicalize()
+        .map_err(|error| format!("The selected attachment could not be resolved: {error}"))
+}
+
+fn fingerprint_attachment_file(path: &Path) -> Result<FileFingerprint, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{} is not a regular attachment file.", path.display()));
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "The attachment is larger than {} GiB.",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+        ));
+    }
+    let mut file = File::open(path)
+        .map_err(|error| format!("Could not open {}: {error}", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
+        return Err("The attachment changed while it was being opened.".to_owned());
+    }
+
+    let mut buffer = vec![0_u8; ATTACHMENT_COPY_BUFFER_BYTES];
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut length = 0_u64;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        length = length
+            .checked_add(read as u64)
+            .filter(|value| *value <= MAX_ATTACHMENT_BYTES)
+            .ok_or_else(|| "The attachment became too large while it was being read.".to_owned())?;
+        fnv_update(&mut hash, &buffer[..read]);
+    }
+    if length != metadata.len() {
+        return Err("The attachment changed while it was being read.".to_owned());
+    }
+
+    Ok(FileFingerprint { length, hash })
+}
+
+fn copy_attachment_file_durable(
+    source: &Path,
+    destination: &Path,
+) -> Result<FileFingerprint, String> {
+    let source_metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("Could not inspect the selected attachment: {error}"))?;
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_file() {
+        return Err("The selected attachment is not a regular file.".to_owned());
+    }
+    if source_metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "The selected attachment is larger than {} GiB.",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+        ));
+    }
+    let source_modified_nanos = image_modified_nanos(&source_metadata);
+    let mut source_file = File::open(source)
+        .map_err(|error| format!("Could not open the selected attachment: {error}"))?;
+    let opened_metadata = source_file
+        .metadata()
+        .map_err(|error| format!("Could not inspect the selected attachment: {error}"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != source_metadata.len() {
+        return Err("The selected attachment changed while it was being opened.".to_owned());
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The attachment destination has no parent folder.".to_owned())?;
+    let mut destination_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("Could not create the embedded attachment: {error}"))?;
+
+    let copy_result = (|| -> Result<FileFingerprint, String> {
+        let mut buffer = vec![0_u8; ATTACHMENT_COPY_BUFFER_BYTES];
+        let mut hash = 0xcbf29ce484222325_u64;
+        let mut length = 0_u64;
+        loop {
+            let read = source_file
+                .read(&mut buffer)
+                .map_err(|error| format!("Could not read the selected attachment: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            length = length
+                .checked_add(read as u64)
+                .filter(|value| *value <= MAX_ATTACHMENT_BYTES)
+                .ok_or_else(|| {
+                    "The selected attachment became too large while it was copied.".to_owned()
+                })?;
+            destination_file
+                .write_all(&buffer[..read])
+                .map_err(|error| format!("Could not copy the embedded attachment: {error}"))?;
+            fnv_update(&mut hash, &buffer[..read]);
+        }
+        let final_source_metadata = source_file
+            .metadata()
+            .map_err(|error| format!("Could not recheck the selected attachment: {error}"))?;
+        if length != source_metadata.len()
+            || final_source_metadata.len() != source_metadata.len()
+            || image_modified_nanos(&final_source_metadata) != source_modified_nanos
+        {
+            return Err("The selected attachment changed while it was being copied.".to_owned());
+        }
+        destination_file
+            .flush()
+            .and_then(|_| destination_file.sync_all())
+            .map_err(|error| format!("Could not finish the embedded attachment: {error}"))?;
+
+        Ok(FileFingerprint { length, hash })
+    })();
+    drop(destination_file);
+    match copy_result {
+        Ok(fingerprint) => {
+            sync_directory(parent)
+                .map_err(|error| format!("Could not finish the attachment folder: {error}"))?;
+            Ok(fingerprint)
+        }
+        Err(error) => {
+            let _ = remove_file_durable(destination);
+            Err(error)
+        }
+    }
+}
+
+fn file_modified_nanos_for_path(path: &Path) -> Result<u64, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{} is not a regular file.", path.display()));
+    }
+    Ok(image_modified_nanos(&metadata))
+}
+
 fn read_image_file(path: &Path) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
@@ -4265,6 +4780,130 @@ fn safe_image_file_name(file_name: &str, extension: &str) -> String {
     format!("{stem}.{extension}")
 }
 
+fn safe_attachment_file_name(file_name: &str) -> Result<String, String> {
+    let path = Path::new(file_name);
+    let stem = safe_file_stem(
+        path.file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Attachment"),
+        "Attachment",
+    );
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|character| {
+            !character.is_control() && !is_forbidden_component_character(*character)
+        })
+        .take(40)
+        .collect::<String>();
+    let safe_name = if extension.is_empty() {
+        stem
+    } else {
+        format!("{stem}.{extension}")
+    };
+    validate_attachment_relative_path(&safe_name)?;
+    Ok(safe_name)
+}
+
+fn unique_attachment_relative_path(
+    root: &Path,
+    folder: &str,
+    file_name: &str,
+) -> Result<String, String> {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Attachment");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 1..=10_000_u32 {
+        let candidate_name = if index == 1 {
+            file_name.to_owned()
+        } else if let Some(extension) = extension {
+            format!("{stem} {index}.{extension}")
+        } else {
+            format!("{stem} {index}")
+        };
+        let relative_path = if folder.is_empty() {
+            candidate_name
+        } else {
+            format!("{folder}/{candidate_name}")
+        };
+        validate_attachment_relative_path(&relative_path)?;
+        if !asset_path_exists_portably(root, &relative_path)? {
+            return Ok(relative_path);
+        }
+    }
+    Err("Could not choose a unique file name for the embedded attachment.".to_owned())
+}
+
+fn asset_path_exists_portably(root: &Path, relative_path: &str) -> Result<bool, String> {
+    let candidate = resolve_workspace_asset_file(root, relative_path, true)?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "The embedded attachment path has no parent folder.".to_owned())?;
+    let file_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The embedded attachment name is not valid Unicode.".to_owned())?;
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!("Could not inspect {}: {error}", parent.display()));
+        }
+    };
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("Could not inspect {}: {error}", parent.display()))?;
+        if entry.file_name().to_string_lossy().eq_ignore_ascii_case(file_name) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn attachment_media_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" | "tgz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "7z" => "application/x-7z-compressed",
+        "rar" => "application/vnd.rar",
+        "json" => "application/json",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "rtf" => "application/rtf",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        _ => "application/octet-stream",
+    }
+}
+
 fn unique_image_relative_path(
     root: &Path,
     folder: &str,
@@ -4332,6 +4971,18 @@ fn validate_image_relative_path(relative_path: &str) -> Result<(), String> {
         .ok_or_else(|| "Embedded image paths must include a supported extension.".to_owned())?;
     if image_media_type_for_extension(extension).is_none() {
         return Err("Use a PNG, JPEG, GIF, WebP, BMP, or AVIF image path.".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_attachment_relative_path(relative_path: &str) -> Result<(), String> {
+    validate_relative_path(relative_path, false)?;
+    let path = Path::new(relative_path);
+    if is_markdown_path(path) {
+        return Err("Markdown notes should be linked as notes, not embedded as attachments.".to_owned());
+    }
+    if is_supported_image_path(path) {
+        return Err("Use image embedding for PNG, JPEG, GIF, WebP, BMP, and AVIF files.".to_owned());
     }
     Ok(())
 }
@@ -4443,7 +5094,7 @@ fn reconcile_image_assets(
                     validate_image_relative_path(&asset.relative_path).is_err()
                 }
                 VaultAssetKind::Attachment => {
-                    validate_relative_path(&asset.relative_path, false).is_err()
+                    validate_attachment_relative_path(&asset.relative_path).is_err()
                 }
             };
             (!is_valid_asset_id(id) || path_is_invalid).then(|| id.clone())
@@ -4584,13 +5235,93 @@ fn reconcile_image_assets(
         .collect()
 }
 
+fn reconcile_attachment_assets(
+    root: &Path,
+    assets: &mut BTreeMap<String, StoredVaultAsset>,
+    warnings: &mut WarningCollector,
+) -> Vec<EmbeddedAttachment> {
+    for asset in assets
+        .values_mut()
+        .filter(|asset| asset.kind == VaultAssetKind::Attachment)
+    {
+        let path = match resolve_workspace_asset_file(root, &asset.relative_path, false) {
+            Ok(path) => path,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not inspect the embedded attachment {}: {error}",
+                    asset.relative_path,
+                ));
+                continue;
+            }
+        };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata)
+                if !metadata.file_type().is_symlink()
+                    && metadata.is_file()
+                    && metadata.len() <= MAX_ATTACHMENT_BYTES => metadata,
+            _ => {
+                warnings.push(format!(
+                    "Could not find the embedded attachment {}.",
+                    asset.relative_path,
+                ));
+                continue;
+            }
+        };
+        let media_type = attachment_media_type_for_path(Path::new(&asset.relative_path));
+        let modified_nanos = image_modified_nanos(&metadata);
+        if asset.modified_nanos != 0
+            && asset.modified_nanos == modified_nanos
+            && asset.fingerprint.length == metadata.len()
+            && asset.media_type == media_type
+        {
+            continue;
+        }
+        match fingerprint_attachment_file(&path) {
+            Ok(fingerprint) => {
+                asset.media_type = media_type.to_owned();
+                asset.fingerprint = fingerprint;
+                asset.modified_nanos = modified_nanos;
+            }
+            Err(error) => warnings.push(format!(
+                "Could not refresh the embedded attachment {}: {error}",
+                asset.relative_path,
+            )),
+        }
+    }
+
+    assets
+        .iter()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Attachment)
+        .map(|(id, asset)| EmbeddedAttachment {
+            id: id.clone(),
+            relative_path: asset.relative_path.clone(),
+            media_type: asset.media_type.clone(),
+            byte_length: asset.fingerprint.length,
+        })
+        .collect()
+}
+
+fn workspace_asset_limit_reached(
+    image_count: usize,
+    attachment_count: usize,
+    limit: usize,
+) -> bool {
+    image_count.saturating_add(attachment_count) >= limit
+}
+
 fn scan_workspace_files(
     root: &Path,
     warnings: &mut WarningCollector,
-) -> Result<(Vec<ScannedNote>, Vec<ScannedFolder>, Vec<ScannedImage>), String> {
+) -> Result<(
+    Vec<ScannedNote>,
+    Vec<ScannedFolder>,
+    Vec<ScannedImage>,
+    Vec<ScannedAttachment>,
+), String> {
     let mut notes = Vec::new();
     let mut folders = Vec::new();
     let mut images = Vec::new();
+    let mut attachments = Vec::new();
     let mut total_bytes = 0_u64;
     let walker = WalkDir::new(root)
         .follow_links(false)
@@ -4649,13 +5380,16 @@ fn scan_workspace_files(
         if !entry.file_type().is_file() {
             continue;
         }
+        let markdown = is_markdown_path(entry.path());
+        if !markdown
+            && workspace_asset_limit_reached(images.len(), attachments.len(), MAX_VAULT_ASSETS)
+        {
+            warnings.push(format!(
+                "Only the first {MAX_VAULT_ASSETS} asset files are shown in the vault."
+            ));
+            continue;
+        }
         if is_supported_image_path(entry.path()) {
-            if images.len() >= MAX_VAULT_ASSETS {
-                warnings.push(format!(
-                    "Only the first {MAX_VAULT_ASSETS} image files are shown in the vault tree."
-                ));
-                continue;
-            }
             if metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
                 continue;
             }
@@ -4672,7 +5406,15 @@ fn scan_workspace_files(
             });
             continue;
         }
-        if !is_markdown_path(entry.path()) {
+        if !markdown {
+            if metadata.len() > MAX_ATTACHMENT_BYTES {
+                continue;
+            }
+            attachments.push(ScannedAttachment {
+                relative_path,
+                media_type: attachment_media_type_for_path(entry.path()).to_owned(),
+                byte_length: metadata.len(),
+            });
             continue;
         }
         if notes.len() >= MAX_NOTES {
@@ -4716,7 +5458,8 @@ fn scan_workspace_files(
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     folders.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok((notes, folders, images))
+    attachments.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok((notes, folders, images, attachments))
 }
 
 fn load_recently_deleted_notes(
@@ -5818,11 +6561,7 @@ fn revision_entries_for_root(root: &Path) -> Result<Vec<RevisionEntry>, String> 
         };
         if entry.file_type().is_dir() && relative != STATE_DIRECTORY {
             entries.push((format!("D:{relative}"), None));
-        } else if entry.file_type().is_file()
-            && (is_markdown_path(entry.path())
-                || is_supported_image_path(entry.path())
-                || relative == format!("{STATE_DIRECTORY}/{STATE_FILE}"))
-        {
+        } else if entry.file_type().is_file() {
             let metadata = entry.metadata().map_err(|error| {
                 format!("Could not inspect {}: {error}", entry.path().display())
             })?;
@@ -7625,6 +8364,50 @@ fn resolve_workspace_image_file(
     Ok(target)
 }
 
+fn resolve_workspace_asset_file(
+    root: &Path,
+    relative_path: &str,
+    allow_missing: bool,
+) -> Result<PathBuf, String> {
+    validate_attachment_relative_path(relative_path)?;
+    let relative = checked_relative_path(relative_path, false)?;
+    let target = root.join(&relative);
+    if let Some(parent) = target.parent() {
+        let mut current = root.to_path_buf();
+        for component in parent
+            .strip_prefix(root)
+            .map_err(|_| "An attachment path escaped the vault.".to_owned())?
+            .components()
+        {
+            current.push(component.as_os_str());
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "Refusing to follow the symbolic link {}.",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => return Err(format!("{} is not a folder.", current.display())),
+                Err(error) if error.kind() == io::ErrorKind::NotFound && allow_missing => break,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    return Err(format!("Could not inspect {}: {error}", current.display()));
+                }
+            }
+        }
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Refusing to use the symbolic link {}.",
+                target.display()
+            ));
+        }
+    }
+    Ok(target)
+}
+
 fn resolve_workspace_file(
     root: &Path,
     relative_path: &str,
@@ -8394,7 +9177,19 @@ mod tests {
             embedded_images: Vec::new(),
             image_files: Vec::new(),
             image_embed_settings: ImageEmbedSettings::default(),
+            embedded_attachments: Vec::new(),
+            attachment_files: Vec::new(),
+            attachment_embed_settings: AttachmentEmbedSettings::default(),
         }
+    }
+
+    #[test]
+    fn workspace_asset_limit_counts_images_and_attachments_together() {
+        assert!(!workspace_asset_limit_reached(1, 1, 3));
+        assert!(workspace_asset_limit_reached(2, 1, 3));
+        assert!(workspace_asset_limit_reached(1, 2, 3));
+        assert!(workspace_asset_limit_reached(0, 3, 3));
+        assert!(workspace_asset_limit_reached(usize::MAX, 1, usize::MAX));
     }
 
     fn test_note(content: &str) -> Note {
@@ -8681,7 +9476,7 @@ mod tests {
         );
         assert!(snapshot_path.is_file());
 
-        let (scanned_notes, _, _) = scan_workspace_files(
+        let (scanned_notes, _, _, _) = scan_workspace_files(
             &workspace.root,
             &mut WarningCollector::default(),
         )
@@ -10379,6 +11174,273 @@ mod tests {
         assert_eq!(existing.image.relative_path, "Projects/Existing.png");
         assert_eq!(reused.image.id, existing.image.id);
         assert!(!workspace.root.join("Existing.png").exists());
+    }
+
+    #[test]
+    fn attachment_storage_streams_files_handles_collisions_and_reuses_ids() {
+        let source = TestWorkspace::new("embedded-attachment-source");
+        let workspace = TestWorkspace::new("embedded-attachment-target");
+        let bytes = (0..ATTACHMENT_COPY_BUFFER_BYTES * 3 + 37)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let source_path = source.root.join("Quarterly report.pdf");
+        fs::write(&source_path, &bytes).expect("source attachment should be written");
+        fs::create_dir(workspace.root.join("Projects")).expect("note folder should be created");
+        fs::write(workspace.root.join("Projects/Plan.md"), "# Plan")
+            .expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        let note_folder_settings = AttachmentEmbedSettings {
+            location: ImageEmbedLocation::NoteFolder,
+            folder_path: "ignored".to_owned(),
+        };
+        let first = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            note_folder_settings.clone(),
+            &source_path,
+            None,
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect("streamed attachment should be embedded");
+        let second = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            note_folder_settings,
+            &source_path,
+            None,
+            first.revision,
+        )
+        .expect("colliding attachment should receive a portable unique name");
+
+        assert_eq!(first.attachment.relative_path, "Projects/Quarterly report.pdf");
+        assert_eq!(second.attachment.relative_path, "Projects/Quarterly report 2.pdf");
+        assert_eq!(first.attachment.media_type, "application/pdf");
+        assert_eq!(first.attachment.byte_length, bytes.len() as u64);
+        assert_eq!(
+            fs::read(workspace.root.join(&first.attachment.relative_path)).unwrap(),
+            bytes,
+        );
+        assert_eq!(
+            fingerprint_attachment_file(&source_path).unwrap(),
+            fingerprint_bytes(&bytes),
+        );
+
+        let root_attachment = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &source_path,
+            None,
+            second.revision,
+        )
+        .expect("vault-root attachment should be embedded");
+        assert_eq!(root_attachment.attachment.relative_path, "Quarterly report.pdf");
+
+        let existing_path = workspace.root.join("Projects/Archive.zip");
+        fs::write(&existing_path, b"existing vault archive")
+            .expect("existing vault attachment should be written");
+        let existing = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &existing_path,
+            Some("Projects/Archive.zip"),
+            revision_for_root(&workspace.root).expect("revision should include the new file"),
+        )
+        .expect("existing vault attachment should be registered without copying");
+        let reused = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &existing_path,
+            Some("Projects/Archive.zip"),
+            existing.revision,
+        )
+        .expect("registered attachment should reuse its stable ID");
+        assert_eq!(reused.attachment.id, existing.attachment.id);
+        assert_eq!(reused.attachment.relative_path, "Projects/Archive.zip");
+        assert!(!workspace.root.join("Archive.zip").exists());
+
+        let case_collision_path = workspace.root.join("Projects/archive.ZIP");
+        fs::write(&case_collision_path, b"different case-only attachment")
+            .expect("case-only collision should be written on this test filesystem");
+        let error = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &case_collision_path,
+            Some("Projects/archive.ZIP"),
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect_err("case-only vault attachment collisions should be rejected");
+        assert!(error.contains("differ only by letter case"));
+        fs::remove_file(case_collision_path).expect("case-only fixture should be removed");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("attachment inventory should reload");
+        assert_eq!(loaded.vault.embedded_attachments.len(), 4);
+        assert_eq!(loaded.vault.attachment_files.len(), 4);
+        let loaded_first = loaded
+            .vault
+            .attachment_files
+            .iter()
+            .find(|file| file.asset_id.as_deref() == Some(first.attachment.id.as_str()))
+            .expect("streamed attachment should keep its stable ID");
+        assert_eq!(loaded_first.relative_path, first.attachment.relative_path);
+        assert_eq!(loaded_first.byte_length, bytes.len() as u64);
+        assert_eq!(
+            loaded.vault.attachment_embed_settings,
+            AttachmentEmbedSettings::default(),
+        );
+    }
+
+    #[test]
+    fn attachment_storage_honors_mirrored_locations_and_empty_files() {
+        let source = TestWorkspace::new("mirrored-attachment-source");
+        let workspace = TestWorkspace::new("mirrored-attachment-target");
+        let first_source = source.root.join("First.zip");
+        let empty_source = source.root.join("Empty export");
+        fs::write(&first_source, b"first archive").expect("first source should be written");
+        File::create(&empty_source).expect("empty source should be created");
+        fs::create_dir(workspace.root.join("test1")).expect("test1 should be created");
+        fs::create_dir(workspace.root.join("test2")).expect("test2 should be created");
+        fs::write(workspace.root.join("test1/doc1.md"), "# Doc 1")
+            .expect("doc1 should be written");
+        fs::write(workspace.root.join("test2/doc2.md"), "# Doc 2")
+            .expect("doc2 should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let settings = AttachmentEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Files".to_owned(),
+        };
+
+        let first = embed_workspace_attachment(
+            &workspace.root,
+            "test1/doc1.md",
+            settings.clone(),
+            &first_source,
+            None,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect("first mirrored attachment should be embedded");
+        let second = embed_workspace_attachment(
+            &workspace.root,
+            "test2/doc2.md",
+            settings.clone(),
+            &empty_source,
+            None,
+            first.revision,
+        )
+        .expect("empty extensionless attachment should be embedded");
+
+        assert_eq!(first.attachment.relative_path, "Files/test1/First.zip");
+        assert_eq!(second.attachment.relative_path, "Files/test2/Empty export");
+        assert_eq!(second.attachment.byte_length, 0);
+        assert_eq!(second.attachment.media_type, "application/octet-stream");
+        assert_eq!(fs::read(workspace.root.join(&second.attachment.relative_path)).unwrap(), b"");
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("mirrored attachments should reload");
+        assert_eq!(loaded.vault.attachment_embed_settings, settings);
+        assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test1"));
+        assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test2"));
+    }
+
+    #[test]
+    fn attachment_storage_rejects_stale_unsafe_and_oversized_sources() {
+        let source = TestWorkspace::new("attachment-validation-source");
+        let workspace = TestWorkspace::new("attachment-validation-target");
+        fs::write(workspace.root.join("Note.md"), "# Note").expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let source_path = source.root.join("Document.pdf");
+        fs::write(&source_path, b"document").expect("source should be written");
+        fs::write(source.root.join("Note.md"), "# Not an attachment")
+            .expect("Markdown source should be written");
+        fs::write(source.root.join("Image.png"), b"not relevant")
+            .expect("image source should be written");
+
+        assert!(validate_attachment_source_file(
+            source.root.join("Note.md").to_str().unwrap(),
+        )
+        .is_err());
+        assert!(validate_attachment_source_file(
+            source.root.join("Image.png").to_str().unwrap(),
+        )
+        .is_err());
+        assert!(validate_attachment_source_file(source.root.to_str().unwrap()).is_err());
+        assert!(validate_attachment_source_file("relative.pdf").is_err());
+
+        let oversized = source.root.join("Oversized.zip");
+        File::create(&oversized)
+            .expect("oversized fixture should be created")
+            .set_len(MAX_ATTACHMENT_BYTES + 1)
+            .expect("sparse oversized fixture should be sized");
+        let oversized_error = validate_attachment_source_file(oversized.to_str().unwrap())
+            .expect_err("oversized attachment should be rejected before reading");
+        assert!(oversized_error.contains("larger than"));
+
+        let stale_revision = revision_for_root(&workspace.root).unwrap();
+        fs::write(workspace.root.join("External.zip"), b"external change")
+            .expect("external attachment should be written");
+        assert_ne!(revision_for_root(&workspace.root).unwrap(), stale_revision);
+        let error = embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &source_path,
+            None,
+            stale_revision,
+        )
+        .expect_err("stale revision should reject the attachment copy");
+        assert!(error.contains("vault changed"));
+        assert!(!workspace.root.join("Document.pdf").exists());
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("untracked attachment should be inventoried");
+        assert_eq!(loaded.vault.attachment_files.len(), 1);
+        assert_eq!(loaded.vault.attachment_files[0].relative_path, "External.zip");
+        assert_eq!(loaded.vault.attachment_files[0].asset_id, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_storage_refuses_source_and_destination_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let source = TestWorkspace::new("attachment-symlink-source");
+        let workspace = TestWorkspace::new("attachment-symlink-target");
+        let outside = TestWorkspace::new("attachment-symlink-outside");
+        let source_path = source.root.join("Archive.zip");
+        fs::write(&source_path, b"archive").expect("source should be written");
+        symlink(&source_path, source.root.join("Archive link.zip"))
+            .expect("source symlink should be created");
+        symlink(&outside.root, workspace.root.join("Linked"))
+            .expect("destination symlink should be created");
+        fs::write(workspace.root.join("Note.md"), "# Note").expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        assert!(validate_attachment_source_file(
+            source.root.join("Archive link.zip").to_str().unwrap(),
+        )
+        .is_err());
+        let error = embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Linked".to_owned(),
+            },
+            &source_path,
+            None,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect_err("destination symlink should be rejected");
+        assert!(error.contains("symbolic link"));
+        assert!(!outside.root.join("Archive.zip").exists());
     }
 
     #[test]

@@ -234,6 +234,12 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
       location: "vault-root",
       folderPath: "",
     },
+    embeddedAttachments: [],
+    attachmentFiles: [],
+    attachmentEmbedSettings: {
+      location: "vault-root",
+      folderPath: "",
+    },
   };
 }
 

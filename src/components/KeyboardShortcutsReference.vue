@@ -40,6 +40,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: "Toggle italic", keys: [commandKey, "I"] },
       { label: "Toggle strikethrough", keys: [commandKey, "Shift", "X"] },
       { label: "Create a Markdown link", keys: [commandKey, "K"] },
+      { label: "Embed a file", detail: "Choose a non-image file", keys: [commandKey, "Shift", "A"] },
       { label: "Embed an image", detail: "Choose an image file", keys: [commandKey, "Shift", "I"] },
       { label: "Embed a clipboard image", detail: "When the clipboard contains an image", keys: [commandKey, "V"] },
       { label: "Wrap as inline code", detail: "With text selected", keys: ["Backtick"] },

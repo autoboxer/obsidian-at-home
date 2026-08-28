@@ -15,12 +15,20 @@ import {
   formatMarkdownImage,
   relativeImageDestination,
 } from "../lib/markdownImages";
+import {
+  attachmentLabelFromPath,
+  formatMarkdownAttachment,
+  relativeAttachmentDestination,
+} from "../lib/markdownAttachments";
 import { resolveWikiLink } from "../lib/wikiLinks";
 import {
+  embedWorkspaceAttachmentFile,
   embedWorkspaceImageBytes,
   embedWorkspaceImageFile,
+  embedWorkspaceVaultAttachment,
   embedWorkspaceVaultImage,
   isTauri,
+  pickAttachmentFile,
   pickImageFile,
   readClipboardImagePng,
 } from "../services/native";
@@ -31,6 +39,7 @@ import {
 } from "../stores/editorPositions";
 import {
   activeNote,
+  applyEmbeddedAttachmentResult,
   applyEmbeddedImageResult,
   backNavigationNote,
   canNavigateBack,
@@ -55,15 +64,19 @@ import {
   vaultState,
 } from "../stores/vault";
 import type {
+  AssetInsertionCapture,
+  AttachmentInsertionCapture,
   ImageInsertionCapture,
   Note,
   NoteEditorPosition,
+  WorkspaceEmbedAttachmentResult,
   WorkspaceEmbedImageResult,
 } from "../types";
 import AppIcon from "./AppIcon.vue";
 import SourceEditor from "./SourceEditor.vue";
 
 const createNoteShortcut = formatCommandShortcut("N");
+const embedAttachmentShortcut = formatCommandShortcut("Shift+A");
 const embedImageShortcut = formatCommandShortcut("Shift+I");
 const nativeAvailable = isTauri();
 const tagInputOpen = ref(false);
@@ -75,11 +88,18 @@ const quickFolderOpen = ref(false);
 const quickFolderName = ref("");
 const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
+const attachmentEmbedBusy = ref(false);
 const imageEmbedBusy = ref(false);
 const sourceEditor = ref<{
+  cancelAttachmentInsertion: (capture: AttachmentInsertionCapture) => void;
   cancelImageInsertion: (capture: ImageInsertionCapture) => void;
+  captureAttachmentInsertion: () => AttachmentInsertionCapture | undefined;
   captureImageInsertion: () => ImageInsertionCapture | undefined;
   focusDocumentOffset: (offset: number) => boolean;
+  insertEmbeddedAttachment: (
+    capture: AttachmentInsertionCapture,
+    markdownAttachment: string,
+  ) => boolean;
   insertEmbeddedImage: (capture: ImageInsertionCapture, markdownImage: string) => boolean;
 }>();
 
@@ -218,13 +238,13 @@ function linkedNoteLabel(target: string): string {
   return target.trim().replace(/\.md$/i, "") || "current note";
 }
 
-interface ImageEmbedContext {
+interface AssetEmbedContext {
   note: Note;
   noteRelativePath: string;
   vaultPath: string;
 }
 
-function imageEmbedError(error: unknown): string {
+function embedError(error: unknown, fallback: string): string {
   if (typeof error === "string" && error.trim()) {
     return error;
   }
@@ -232,10 +252,10 @@ function imageEmbedError(error: unknown): string {
     return error.message;
   }
 
-  return "The image could not be embedded.";
+  return fallback;
 }
 
-function imageEmbedContext(capture: ImageInsertionCapture): ImageEmbedContext | undefined {
+function assetEmbedContext(capture: AssetInsertionCapture): AssetEmbedContext | undefined {
   const note = vaultState.notes.find((candidate) => candidate.id === capture.noteId);
   const vaultPath = vaultSession.backend === "native" ? vaultSession.path : null;
   if (!nativeAvailable || !note || !vaultPath || activeNote.value?.id !== note.id) {
@@ -252,11 +272,11 @@ function imageEmbedContext(capture: ImageInsertionCapture): ImageEmbedContext | 
 async function storeAndInsertImage(
   capture: ImageInsertionCapture,
   embed: (
-    context: ImageEmbedContext,
+    context: AssetEmbedContext,
     expectedRevision: number,
   ) => Promise<WorkspaceEmbedImageResult>,
 ): Promise<boolean> {
-  const context = imageEmbedContext(capture);
+  const context = assetEmbedContext(capture);
   if (!context) {
     throw new Error("Images can be embedded into an open note in a desktop vault.");
   }
@@ -306,7 +326,7 @@ async function storeAndInsertImage(
 }
 
 async function embedImageFromFile(capture: ImageInsertionCapture): Promise<void> {
-  if (imageEmbedBusy.value) {
+  if (imageEmbedBusy.value || attachmentEmbedBusy.value) {
     sourceEditor.value?.cancelImageInsertion(capture);
     notify("Wait for the current image to finish embedding.", "warning");
 
@@ -315,7 +335,7 @@ async function embedImageFromFile(capture: ImageInsertionCapture): Promise<void>
 
   imageEmbedBusy.value = true;
   try {
-    const context = imageEmbedContext(capture);
+    const context = assetEmbedContext(capture);
     if (!context) {
       throw new Error("Images can be embedded into an open note in a desktop vault.");
     }
@@ -339,7 +359,7 @@ async function embedImageFromFile(capture: ImageInsertionCapture): Promise<void>
       )
     );
   } catch (error) {
-    notify(imageEmbedError(error), "warning");
+    notify(embedError(error, "The image could not be embedded."), "warning");
   } finally {
     sourceEditor.value?.cancelImageInsertion(capture);
     imageEmbedBusy.value = false;
@@ -350,7 +370,7 @@ async function embedImageFromClipboard(
   capture: ImageInsertionCapture,
   file?: File,
 ): Promise<void> {
-  if (imageEmbedBusy.value) {
+  if (imageEmbedBusy.value || attachmentEmbedBusy.value) {
     sourceEditor.value?.cancelImageInsertion(capture);
     notify("Wait for the current image to finish embedding.", "warning");
 
@@ -374,7 +394,7 @@ async function embedImageFromClipboard(
       )
     );
   } catch (error) {
-    notify(imageEmbedError(error), "warning");
+    notify(embedError(error, "The image could not be embedded."), "warning");
   } finally {
     sourceEditor.value?.cancelImageInsertion(capture);
     imageEmbedBusy.value = false;
@@ -385,7 +405,7 @@ async function embedImageFromVault(
   capture: ImageInsertionCapture,
   relativePath: string,
 ): Promise<void> {
-  if (imageEmbedBusy.value) {
+  if (imageEmbedBusy.value || attachmentEmbedBusy.value) {
     sourceEditor.value?.cancelImageInsertion(capture);
     notify("Wait for the current image to finish embedding.", "warning");
 
@@ -404,7 +424,7 @@ async function embedImageFromVault(
       )
     );
   } catch (error) {
-    notify(imageEmbedError(error), "warning");
+    notify(embedError(error, "The image could not be embedded."), "warning");
   } finally {
     sourceEditor.value?.cancelImageInsertion(capture);
     imageEmbedBusy.value = false;
@@ -415,6 +435,142 @@ function requestImageFromToolbar(): void {
   const capture = sourceEditor.value?.captureImageInsertion();
   if (capture) {
     void embedImageFromFile(capture);
+  }
+}
+
+async function storeAndInsertAttachment(
+  capture: AttachmentInsertionCapture,
+  embed: (
+    context: AssetEmbedContext,
+    expectedRevision: number,
+  ) => Promise<WorkspaceEmbedAttachmentResult>,
+): Promise<boolean> {
+  const context = assetEmbedContext(capture);
+  if (!context) {
+    throw new Error("Files can be embedded into an open note in a desktop vault.");
+  }
+  if (!(await flushVault())) {
+    throw new Error(vaultSession.error || "Save the current note before embedding a file.");
+  }
+  if (
+    vaultSession.path !== context.vaultPath
+    || activeNote.value?.id !== context.note.id
+  ) {
+    throw new Error("The note or vault changed before the file could be embedded.");
+  }
+  context.noteRelativePath = context.note.relativePath;
+  if (!context.noteRelativePath) {
+    throw new Error("The note does not have a saved file path for the embedded file.");
+  }
+
+  const result = await embed(context, vaultSession.revision);
+  applyEmbeddedAttachmentResult(result);
+  const selectedLabel = capture.selectedText.trim();
+  const label = selectedLabel && !/[\r\n]/.test(selectedLabel) && selectedLabel.length <= 240
+    ? selectedLabel
+    : attachmentLabelFromPath(result.attachment.relativePath);
+  const markdownAttachment = formatMarkdownAttachment({
+    label,
+    assetId: result.attachment.id,
+    destination: relativeAttachmentDestination(
+      context.noteRelativePath,
+      result.attachment.relativePath,
+    ),
+    inTable: capture.inTable,
+  });
+  const inserted = sourceEditor.value?.insertEmbeddedAttachment(
+    capture,
+    markdownAttachment,
+  ) ?? false;
+  if (!inserted) {
+    notify("The file was saved, but its Markdown reference could not be inserted.", "warning");
+
+    return false;
+  }
+
+  if (result.warnings.length) {
+    notify(result.warnings[0]!, "warning");
+  } else {
+    notify(`Embedded ${attachmentLabelFromPath(result.attachment.relativePath)}`, "success");
+  }
+
+  return true;
+}
+
+async function embedAttachmentFromFile(
+  capture: AttachmentInsertionCapture,
+): Promise<void> {
+  if (attachmentEmbedBusy.value || imageEmbedBusy.value) {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    notify("Wait for the current file to finish embedding.", "warning");
+
+    return;
+  }
+
+  attachmentEmbedBusy.value = true;
+  try {
+    const context = assetEmbedContext(capture);
+    if (!context) {
+      throw new Error("Files can be embedded into an open note in a desktop vault.");
+    }
+    const sourcePath = await pickAttachmentFile();
+    if (!sourcePath) {
+      return;
+    }
+    if (vaultSession.path !== context.vaultPath || activeNote.value?.id !== context.note.id) {
+      throw new Error("The note or vault changed before the file could be embedded.");
+    }
+    await storeAndInsertAttachment(capture, (current, expectedRevision) =>
+      embedWorkspaceAttachmentFile(
+        current.vaultPath,
+        sourcePath,
+        current.noteRelativePath,
+        { ...vaultState.attachmentEmbedSettings },
+        expectedRevision,
+      )
+    );
+  } catch (error) {
+    notify(embedError(error, "The file could not be embedded."), "warning");
+  } finally {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    attachmentEmbedBusy.value = false;
+  }
+}
+
+async function embedAttachmentFromVault(
+  capture: AttachmentInsertionCapture,
+  relativePath: string,
+): Promise<void> {
+  if (attachmentEmbedBusy.value || imageEmbedBusy.value) {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    notify("Wait for the current file to finish embedding.", "warning");
+
+    return;
+  }
+
+  attachmentEmbedBusy.value = true;
+  try {
+    await storeAndInsertAttachment(capture, (context, expectedRevision) =>
+      embedWorkspaceVaultAttachment(
+        context.vaultPath,
+        relativePath,
+        context.noteRelativePath,
+        { ...vaultState.attachmentEmbedSettings },
+        expectedRevision,
+      )
+    );
+  } catch (error) {
+    notify(embedError(error, "The file could not be embedded."), "warning");
+  } finally {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    attachmentEmbedBusy.value = false;
+  }
+}
+
+function requestAttachmentFromToolbar(): void {
+  const capture = sourceEditor.value?.captureAttachmentInsertion();
+  if (capture) {
+    void embedAttachmentFromFile(capture);
   }
 }
 
@@ -680,8 +836,19 @@ watch(tagInput, () => {
         <button
           class="icon-button"
           type="button"
+          data-note-action="embed-attachment"
+          :disabled="!nativeAvailable || attachmentEmbedBusy || imageEmbedBusy || vaultSession.busy"
+          aria-label="Embed file"
+          :title="`Embed file · ${embedAttachmentShortcut}`"
+          @click="requestAttachmentFromToolbar"
+        >
+          <AppIcon name="paperclip" :size="16" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
           data-note-action="embed-image"
-          :disabled="!nativeAvailable || imageEmbedBusy || vaultSession.busy"
+          :disabled="!nativeAvailable || imageEmbedBusy || attachmentEmbedBusy || vaultSession.busy"
           aria-label="Embed image"
           :title="`Embed image · ${embedImageShortcut}`"
           @click="requestImageFromToolbar"
@@ -812,6 +979,9 @@ watch(tagInput, () => {
             :key="editorKey"
             ref="sourceEditor"
             :initial-position="savedEditorPosition(activeNote.id, activeNote.content)"
+            :attachment-files="vaultState.attachmentFiles"
+            :attachment-refresh-token="uiState.attachmentRefreshToken"
+            :embedded-attachments="vaultState.embeddedAttachments"
             :embedded-images="vaultState.embeddedImages"
             :image-refresh-token="uiState.imageRefreshToken"
             :model-value="activeNote.content"
@@ -825,6 +995,7 @@ watch(tagInput, () => {
             @open-link="openRenderedLink"
             @open-wiki="openWikiLink"
             @paste-image="embedImageFromClipboard"
+            @request-embed-attachment="embedAttachmentFromFile"
             @vault-image-drop="embedImageFromVault"
             @request-embed-image="embedImageFromFile"
             @update:model-value="setContent"

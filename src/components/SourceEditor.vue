@@ -79,9 +79,14 @@ import {
   decodeMarkdownImageDestination,
   imageMediaTypeForPath,
   NOTE_IMAGE_DRAG_MIME,
+  resolveMarkdownImagePath,
   VAULT_IMAGE_DRAG_MIME,
 } from "../lib/imageEmbeds";
 import { sanitizeImageUrl } from "../lib/markdown";
+import type {
+  MarkdownAttachmentMetadata,
+  ParsedMarkdownAttachment,
+} from "../lib/markdownAttachments";
 import { parseMarkdownImageAt } from "../lib/markdownImages";
 import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
 import { isTauri, readWorkspaceImage } from "../services/native";
@@ -91,14 +96,20 @@ import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
 import type { ParsedMarkdownImage } from "../lib/markdownImages";
 import type { LiveMarkdownTextEdit } from "../lib/liveMarkdown";
 import type {
+  AttachmentInsertionCapture,
+  EmbeddedAttachment,
   EmbeddedImage,
   ImageInsertionCapture,
   NoteEditorPosition,
+  VaultAttachmentFile,
 } from "../types";
 import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
   initialPosition?: NoteEditorPosition;
+  attachmentFiles: VaultAttachmentFile[];
+  attachmentRefreshToken: number;
+  embeddedAttachments: EmbeddedAttachment[];
   embeddedImages: EmbeddedImage[];
   imageRefreshToken: number;
   modelValue: string;
@@ -115,6 +126,7 @@ const emit = defineEmits<{
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
   pasteImage: [capture: ImageInsertionCapture, file?: File];
+  requestEmbedAttachment: [capture: AttachmentInsertionCapture];
   requestEmbedImage: [capture: ImageInsertionCapture];
   vaultImageDrop: [capture: ImageInsertionCapture, relativePath: string];
   "update:modelValue": [value: string];
@@ -923,6 +935,7 @@ onMounted(() => {
       documentId: `${props.vaultId}\u0000${props.noteId}`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
+      resolveAttachmentMetadata: resolveLiveMarkdownAttachmentMetadata,
       resolveImageSource: resolveLiveMarkdownImageSource,
       wikiLinkIsResolved: inlineWikiLinkIsResolved,
     }),
@@ -984,6 +997,7 @@ onMounted(() => {
         shift: selectToTableCellTextRight,
       },
       { key: "Mod-b", run: toggleBold },
+      { key: "Mod-Shift-a", run: requestAttachmentEmbed },
       { key: "Mod-Shift-i", run: requestImageEmbed },
       { key: "Mod-i", run: toggleItalic },
       { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
@@ -1262,12 +1276,45 @@ watch(
   },
 );
 
+watch(
+  () => props.attachmentRefreshToken,
+  () => {
+    editorView.value?.dispatch({
+      effects: refreshLiveMarkdownEffect.of(null),
+    });
+  },
+);
+
 function openLiveMarkdownLink(href: string): void {
   emit("openLink", href);
 }
 
 function openLiveMarkdownWikiLink(target: string, heading?: string): void {
   emit("openWiki", target, heading);
+}
+
+function resolveLiveMarkdownAttachmentMetadata(
+  attachment: ParsedMarkdownAttachment,
+): MarkdownAttachmentMetadata | undefined {
+  const tracked = attachment.assetId
+    ? props.embeddedAttachments.find((asset) => asset.id === attachment.assetId)
+    : undefined;
+  const relativePath = tracked?.relativePath
+    ?? resolveMarkdownImagePath(props.noteRelativePath, attachment.destination);
+  if (!relativePath) {
+    return undefined;
+  }
+  const portablePath = relativePath.toLocaleLowerCase();
+  const file = props.attachmentFiles.find((candidate) =>
+    (attachment.assetId && candidate.assetId === attachment.assetId)
+    || candidate.relativePath.toLocaleLowerCase() === portablePath
+  );
+
+  return {
+    byteLength: tracked?.byteLength ?? file?.byteLength,
+    mediaType: tracked?.mediaType ?? file?.mediaType,
+    relativePath: tracked?.relativePath ?? file?.relativePath ?? relativePath,
+  };
 }
 
 function focusDocumentOffset(offset: number): boolean {
@@ -1385,10 +1432,40 @@ function requestImageEmbed(view: EditorView): boolean {
   return true;
 }
 
+function captureAttachmentInsertion(
+  view = editorView.value,
+): AttachmentInsertionCapture | undefined {
+  return captureImageInsertion(view);
+}
+
+function cancelAttachmentInsertion(capture: AttachmentInsertionCapture): void {
+  cancelImageInsertion(capture);
+}
+
+function insertEmbeddedAttachment(
+  capture: AttachmentInsertionCapture,
+  markdownAttachment: string,
+): boolean {
+  return insertEmbeddedImage(capture, markdownAttachment);
+}
+
+function requestAttachmentEmbed(view: EditorView): boolean {
+  const capture = captureAttachmentInsertion(view);
+  if (!capture) {
+    return false;
+  }
+  emit("requestEmbedAttachment", capture);
+
+  return true;
+}
+
 defineExpose({
+  cancelAttachmentInsertion,
   cancelImageInsertion,
+  captureAttachmentInsertion,
   captureImageInsertion,
   focusDocumentOffset,
+  insertEmbeddedAttachment,
   insertEmbeddedImage,
 });
 

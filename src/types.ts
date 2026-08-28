@@ -62,16 +62,21 @@ export interface CssSnippet {
   builtIn?: boolean;
 }
 
-export type ImageEmbedLocation =
+export type AssetEmbedLocation =
   | "vault-root"
   | "note-folder"
   | "specified-folder"
   | "specified-folder-mirrored";
 
-export interface ImageEmbedSettings {
-  location: ImageEmbedLocation;
+export interface AssetEmbedSettings {
+  location: AssetEmbedLocation;
   folderPath: string;
 }
+
+export type ImageEmbedLocation = AssetEmbedLocation;
+export type ImageEmbedSettings = AssetEmbedSettings;
+export type AttachmentEmbedLocation = AssetEmbedLocation;
+export type AttachmentEmbedSettings = AssetEmbedSettings;
 
 export interface EmbeddedImage {
   id: string;
@@ -85,12 +90,29 @@ export interface VaultImageFile {
   mediaType: string;
 }
 
-export interface ImageInsertionCapture {
+export interface EmbeddedAttachment {
+  id: string;
+  relativePath: string;
+  mediaType: string;
+  byteLength: number;
+}
+
+export interface VaultAttachmentFile {
+  assetId?: string;
+  relativePath: string;
+  mediaType: string;
+  byteLength: number;
+}
+
+export interface AssetInsertionCapture {
   inTable: boolean;
   noteId: string;
   selectedText: string;
   token: string;
 }
+
+export type ImageInsertionCapture = AssetInsertionCapture;
+export type AttachmentInsertionCapture = AssetInsertionCapture;
 
 export interface VaultData {
   name: string;
@@ -104,6 +126,9 @@ export interface VaultData {
   embeddedImages: EmbeddedImage[];
   imageFiles: VaultImageFile[];
   imageEmbedSettings: ImageEmbedSettings;
+  embeddedAttachments: EmbeddedAttachment[];
+  attachmentFiles: VaultAttachmentFile[];
+  attachmentEmbedSettings: AttachmentEmbedSettings;
 }
 
 export interface VaultDescriptor {
@@ -150,6 +175,10 @@ export interface WorkspaceRecoveryMutationResult extends WorkspaceSaveResult {
 
 export interface WorkspaceEmbedImageResult extends WorkspaceSaveResult {
   image: EmbeddedImage;
+}
+
+export interface WorkspaceEmbedAttachmentResult extends WorkspaceSaveResult {
+  attachment: EmbeddedAttachment;
 }
 
 export interface WorkspaceImageNoteUpdate {

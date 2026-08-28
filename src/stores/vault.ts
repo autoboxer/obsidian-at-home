@@ -10,6 +10,11 @@ import {
   relativeImageDestination,
 } from "../lib/markdownImages";
 import {
+  formatMarkdownAttachment,
+  parseMarkdownAttachments,
+  relativeAttachmentDestination,
+} from "../lib/markdownAttachments";
+import {
   compareRecentlyDeletedNotes,
   readBrowserWorkspace,
   RECENTLY_DELETED_LIMIT,
@@ -63,8 +68,10 @@ import type {
   ToolView,
   VaultData,
   VaultDescriptor,
+  VaultAttachmentFile,
   VaultImageFile,
   VaultSessionState,
+  WorkspaceEmbedAttachmentResult,
   WorkspaceEmbedImageResult,
   WorkspaceImageNoteUpdate,
   WorkspaceLoad,
@@ -117,6 +124,7 @@ interface UiState {
   frontmatterVisible: boolean;
   vaultChooserOpen: boolean;
   inspectorTab: "links" | "info";
+  attachmentRefreshToken: number;
   imageRefreshToken: number;
   saveStatus: SaveStatus;
   lastSavedAt: number;
@@ -180,6 +188,7 @@ export const uiState = reactive<UiState>({
   frontmatterVisible: false,
   vaultChooserOpen: false,
   inspectorTab: "links",
+  attachmentRefreshToken: 0,
   imageRefreshToken: 0,
   saveStatus: "saved",
   lastSavedAt: Date.now(),
@@ -2186,7 +2195,7 @@ function rewriteImageReferences(
   return applyMarkdownReplacements(content, replacements);
 }
 
-function rewriteImageDestinationsForNotePath(
+function rewriteAssetDestinationsForNotePath(
   content: string,
   sourceNotePath: string,
   targetNotePath: string,
@@ -2213,6 +2222,30 @@ function rewriteImageDestinationsForNotePath(
         ...(image.height ? { height: image.height } : {}),
         ...(image.title !== undefined ? { title: image.title } : {}),
         inTable: image.raw.includes("\\|"),
+      }),
+    });
+  }
+  for (const attachment of parseMarkdownAttachments(content)) {
+    const trackedPath = attachment.assetId
+      ? vaultState.embeddedAttachments.find((asset) => asset.id === attachment.assetId)
+          ?.relativePath
+        ?? vaultState.attachmentFiles.find((file) => file.assetId === attachment.assetId)
+          ?.relativePath
+      : undefined;
+    const attachmentPath = trackedPath
+      ?? resolveMarkdownImagePath(sourceNotePath, attachment.destination);
+    if (!attachmentPath) {
+      continue;
+    }
+    replacements.push({
+      from: attachment.start,
+      to: attachment.end + 1,
+      value: formatMarkdownAttachment({
+        label: attachment.label,
+        ...(attachment.assetId ? { assetId: attachment.assetId } : {}),
+        destination: relativeAttachmentDestination(targetNotePath, attachmentPath),
+        ...(attachment.title !== undefined ? { title: attachment.title } : {}),
+        inTable: attachment.raw.includes("\\|"),
       }),
     });
   }
@@ -2448,7 +2481,7 @@ function applySavedNotePaths(notePaths: Record<string, string> | undefined): voi
       if (relativePath) {
         const originalPath = pendingNoteOriginalPaths.get(note.id);
         if (originalPath) {
-          note.content = rewriteImageDestinationsForNotePath(
+          note.content = rewriteAssetDestinationsForNotePath(
             note.content,
             originalPath,
             relativePath,
@@ -2493,6 +2526,29 @@ export function applyEmbeddedImageResult(result: WorkspaceEmbedImageResult): voi
   uiState.imageRefreshToken += 1;
 }
 
+export function applyEmbeddedAttachmentResult(
+  result: WorkspaceEmbedAttachmentResult,
+): void {
+  applyVaultMutation(() => {
+    const index = vaultState.embeddedAttachments.findIndex(
+      (attachment) => attachment.id === result.attachment.id,
+    );
+    if (index >= 0) {
+      vaultState.embeddedAttachments.splice(index, 1, result.attachment);
+    } else {
+      vaultState.embeddedAttachments.push(result.attachment);
+    }
+    upsertWorkspaceAttachmentFile({
+      assetId: result.attachment.id,
+      relativePath: result.attachment.relativePath,
+      mediaType: result.attachment.mediaType,
+      byteLength: result.attachment.byteLength,
+    });
+  });
+  applyWorkspaceSaveResult(result);
+  uiState.attachmentRefreshToken += 1;
+}
+
 function applyWorkspaceImageFiles(images: VaultImageFile[]): void {
   applyVaultMutation(() => {
     for (const image of images) {
@@ -2512,10 +2568,24 @@ function upsertWorkspaceImageFile(image: VaultImageFile): void {
   } else {
     vaultState.imageFiles.push({ ...image });
   }
-  ensureWorkspaceImageFolders(image.relativePath);
+  ensureWorkspaceAssetFolders(image.relativePath);
 }
 
-function ensureWorkspaceImageFolders(relativePath: string): void {
+function upsertWorkspaceAttachmentFile(attachment: VaultAttachmentFile): void {
+  const portablePath = attachment.relativePath.toLocaleLowerCase();
+  const index = vaultState.attachmentFiles.findIndex((candidate) =>
+    (attachment.assetId && candidate.assetId === attachment.assetId)
+    || candidate.relativePath.toLocaleLowerCase() === portablePath
+  );
+  if (index >= 0) {
+    vaultState.attachmentFiles.splice(index, 1, { ...attachment });
+  } else {
+    vaultState.attachmentFiles.push({ ...attachment });
+  }
+  ensureWorkspaceAssetFolders(attachment.relativePath);
+}
+
+function ensureWorkspaceAssetFolders(relativePath: string): void {
   const components = relativePath.split("/").slice(0, -1).filter(Boolean);
   let parentId: string | null = null;
   for (const name of components) {
@@ -2538,7 +2608,7 @@ function ensureWorkspaceImageFolders(relativePath: string): void {
 
 function rebuildWorkspaceImageFolders(): void {
   for (const image of vaultState.imageFiles) {
-    ensureWorkspaceImageFolders(image.relativePath);
+    ensureWorkspaceAssetFolders(image.relativePath);
   }
 }
 
@@ -3231,6 +3301,27 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     )
     : [];
   const imageEmbedSettings = normalizeImageEmbedSettings(input.imageEmbedSettings);
+  const embeddedAttachments = Array.isArray(input.embeddedAttachments)
+    ? input.embeddedAttachments.filter((attachment) =>
+      attachment
+      && typeof attachment.id === "string"
+      && typeof attachment.relativePath === "string"
+      && typeof attachment.mediaType === "string"
+      && Number.isSafeInteger(attachment.byteLength)
+      && attachment.byteLength >= 0
+    )
+    : [];
+  const attachmentFiles = Array.isArray(input.attachmentFiles)
+    ? input.attachmentFiles.filter((attachment) =>
+      attachment
+      && (attachment.assetId === undefined || typeof attachment.assetId === "string")
+      && typeof attachment.relativePath === "string"
+      && typeof attachment.mediaType === "string"
+      && Number.isSafeInteger(attachment.byteLength)
+      && attachment.byteLength >= 0
+    )
+    : [];
+  const attachmentEmbedSettings = normalizeImageEmbedSettings(input.attachmentEmbedSettings);
 
   return {
     name: typeof input.name === "string" && input.name.trim() ? input.name : fallback.name,
@@ -3246,6 +3337,9 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
     embeddedImages,
     imageFiles,
     imageEmbedSettings,
+    embeddedAttachments,
+    attachmentFiles,
+    attachmentEmbedSettings,
   };
 }
 
@@ -3319,7 +3413,7 @@ function snapshotVaultForSave(): VaultData {
       continue;
     }
     const targetPath = projectedNoteRelativePath(note, snapshot.folders, originalPath);
-    note.content = rewriteImageDestinationsForNotePath(
+    note.content = rewriteAssetDestinationsForNotePath(
       note.content,
       originalPath,
       targetPath,
@@ -3361,6 +3455,7 @@ function applyWorkspace(workspace: WorkspaceLoad, recentVaults = vaultSession.re
   sessionGeneration += 1;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
   uiState.imageRefreshToken += 1;
+  uiState.attachmentRefreshToken += 1;
   hydrateRecentlyDeletedNotes(workspace.recentlyDeletedNotes);
   initializeNoteEditorPositions(
     "native",
