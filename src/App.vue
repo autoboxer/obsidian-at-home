@@ -159,8 +159,22 @@ function handleKeyboard(event: KeyboardEvent): void {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", handleKeyboard));
-onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
+function preventExternalFileNavigation(event: DragEvent): void {
+  if (Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+    event.preventDefault();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handleKeyboard);
+  window.addEventListener("dragover", preventExternalFileNavigation, true);
+  window.addEventListener("drop", preventExternalFileNavigation, true);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleKeyboard);
+  window.removeEventListener("dragover", preventExternalFileNavigation, true);
+  window.removeEventListener("drop", preventExternalFileNavigation, true);
+});
 </script>
 
 <template>

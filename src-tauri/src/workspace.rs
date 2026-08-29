@@ -433,7 +433,6 @@ struct ExternalFileUpload {
     received_length: u64,
     root: PathBuf,
     note_relative_path: String,
-    expected_revision: u64,
     kind: ExternalFileUploadKind,
     last_activity: Instant,
     cleanup_on_drop: bool,
@@ -457,7 +456,6 @@ struct StagedExternalFile {
     file_name: String,
     root: PathBuf,
     note_relative_path: String,
-    expected_revision: u64,
 }
 
 impl Drop for StagedExternalFile {
@@ -1287,7 +1285,6 @@ pub fn workspace_begin_external_file_upload(
         kind,
         root,
         note_relative_path,
-        expected_revision,
     )
 }
 
@@ -1333,6 +1330,7 @@ pub fn workspace_finish_external_image_upload(
     app: AppHandle,
     upload_id: String,
     settings: ImageEmbedSettings,
+    expected_revision: u64,
 ) -> Result<WorkspaceEmbedImageResult, String> {
     let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Image)?;
     let _guard = lock_workspace_io()?;
@@ -1349,7 +1347,7 @@ pub fn workspace_finish_external_image_upload(
         &staged.file_name,
         &bytes,
         None,
-        staged.expected_revision,
+        expected_revision,
     )
 }
 
@@ -1358,6 +1356,7 @@ pub fn workspace_finish_external_attachment_upload(
     app: AppHandle,
     upload_id: String,
     settings: AttachmentEmbedSettings,
+    expected_revision: u64,
 ) -> Result<WorkspaceEmbedAttachmentResult, String> {
     let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Attachment)?;
     let _guard = lock_workspace_io()?;
@@ -1372,7 +1371,7 @@ pub fn workspace_finish_external_attachment_upload(
         settings,
         &source,
         None,
-        staged.expected_revision,
+        expected_revision,
     )
 }
 
@@ -5494,7 +5493,6 @@ fn begin_external_file_upload(
     kind: ExternalFileUploadKind,
     root: PathBuf,
     note_relative_path: String,
-    expected_revision: u64,
 ) -> Result<WorkspaceExternalFileUpload, String> {
     match kind {
         ExternalFileUploadKind::Image
@@ -5569,7 +5567,6 @@ fn begin_external_file_upload(
                 received_length: 0,
                 root,
                 note_relative_path,
-                expected_revision,
                 kind,
                 last_activity: Instant::now(),
                 cleanup_on_drop: true,
@@ -5663,7 +5660,6 @@ fn finish_external_file_upload(
         file_name: upload.file_name.clone(),
         root: upload.root.clone(),
         note_relative_path: upload.note_relative_path.clone(),
-        expected_revision: upload.expected_revision,
     };
     upload.cleanup_on_drop = false;
     Ok(staged)
@@ -14089,7 +14085,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            42,
         )
         .expect("upload should begin");
         let upload_directory = staging.root.join(&upload.id);
@@ -14115,7 +14110,6 @@ mod tests {
         assert_eq!(staged.file_name, "Report.zip");
         assert_eq!(staged.root, vault.root);
         assert_eq!(staged.note_relative_path, "Note.md");
-        assert_eq!(staged.expected_revision, 42);
         assert_eq!(fs::read(&staged_path).unwrap(), b"abcdef");
         drop(staged);
 
@@ -14134,7 +14128,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("upload should begin");
         let upload_directory = staging.root.join(&upload.id);
@@ -14151,7 +14144,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("second upload should begin");
         let upload_directory = staging.root.join(&upload.id);
@@ -14172,7 +14164,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("third upload should begin");
         let upload_directory = staging.root.join(&upload.id);
@@ -14186,7 +14177,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("fourth upload should begin");
         let upload_directory = staging.root.join(&upload.id);
@@ -14209,7 +14199,6 @@ mod tests {
             ExternalFileUploadKind::Image,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect_err("an empty image should be rejected before staging");
         assert!(empty_image.contains("between 1 byte"));
@@ -14221,7 +14210,6 @@ mod tests {
             ExternalFileUploadKind::Image,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect_err("an oversized image should be rejected before staging");
         assert!(oversized_image.contains("50 MiB"));
@@ -14233,7 +14221,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect_err("an image filename should not bypass the image limit as an attachment");
         assert!(image_as_attachment.contains("image embedding"));
@@ -14251,7 +14238,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("empty attachments should remain supported");
         let staged_empty = finish_external_file_upload(
@@ -14269,7 +14255,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("the attachment limit should remain larger than the image limit");
         assert!(cancel_external_file_upload(&large_attachment.id).unwrap());
@@ -14281,7 +14266,6 @@ mod tests {
             ExternalFileUploadKind::Image,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("an image upload should begin");
         let upload_directory = staging.root.join(&image.id);
@@ -14317,7 +14301,6 @@ mod tests {
             ExternalFileUploadKind::Image,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("an image should stage below a non-UTF-8 cache path");
         append_external_file_upload(&image.id, 0, PNG)
@@ -14339,7 +14322,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .expect("an attachment should stage below a non-UTF-8 cache path");
         let staged_attachment = finish_external_file_upload(
@@ -14386,7 +14368,6 @@ mod tests {
                     received_length: 0,
                     root: vault.root.clone(),
                     note_relative_path: "Note.md".to_owned(),
-                    expected_revision: 1,
                     kind: ExternalFileUploadKind::Attachment,
                     last_activity: if index == 0 {
                         abandoned_activity
@@ -14425,7 +14406,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .is_err());
         assert!(begin_external_file_upload(
@@ -14435,7 +14415,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            1,
         )
         .is_err());
 
@@ -14469,7 +14448,6 @@ mod tests {
             ExternalFileUploadKind::Image,
             vault.root.clone(),
             "Note.md".to_owned(),
-            image_revision,
         )
         .expect("image upload should begin");
         append_external_file_upload(&image_upload.id, 0, PNG)
@@ -14504,7 +14482,6 @@ mod tests {
             ExternalFileUploadKind::Attachment,
             vault.root.clone(),
             "Note.md".to_owned(),
-            attachment_revision,
         )
         .expect("attachment upload should begin");
         append_external_file_upload(&attachment_upload.id, 0, b"report")
@@ -14535,6 +14512,56 @@ mod tests {
         assert_eq!(
             fs::read(vault.root.join("Dragged report.pdf")).unwrap(),
             b"report",
+        );
+    }
+
+    #[test]
+    fn staged_external_file_accepts_an_acknowledged_revision_after_streaming() {
+        let staging = TestWorkspace::new("external-file-upload-current-revision");
+        let vault = TestWorkspace::new("external-file-upload-current-revision-vault");
+        fs::write(vault.root.join("Note.md"), "# Note")
+            .expect("note should be written");
+        write_workspace_state(&vault.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let begin_revision = revision_for_root(&vault.root).unwrap();
+        let upload = begin_external_file_upload(
+            &staging.root,
+            "Typed during drop.txt".to_owned(),
+            7,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+        )
+        .expect("upload should begin");
+        append_external_file_upload(&upload.id, 0, b"dropped")
+            .expect("file bytes should append");
+
+        fs::write(vault.root.join("Note.md"), "# Note\n\nTyped while streaming")
+            .expect("the acknowledged note save should be written");
+        let finish_revision = revision_for_root(&vault.root).unwrap();
+        assert_ne!(finish_revision, begin_revision);
+
+        let staged = finish_external_file_upload(
+            &upload.id,
+            ExternalFileUploadKind::Attachment,
+        )
+            .expect("complete upload should finish staging");
+        let attachment = embed_workspace_attachment(
+            &vault.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &staged.path,
+            None,
+            finish_revision,
+        )
+        .expect("staged attachment should accept the acknowledged revision");
+        assert_eq!(
+            attachment.attachment.relative_path,
+            "Typed during drop.txt",
+        );
+        assert_eq!(
+            fs::read(vault.root.join("Typed during drop.txt")).unwrap(),
+            b"dropped",
         );
     }
 }

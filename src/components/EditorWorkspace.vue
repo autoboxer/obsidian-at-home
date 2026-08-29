@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { leadingFrontmatterEnd } from "../lib/frontmatter";
 import {
   findMarkdownHeading,
@@ -9,6 +9,7 @@ import {
 import { formatCommandShortcut } from "../lib/keyboard";
 import {
   imageAltFromPath,
+  isSupportedImageFileName,
   pastedImageFileName,
 } from "../lib/imageEmbeds";
 import {
@@ -23,6 +24,8 @@ import {
 import { resolveWikiLink } from "../lib/wikiLinks";
 import {
   embedWorkspaceAttachmentFile,
+  embedWorkspaceExternalAttachment,
+  embedWorkspaceExternalImage,
   embedWorkspaceImageBytes,
   embedWorkspaceImageFile,
   embedWorkspaceVaultAttachment,
@@ -92,6 +95,7 @@ const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
 const attachmentEmbedBusy = ref(false);
 const imageEmbedBusy = ref(false);
+let externalFileDropAbort: AbortController | undefined;
 const sourceEditor = ref<{
   cancelAttachmentInsertion: (capture: AttachmentInsertionCapture) => void;
   cancelImageInsertion: (capture: ImageInsertionCapture) => void;
@@ -246,6 +250,33 @@ interface AssetEmbedContext {
   vaultPath: string;
 }
 
+interface StoreAndInsertOptions {
+  announce?: boolean;
+  markdownPrefix?: string;
+}
+
+async function prepareExternalFileFinish(
+  context: AssetEmbedContext,
+  signal: AbortSignal,
+): Promise<number> {
+  if (signal.aborted) {
+    throw new DOMException("The dropped-file transfer was cancelled.", "AbortError");
+  }
+  if (!(await flushVault())) {
+    throw new Error(vaultSession.error || "Save the note before finishing the file drop.");
+  }
+  if (
+    signal.aborted
+    || vaultSession.path !== context.vaultPath
+    || activeNote.value?.id !== context.note.id
+    || context.note.relativePath !== context.noteRelativePath
+  ) {
+    throw new Error("The note or vault changed before the file drop could finish.");
+  }
+
+  return vaultSession.revision;
+}
+
 function embedError(error: unknown, fallback: string): string {
   if (typeof error === "string" && error.trim()) {
     return error;
@@ -277,6 +308,7 @@ async function storeAndInsertImage(
     context: AssetEmbedContext,
     expectedRevision: number,
   ) => Promise<WorkspaceEmbedImageResult>,
+  options: StoreAndInsertOptions = {},
 ): Promise<boolean> {
   const context = assetEmbedContext(capture);
   if (!context) {
@@ -297,12 +329,18 @@ async function storeAndInsertImage(
   }
 
   const result = await embed(context, vaultSession.revision);
+  if (
+    vaultSession.path !== context.vaultPath
+    || activeNote.value?.id !== context.note.id
+  ) {
+    throw new Error("The note or vault changed before the image could be inserted.");
+  }
   applyEmbeddedImageResult(result);
   const selectedAlt = capture.selectedText.trim();
   const alt = selectedAlt && !/[\r\n]/.test(selectedAlt) && selectedAlt.length <= 240
     ? selectedAlt
     : imageAltFromPath(result.image.relativePath);
-  const markdownImage = formatMarkdownImage({
+  const markdownImage = `${options.markdownPrefix ?? ""}${formatMarkdownImage({
     alt,
     assetId: result.image.id,
     destination: relativeImageDestination(
@@ -310,7 +348,7 @@ async function storeAndInsertImage(
       result.image.relativePath,
     ),
     inTable: capture.inTable,
-  });
+  })}`;
   const inserted = sourceEditor.value?.insertEmbeddedImage(capture, markdownImage) ?? false;
   if (!inserted) {
     notify("The image was saved, but its Markdown reference could not be inserted.", "warning");
@@ -320,7 +358,7 @@ async function storeAndInsertImage(
 
   if (result.warnings.length) {
     notify(result.warnings[0]!, "warning");
-  } else {
+  } else if (options.announce !== false) {
     notify(`Embedded ${imageAltFromPath(result.image.relativePath)}`, "success");
   }
 
@@ -446,6 +484,7 @@ async function storeAndInsertAttachment(
     context: AssetEmbedContext,
     expectedRevision: number,
   ) => Promise<WorkspaceEmbedAttachmentResult>,
+  options: StoreAndInsertOptions = {},
 ): Promise<boolean> {
   const context = assetEmbedContext(capture);
   if (!context) {
@@ -466,12 +505,18 @@ async function storeAndInsertAttachment(
   }
 
   const result = await embed(context, vaultSession.revision);
+  if (
+    vaultSession.path !== context.vaultPath
+    || activeNote.value?.id !== context.note.id
+  ) {
+    throw new Error("The note or vault changed before the file could be inserted.");
+  }
   applyEmbeddedAttachmentResult(result);
   const selectedLabel = capture.selectedText.trim();
   const label = selectedLabel && !/[\r\n]/.test(selectedLabel) && selectedLabel.length <= 240
     ? selectedLabel
     : attachmentLabelFromPath(result.attachment.relativePath);
-  const markdownAttachment = formatMarkdownAttachment({
+  const markdownAttachment = `${options.markdownPrefix ?? ""}${formatMarkdownAttachment({
     label,
     assetId: result.attachment.id,
     destination: relativeAttachmentDestination(
@@ -479,7 +524,7 @@ async function storeAndInsertAttachment(
       result.attachment.relativePath,
     ),
     inTable: capture.inTable,
-  });
+  })}`;
   const inserted = sourceEditor.value?.insertEmbeddedAttachment(
     capture,
     markdownAttachment,
@@ -492,7 +537,7 @@ async function storeAndInsertAttachment(
 
   if (result.warnings.length) {
     notify(result.warnings[0]!, "warning");
-  } else {
+  } else if (options.announce !== false) {
     notify(`Embedded ${attachmentLabelFromPath(result.attachment.relativePath)}`, "success");
   }
 
@@ -566,6 +611,144 @@ async function embedAttachmentFromVault(
   } finally {
     sourceEditor.value?.cancelAttachmentInsertion(capture);
     attachmentEmbedBusy.value = false;
+  }
+}
+
+async function embedExternalFiles(
+  capture: AttachmentInsertionCapture,
+  files: File[],
+  rejectedCount: number,
+): Promise<void> {
+  if (attachmentEmbedBusy.value || imageEmbedBusy.value) {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    notify("Wait for the current file to finish embedding.", "warning");
+
+    return;
+  }
+  if (!files.length) {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    notify(
+      rejectedCount
+        ? "Folders and unavailable items cannot be embedded."
+        : "No regular files were available in that drop.",
+      "warning",
+    );
+
+    return;
+  }
+  const initialContext = assetEmbedContext(capture);
+  if (!initialContext) {
+    sourceEditor.value?.cancelAttachmentInsertion(capture);
+    notify("Drop files into an open note in a desktop vault.", "warning");
+
+    return;
+  }
+
+  const controller = new AbortController();
+  externalFileDropAbort?.abort();
+  externalFileDropAbort = controller;
+  attachmentEmbedBusy.value = true;
+  imageEmbedBusy.value = true;
+  const imageSettings = { ...vaultState.imageEmbedSettings };
+  const attachmentSettings = { ...vaultState.attachmentEmbedSettings };
+  let currentCapture: AssetInsertionCapture | undefined = capture;
+  let embeddedCount = 0;
+  let failedCount = rejectedCount;
+  const errors: string[] = rejectedCount
+    ? [`${rejectedCount} folder${rejectedCount === 1 ? " or item was" : "s or items were"} skipped.`]
+    : [];
+
+  try {
+    for (let index = 0; index < files.length && currentCapture; index += 1) {
+      const file = files[index]!;
+      const options: StoreAndInsertOptions = {
+        announce: false,
+        ...(embeddedCount ? { markdownPrefix: " " } : {}),
+      };
+      try {
+        const inserted = isSupportedImageFileName(file.name)
+          ? await storeAndInsertImage(
+              currentCapture,
+              (context, expectedRevision) => embedWorkspaceExternalImage(
+                context.vaultPath,
+                file,
+                context.noteRelativePath,
+                imageSettings,
+                expectedRevision,
+                controller.signal,
+                () => prepareExternalFileFinish(context, controller.signal),
+              ),
+              options,
+            )
+          : await storeAndInsertAttachment(
+              currentCapture,
+              (context, expectedRevision) => embedWorkspaceExternalAttachment(
+                context.vaultPath,
+                file,
+                context.noteRelativePath,
+                attachmentSettings,
+                expectedRevision,
+                controller.signal,
+                () => prepareExternalFileFinish(context, controller.signal),
+              ),
+              options,
+            );
+        if (!inserted) {
+          failedCount += 1;
+          errors.push("A stored file could not be inserted into the note.");
+          currentCapture = undefined;
+          break;
+        }
+        embeddedCount += 1;
+        currentCapture = index + 1 < files.length
+          ? sourceEditor.value?.captureAttachmentInsertion()
+          : undefined;
+        if (index + 1 < files.length && !currentCapture) {
+          failedCount += files.length - index - 1;
+          errors.push("The remaining files could not retain their drop position.");
+        }
+      } catch (error) {
+        failedCount += 1;
+        errors.push(`${file.name.trim() || "Dropped file"}: ${embedError(
+          error,
+          "The file could not be embedded.",
+        )}`);
+        if (
+          controller.signal.aborted
+          || !currentCapture
+          || !assetEmbedContext(currentCapture)
+        ) {
+          break;
+        }
+      }
+    }
+  } finally {
+    if (currentCapture) {
+      sourceEditor.value?.cancelAttachmentInsertion(currentCapture);
+    }
+    if (externalFileDropAbort === controller) {
+      externalFileDropAbort = undefined;
+    }
+    attachmentEmbedBusy.value = false;
+    imageEmbedBusy.value = false;
+  }
+
+  if (controller.signal.aborted) {
+    notify("The file drop was cancelled because the note or vault changed.", "warning");
+  } else if (errors.length) {
+    notify(
+      embeddedCount
+        ? `Embedded ${embeddedCount} file${embeddedCount === 1 ? "" : "s"}; ${failedCount} could not be added.`
+        : errors[0]!,
+      "warning",
+    );
+  } else {
+    notify(
+      files.length === 1
+        ? `Embedded ${files[0]!.name}`
+        : `Embedded ${files.length} files`,
+      "success",
+    );
   }
 }
 
@@ -745,6 +928,11 @@ watch(
 );
 
 watch(
+  [() => vaultSession.path, () => activeNote.value?.id],
+  () => externalFileDropAbort?.abort(),
+);
+
+watch(
   () => vaultImageInsertRequest.id,
   () => void insertRequestedVaultImage(),
 );
@@ -757,6 +945,8 @@ watch(
 watch(tagInput, () => {
   tagSuggestionIndex.value = -1;
 });
+
+onBeforeUnmount(() => externalFileDropAbort?.abort());
 </script>
 
 <template>
@@ -1026,6 +1216,7 @@ watch(tagInput, () => {
             :vault-path="vaultSession.path"
             @editor-position="rememberEditorPosition"
             @activate-attachment="activateEmbeddedAttachment"
+            @external-file-drop="embedExternalFiles"
             @open-link="openRenderedLink"
             @open-wiki="openWikiLink"
             @paste-image="embedImageFromClipboard"

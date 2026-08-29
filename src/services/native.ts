@@ -355,8 +355,9 @@ async function streamWorkspaceExternalFile<T>(
   kind: "image" | "attachment",
   noteRelativePath: string,
   expectedRevision: number,
-  finish: (uploadId: string) => Promise<T>,
+  finish: (uploadId: string, expectedRevision: number) => Promise<T>,
   signal?: AbortSignal,
+  prepareFinish?: () => Promise<number>,
 ): Promise<T> {
   throwIfExternalFileUploadAborted(signal);
   if (!Number.isSafeInteger(file.size) || file.size < 0) {
@@ -393,7 +394,12 @@ async function streamWorkspaceExternalFile<T>(
       offset = end;
     }
     throwIfExternalFileUploadAborted(signal);
-    return await finish(upload.id);
+    const finishRevision = prepareFinish
+      ? await prepareFinish()
+      : expectedRevision;
+    throwIfExternalFileUploadAborted(signal);
+
+    return await finish(upload.id, finishRevision);
   } catch (error) {
     await cancelWorkspaceExternalFileUpload(upload.id).catch(() => undefined);
     throw error;
@@ -407,6 +413,7 @@ export async function embedWorkspaceExternalImage(
   settings: ImageEmbedSettings,
   expectedRevision: number,
   signal?: AbortSignal,
+  prepareFinish?: () => Promise<number>,
 ): Promise<WorkspaceEmbedImageResult> {
   return streamWorkspaceExternalFile(
     path,
@@ -414,11 +421,12 @@ export async function embedWorkspaceExternalImage(
     "image",
     noteRelativePath,
     expectedRevision,
-    (uploadId) => invoke<WorkspaceEmbedImageResult>(
+    (uploadId, finishRevision) => invoke<WorkspaceEmbedImageResult>(
       "workspace_finish_external_image_upload",
-      { uploadId, settings },
+      { uploadId, settings, expectedRevision: finishRevision },
     ),
     signal,
+    prepareFinish,
   );
 }
 
@@ -429,6 +437,7 @@ export async function embedWorkspaceExternalAttachment(
   settings: AttachmentEmbedSettings,
   expectedRevision: number,
   signal?: AbortSignal,
+  prepareFinish?: () => Promise<number>,
 ): Promise<WorkspaceEmbedAttachmentResult> {
   return streamWorkspaceExternalFile(
     path,
@@ -436,11 +445,12 @@ export async function embedWorkspaceExternalAttachment(
     "attachment",
     noteRelativePath,
     expectedRevision,
-    (uploadId) => invoke<WorkspaceEmbedAttachmentResult>(
+    (uploadId, finishRevision) => invoke<WorkspaceEmbedAttachmentResult>(
       "workspace_finish_external_attachment_upload",
-      { uploadId, settings },
+      { uploadId, settings, expectedRevision: finishRevision },
     ),
     signal,
+    prepareFinish,
   );
 }
 
