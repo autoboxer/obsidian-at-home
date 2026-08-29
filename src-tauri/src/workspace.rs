@@ -5,8 +5,8 @@ use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
@@ -43,8 +43,15 @@ const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
 const ATTACHMENT_COPY_BUFFER_BYTES: usize = 256 * 1024;
+const EXTERNAL_FILE_UPLOAD_DIRECTORY: &str = "external-file-drops";
+const EXTERNAL_FILE_UPLOAD_CHUNK_BYTES: usize = 512 * 1024;
+const MAX_EXTERNAL_FILE_UPLOADS: usize = 16;
+const ABANDONED_EXTERNAL_FILE_UPLOAD_MILLIS: u64 = 5 * 60 * 1000;
+const STALE_EXTERNAL_FILE_UPLOAD_MILLIS: u64 = 24 * 60 * 60 * 1000;
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
+static EXTERNAL_FILE_UPLOADS: LazyLock<Mutex<HashMap<String, ExternalFileUpload>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -325,6 +332,20 @@ pub struct WorkspaceEmbedAttachmentResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceExternalFileUpload {
+    pub id: String,
+    pub chunk_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalFileUploadKind {
+    Image,
+    Attachment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceImageNoteUpdate {
     pub note_id: String,
     pub relative_path: String,
@@ -393,6 +414,57 @@ struct EmbedImageBytesMetadata {
     note_relative_path: String,
     settings: ImageEmbedSettings,
     expected_revision: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppendExternalFileUploadMetadata {
+    upload_id: String,
+    offset: u64,
+}
+
+#[derive(Debug)]
+struct ExternalFileUpload {
+    directory: PathBuf,
+    path: PathBuf,
+    file: Option<File>,
+    file_name: String,
+    expected_length: u64,
+    received_length: u64,
+    root: PathBuf,
+    note_relative_path: String,
+    expected_revision: u64,
+    kind: ExternalFileUploadKind,
+    last_activity: Instant,
+    cleanup_on_drop: bool,
+}
+
+impl Drop for ExternalFileUpload {
+    fn drop(&mut self) {
+        if !self.cleanup_on_drop {
+            return;
+        }
+        self.file.take();
+        let _ = remove_file_durable(&self.path);
+        let _ = remove_directory_durable(&self.directory);
+    }
+}
+
+#[derive(Debug)]
+struct StagedExternalFile {
+    directory: PathBuf,
+    path: PathBuf,
+    file_name: String,
+    root: PathBuf,
+    note_relative_path: String,
+    expected_revision: u64,
+}
+
+impl Drop for StagedExternalFile {
+    fn drop(&mut self) {
+        let _ = remove_file_durable(&self.path);
+        let _ = remove_directory_durable(&self.directory);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1183,6 +1255,124 @@ pub fn workspace_embed_attachment_file(
         &source,
         existing_relative_path.as_deref(),
         expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_begin_external_file_upload(
+    app: AppHandle,
+    path: String,
+    file_name: String,
+    byte_length: u64,
+    kind: ExternalFileUploadKind,
+    note_relative_path: String,
+    expected_revision: u64,
+) -> Result<WorkspaceExternalFileUpload, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    validate_external_file_drop_note(&root, &note_relative_path)?;
+    if revision_for_root(&root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before dropping the file."
+                .to_owned(),
+        );
+    }
+    let staging_directory = external_file_staging_directory(&app)?;
+    begin_external_file_upload(
+        &staging_directory,
+        file_name,
+        byte_length,
+        kind,
+        root,
+        note_relative_path,
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_append_external_file_upload(
+    request: tauri::ipc::Request<'_>,
+) -> Result<u64, String> {
+    let encoded_metadata = request
+        .headers()
+        .get("x-oah-external-file-upload")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "Dropped-file transfer metadata is missing.".to_owned())?;
+    let metadata: AppendExternalFileUploadMetadata = serde_json::from_str(&percent_decode_utf8(
+        encoded_metadata,
+    )?)
+    .map_err(|error| format!("Dropped-file transfer metadata is invalid: {error}"))?;
+    let bytes: Cow<'_, [u8]> = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Cow::Borrowed(bytes),
+        tauri::ipc::InvokeBody::Json(serde_json::Value::Array(values)) => Cow::Owned(
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .filter(|value| *value <= u64::from(u8::MAX))
+                        .map(|value| value as u8)
+                        .ok_or_else(|| "Dropped-file bytes are invalid.".to_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        _ => return Err("Dropped-file bytes are missing.".to_owned()),
+    };
+    append_external_file_upload(&metadata.upload_id, metadata.offset, &bytes)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_cancel_external_file_upload(upload_id: String) -> Result<bool, String> {
+    cancel_external_file_upload(&upload_id)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_finish_external_image_upload(
+    app: AppHandle,
+    upload_id: String,
+    settings: ImageEmbedSettings,
+) -> Result<WorkspaceEmbedImageResult, String> {
+    let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Image)?;
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root_path(&staged.root)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    validate_external_file_drop_note(&root, &staged.note_relative_path)?;
+    let source = validate_image_source_path(&staged.path)?;
+    let bytes = read_image_file(&source)?;
+    embed_workspace_image(
+        &root,
+        &staged.note_relative_path,
+        settings,
+        &staged.file_name,
+        &bytes,
+        None,
+        staged.expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_finish_external_attachment_upload(
+    app: AppHandle,
+    upload_id: String,
+    settings: AttachmentEmbedSettings,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Attachment)?;
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root_path(&staged.root)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    validate_external_file_drop_note(&root, &staged.note_relative_path)?;
+    let source = validate_attachment_source_path(&staged.path)?;
+    embed_workspace_attachment(
+        &root,
+        &staged.note_relative_path,
+        settings,
+        &source,
+        None,
+        staged.expected_revision,
     )
 }
 
@@ -5168,11 +5358,325 @@ fn resolve_image_import_source(root: &Path, relative_path: &str) -> Result<PathB
     Ok(current)
 }
 
+fn external_file_staging_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_cache_dir()
+        .map(|directory| directory.join(EXTERNAL_FILE_UPLOAD_DIRECTORY))
+        .map_err(|error| format!("Could not locate temporary dropped-file storage: {error}"))
+}
+
+fn safe_external_file_name(file_name: &str) -> Result<String, String> {
+    if file_name.trim().is_empty()
+        || file_name.contains('/')
+        || file_name.contains('\\')
+        || Path::new(file_name).components().count() != 1
+    {
+        return Err("The dropped file name is not safe.".to_owned());
+    }
+    let path = Path::new(file_name);
+    let stem = safe_file_stem(
+        path.file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Dropped file"),
+        "Dropped file",
+    );
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|character| {
+            !character.is_control() && !is_forbidden_component_character(*character)
+        })
+        .take(40)
+        .collect::<String>();
+    let safe_name = if extension.is_empty() {
+        stem
+    } else {
+        format!("{stem}.{extension}")
+    };
+    validate_component_name(&safe_name, "file")?;
+    Ok(safe_name)
+}
+
+fn validate_external_file_drop_note(root: &Path, note_relative_path: &str) -> Result<(), String> {
+    validate_markdown_relative_path(note_relative_path)?;
+    let note_path = resolve_workspace_file(root, note_relative_path, false)?;
+    let metadata = fs::symlink_metadata(&note_path)
+        .map_err(|_| "Save the active note before dropping a file into it.".to_owned())?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Save the active note before dropping a file into it.".to_owned());
+    }
+    Ok(())
+}
+
+fn prepare_external_file_staging_directory(directory: &Path) -> Result<(), String> {
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Could not prepare temporary dropped-file storage: {error}"))?;
+    let metadata = fs::symlink_metadata(directory)
+        .map_err(|error| format!("Could not inspect temporary dropped-file storage: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("Temporary dropped-file storage is not a regular folder.".to_owned());
+    }
+    cleanup_stale_external_file_uploads(directory);
+    Ok(())
+}
+
+fn cleanup_stale_external_file_uploads(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten().take(256) {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !name.starts_with("drop-") {
+            continue;
+        }
+        let upload_directory = entry.path();
+        let Ok(directory_metadata) = fs::symlink_metadata(&upload_directory) else {
+            continue;
+        };
+        if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+            continue;
+        }
+        let Ok(children) = fs::read_dir(&upload_directory) else {
+            continue;
+        };
+        let children = children.flatten().take(2).collect::<Vec<_>>();
+        if children.len() > 1 {
+            continue;
+        }
+        let child = children.first();
+        let modified = child
+            .and_then(|child| child.metadata().ok())
+            .and_then(|metadata| metadata.modified().ok())
+            .or_else(|| directory_metadata.modified().ok());
+        let is_stale = modified
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| {
+                age >= Duration::from_millis(STALE_EXTERNAL_FILE_UPLOAD_MILLIS)
+            });
+        if !is_stale {
+            continue;
+        }
+        if let Some(child) = child {
+            let Ok(metadata) = fs::symlink_metadata(child.path()) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                continue;
+            }
+            if remove_file_durable(&child.path()).is_err() {
+                continue;
+            }
+        }
+        let _ = remove_directory_durable(&upload_directory);
+    }
+}
+
+fn remove_abandoned_external_file_uploads(
+    uploads: &mut HashMap<String, ExternalFileUpload>,
+    now: Instant,
+) {
+    let timeout = Duration::from_millis(ABANDONED_EXTERNAL_FILE_UPLOAD_MILLIS);
+    uploads.retain(|_, upload| {
+        now.checked_duration_since(upload.last_activity)
+            .map_or(true, |inactive| inactive < timeout)
+    });
+}
+
+fn begin_external_file_upload(
+    staging_directory: &Path,
+    file_name: String,
+    expected_length: u64,
+    kind: ExternalFileUploadKind,
+    root: PathBuf,
+    note_relative_path: String,
+    expected_revision: u64,
+) -> Result<WorkspaceExternalFileUpload, String> {
+    match kind {
+        ExternalFileUploadKind::Image
+            if expected_length == 0 || expected_length > MAX_IMAGE_BYTES => {
+            return Err(format!(
+                "The dropped image must be between 1 byte and {} MiB.",
+                MAX_IMAGE_BYTES / 1024 / 1024,
+            ));
+        }
+        ExternalFileUploadKind::Attachment if expected_length > MAX_ATTACHMENT_BYTES => {
+            return Err(format!(
+                "The dropped file is larger than {} GiB.",
+                MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+            ));
+        }
+        _ => {}
+    }
+    let file_name = safe_external_file_name(&file_name)?;
+    match kind {
+        ExternalFileUploadKind::Image => validate_image_relative_path(&file_name)?,
+        ExternalFileUploadKind::Attachment => validate_attachment_relative_path(&file_name)?,
+    }
+    prepare_external_file_staging_directory(staging_directory)?;
+    let mut uploads = EXTERNAL_FILE_UPLOADS.lock().map_err(|_| {
+        "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
+    })?;
+    remove_abandoned_external_file_uploads(&mut uploads, Instant::now());
+    if uploads.len() >= MAX_EXTERNAL_FILE_UPLOADS {
+        return Err("Wait for the current dropped files to finish before adding more.".to_owned());
+    }
+
+    for _ in 0..10_000 {
+        let id = format!(
+            "drop-{}-{}-{}",
+            std::process::id(),
+            now_millis(),
+            TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed),
+        );
+        if uploads.contains_key(&id) {
+            continue;
+        }
+        let upload_directory = staging_directory.join(&id);
+        match fs::create_dir(&upload_directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Could not create temporary dropped-file storage: {error}"
+                ));
+            }
+        }
+        let upload_path = upload_directory.join(&file_name);
+        let file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&upload_path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = remove_directory_durable(&upload_directory);
+                return Err(format!("Could not stage the dropped file: {error}"));
+            }
+        };
+        uploads.insert(
+            id.clone(),
+            ExternalFileUpload {
+                directory: upload_directory,
+                path: upload_path,
+                file: Some(file),
+                file_name,
+                expected_length,
+                received_length: 0,
+                root,
+                note_relative_path,
+                expected_revision,
+                kind,
+                last_activity: Instant::now(),
+                cleanup_on_drop: true,
+            },
+        );
+        return Ok(WorkspaceExternalFileUpload {
+            id,
+            chunk_bytes: EXTERNAL_FILE_UPLOAD_CHUNK_BYTES,
+        });
+    }
+    Err("Could not reserve temporary storage for the dropped file.".to_owned())
+}
+
+fn append_external_file_upload(upload_id: &str, offset: u64, bytes: &[u8]) -> Result<u64, String> {
+    let mut uploads = EXTERNAL_FILE_UPLOADS.lock().map_err(|_| {
+        "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
+    })?;
+    let result = (|| {
+        let upload = uploads
+            .get_mut(upload_id)
+            .ok_or_else(|| "The dropped-file transfer is no longer available.".to_owned())?;
+        if bytes.is_empty() || bytes.len() > EXTERNAL_FILE_UPLOAD_CHUNK_BYTES {
+            return Err("A dropped-file transfer chunk has an invalid size.".to_owned());
+        }
+        if offset != upload.received_length {
+            return Err("Dropped-file transfer chunks arrived out of order.".to_owned());
+        }
+        let received_length = upload
+            .received_length
+            .checked_add(bytes.len() as u64)
+            .filter(|length| *length <= upload.expected_length)
+            .ok_or_else(|| "The dropped file contains more data than expected.".to_owned())?;
+        upload
+            .file
+            .as_mut()
+            .ok_or_else(|| "The dropped-file transfer is already closed.".to_owned())?
+            .write_all(bytes)
+            .map_err(|error| format!("Could not stage the dropped file: {error}"))?;
+        upload.received_length = received_length;
+        upload.last_activity = Instant::now();
+        Ok(received_length)
+    })();
+    if result.is_err() {
+        uploads.remove(upload_id);
+    }
+    result
+}
+
+fn cancel_external_file_upload(upload_id: &str) -> Result<bool, String> {
+    let mut uploads = EXTERNAL_FILE_UPLOADS.lock().map_err(|_| {
+        "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
+    })?;
+    Ok(uploads.remove(upload_id).is_some())
+}
+
+fn finish_external_file_upload(
+    upload_id: &str,
+    expected_kind: ExternalFileUploadKind,
+) -> Result<StagedExternalFile, String> {
+    let mut upload = EXTERNAL_FILE_UPLOADS
+        .lock()
+        .map_err(|_| {
+            "Dropped-file transfers are unavailable because an earlier transfer failed."
+                .to_owned()
+        })?
+        .remove(upload_id)
+        .ok_or_else(|| "The dropped-file transfer is no longer available.".to_owned())?;
+    if upload.kind != expected_kind {
+        return Err("The dropped-file transfer does not match the requested asset type.".to_owned());
+    }
+    if upload.received_length != upload.expected_length {
+        return Err("The dropped file did not finish transferring.".to_owned());
+    }
+    let mut file = upload
+        .file
+        .take()
+        .ok_or_else(|| "The dropped-file transfer is already closed.".to_owned())?;
+    file.flush()
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("Could not finish staging the dropped file: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect the staged dropped file: {error}"))?;
+    if !metadata.is_file() || metadata.len() != upload.expected_length {
+        return Err("The staged dropped file is incomplete or unsafe.".to_owned());
+    }
+    drop(file);
+    let staged = StagedExternalFile {
+        directory: upload.directory.clone(),
+        path: upload.path.clone(),
+        file_name: upload.file_name.clone(),
+        root: upload.root.clone(),
+        note_relative_path: upload.note_relative_path.clone(),
+        expected_revision: upload.expected_revision,
+    };
+    upload.cleanup_on_drop = false;
+    Ok(staged)
+}
+
 fn validate_image_source_file(input: &str) -> Result<PathBuf, String> {
     if input.trim().is_empty() {
         return Err("Choose an image file.".to_owned());
     }
-    let path = Path::new(input);
+    validate_image_source_path(Path::new(input))
+}
+
+fn validate_image_source_path(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("The selected image path must be absolute.".to_owned());
     }
@@ -5195,7 +5699,10 @@ fn validate_attachment_source_file(input: &str) -> Result<PathBuf, String> {
     if input.trim().is_empty() {
         return Err("Choose a file to embed.".to_owned());
     }
-    let path = Path::new(input);
+    validate_attachment_source_path(Path::new(input))
+}
+
+fn validate_attachment_source_path(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("The selected attachment path must be absolute.".to_owned());
     }
@@ -13569,5 +14076,465 @@ mod tests {
         assert!(is_virtual_folder_selection("favorites"));
         assert!(is_virtual_folder_selection("recent"));
         assert!(!is_virtual_folder_selection("folder-id"));
+    }
+
+    #[test]
+    fn external_file_upload_streams_ordered_chunks_and_cleans_staging() {
+        let staging = TestWorkspace::new("external-file-upload-stream");
+        let vault = TestWorkspace::new("external-file-upload-stream-vault");
+        let upload = begin_external_file_upload(
+            &staging.root,
+            "Report.zip".to_owned(),
+            6,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            42,
+        )
+        .expect("upload should begin");
+        let upload_directory = staging.root.join(&upload.id);
+
+        assert_eq!(upload.chunk_bytes, EXTERNAL_FILE_UPLOAD_CHUNK_BYTES);
+        assert_eq!(
+            append_external_file_upload(&upload.id, 0, b"abc")
+                .expect("first chunk should append"),
+            3,
+        );
+        assert_eq!(
+            append_external_file_upload(&upload.id, 3, b"def")
+                .expect("second chunk should append"),
+            6,
+        );
+
+        let staged = finish_external_file_upload(
+            &upload.id,
+            ExternalFileUploadKind::Attachment,
+        )
+        .expect("complete upload should finish");
+        let staged_path = staged.path.clone();
+        assert_eq!(staged.file_name, "Report.zip");
+        assert_eq!(staged.root, vault.root);
+        assert_eq!(staged.note_relative_path, "Note.md");
+        assert_eq!(staged.expected_revision, 42);
+        assert_eq!(fs::read(&staged_path).unwrap(), b"abcdef");
+        drop(staged);
+
+        assert!(!staged_path.exists());
+        assert!(!upload_directory.exists());
+    }
+
+    #[test]
+    fn external_file_upload_invalid_chunks_cancel_and_remove_staging() {
+        let staging = TestWorkspace::new("external-file-upload-invalid");
+        let vault = TestWorkspace::new("external-file-upload-invalid-vault");
+        let upload = begin_external_file_upload(
+            &staging.root,
+            "Report.pdf".to_owned(),
+            4,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("upload should begin");
+        let upload_directory = staging.root.join(&upload.id);
+        let error = append_external_file_upload(&upload.id, 1, b"data")
+            .expect_err("out-of-order chunk should fail");
+        assert!(error.contains("out of order"));
+        assert!(!upload_directory.exists());
+        assert!(!cancel_external_file_upload(&upload.id).unwrap());
+
+        let upload = begin_external_file_upload(
+            &staging.root,
+            "Report.pdf".to_owned(),
+            4,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("second upload should begin");
+        let upload_directory = staging.root.join(&upload.id);
+        append_external_file_upload(&upload.id, 0, b"ab")
+            .expect("partial chunk should append");
+        let error = finish_external_file_upload(
+            &upload.id,
+            ExternalFileUploadKind::Attachment,
+        )
+        .expect_err("incomplete upload should fail");
+        assert!(error.contains("did not finish"));
+        assert!(!upload_directory.exists());
+
+        let upload = begin_external_file_upload(
+            &staging.root,
+            "Report.pdf".to_owned(),
+            4,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("third upload should begin");
+        let upload_directory = staging.root.join(&upload.id);
+        assert!(cancel_external_file_upload(&upload.id).unwrap());
+        assert!(!upload_directory.exists());
+
+        let upload = begin_external_file_upload(
+            &staging.root,
+            "Report.pdf".to_owned(),
+            (EXTERNAL_FILE_UPLOAD_CHUNK_BYTES + 1) as u64,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("fourth upload should begin");
+        let upload_directory = staging.root.join(&upload.id);
+        let oversized_chunk = vec![0_u8; EXTERNAL_FILE_UPLOAD_CHUNK_BYTES + 1];
+        let error = append_external_file_upload(&upload.id, 0, &oversized_chunk)
+            .expect_err("oversized chunk should fail");
+        assert!(error.contains("invalid size"));
+        assert!(!upload_directory.exists());
+    }
+
+    #[test]
+    fn external_file_upload_enforces_asset_kind_and_size_before_staging() {
+        let staging = TestWorkspace::new("external-file-upload-kind");
+        let vault = TestWorkspace::new("external-file-upload-kind-vault");
+
+        let empty_image = begin_external_file_upload(
+            &staging.root,
+            "Empty.png".to_owned(),
+            0,
+            ExternalFileUploadKind::Image,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect_err("an empty image should be rejected before staging");
+        assert!(empty_image.contains("between 1 byte"));
+
+        let oversized_image = begin_external_file_upload(
+            &staging.root,
+            "Large.png".to_owned(),
+            MAX_IMAGE_BYTES + 1,
+            ExternalFileUploadKind::Image,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect_err("an oversized image should be rejected before staging");
+        assert!(oversized_image.contains("50 MiB"));
+
+        let image_as_attachment = begin_external_file_upload(
+            &staging.root,
+            "Image.png".to_owned(),
+            1,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect_err("an image filename should not bypass the image limit as an attachment");
+        assert!(image_as_attachment.contains("image embedding"));
+        assert_eq!(
+            fs::read_dir(&staging.root)
+                .expect("staging should be readable")
+                .count(),
+            0,
+        );
+
+        let empty_attachment = begin_external_file_upload(
+            &staging.root,
+            "Empty.txt".to_owned(),
+            0,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("empty attachments should remain supported");
+        let staged_empty = finish_external_file_upload(
+            &empty_attachment.id,
+            ExternalFileUploadKind::Attachment,
+        )
+        .expect("an empty attachment should finish");
+        assert_eq!(fs::metadata(&staged_empty.path).unwrap().len(), 0);
+        drop(staged_empty);
+
+        let large_attachment = begin_external_file_upload(
+            &staging.root,
+            "Large.pdf".to_owned(),
+            MAX_IMAGE_BYTES + 1,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("the attachment limit should remain larger than the image limit");
+        assert!(cancel_external_file_upload(&large_attachment.id).unwrap());
+
+        let image = begin_external_file_upload(
+            &staging.root,
+            "Image.png".to_owned(),
+            1,
+            ExternalFileUploadKind::Image,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("an image upload should begin");
+        let upload_directory = staging.root.join(&image.id);
+        append_external_file_upload(&image.id, 0, b"x")
+            .expect("the declared image byte should append");
+        let mismatch = finish_external_file_upload(
+            &image.id,
+            ExternalFileUploadKind::Attachment,
+        )
+        .expect_err("an image upload should not finish through the attachment path");
+        assert!(mismatch.contains("asset type"));
+        assert!(!upload_directory.exists());
+        assert!(!cancel_external_file_upload(&image.id).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_file_upload_validates_non_utf8_staging_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnon-utf8-staging";
+        let staging = TestWorkspace::new("external-file-upload-non-utf8");
+        let staging_directory = staging
+            .root
+            .join(OsString::from_vec(b"cache-\xff".to_vec()));
+        let vault = TestWorkspace::new("external-file-upload-non-utf8-vault");
+
+        let image = begin_external_file_upload(
+            &staging_directory,
+            "Image.png".to_owned(),
+            PNG.len() as u64,
+            ExternalFileUploadKind::Image,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("an image should stage below a non-UTF-8 cache path");
+        append_external_file_upload(&image.id, 0, PNG)
+            .expect("image bytes should append");
+        let staged_image = finish_external_file_upload(
+            &image.id,
+            ExternalFileUploadKind::Image,
+        )
+        .expect("the image should finish staging");
+        let image_source = validate_image_source_path(&staged_image.path)
+            .expect("the staged image path should not require UTF-8");
+        assert_eq!(read_image_file(&image_source).unwrap(), PNG);
+        drop(staged_image);
+
+        let attachment = begin_external_file_upload(
+            &staging_directory,
+            "Empty.txt".to_owned(),
+            0,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .expect("an attachment should stage below a non-UTF-8 cache path");
+        let staged_attachment = finish_external_file_upload(
+            &attachment.id,
+            ExternalFileUploadKind::Attachment,
+        )
+        .expect("the attachment should finish staging");
+        let attachment_source = validate_attachment_source_path(&staged_attachment.path)
+            .expect("the staged attachment path should not require UTF-8");
+        assert_eq!(fs::metadata(&attachment_source).unwrap().len(), 0);
+        drop(staged_attachment);
+    }
+
+    #[test]
+    fn external_file_uploads_release_abandoned_capacity_and_staging() {
+        let staging = TestWorkspace::new("external-file-upload-abandoned");
+        let vault = TestWorkspace::new("external-file-upload-abandoned-vault");
+        let now = Instant::now();
+        let timeout = Duration::from_millis(ABANDONED_EXTERNAL_FILE_UPLOAD_MILLIS);
+        let abandoned_activity = now
+            .checked_sub(timeout)
+            .expect("the inactivity deadline should fit in an instant");
+        let mut uploads = HashMap::new();
+        let mut active_directory = None;
+
+        for index in 0..MAX_EXTERNAL_FILE_UPLOADS {
+            let id = format!("drop-capacity-{index}");
+            let directory = staging.root.join(&id);
+            fs::create_dir(&directory).expect("upload directory should be created");
+            let file_name = format!("file-{index}.bin");
+            let path = directory.join(&file_name);
+            let file = File::create(&path).expect("staged upload should be created");
+            if index == 1 {
+                active_directory = Some(directory.clone());
+            }
+            uploads.insert(
+                id,
+                ExternalFileUpload {
+                    directory,
+                    path,
+                    file: Some(file),
+                    file_name,
+                    expected_length: 1,
+                    received_length: 0,
+                    root: vault.root.clone(),
+                    note_relative_path: "Note.md".to_owned(),
+                    expected_revision: 1,
+                    kind: ExternalFileUploadKind::Attachment,
+                    last_activity: if index == 0 {
+                        abandoned_activity
+                    } else {
+                        now
+                    },
+                    cleanup_on_drop: true,
+                },
+            );
+        }
+        let abandoned_directory = staging.root.join("drop-capacity-0");
+        assert_eq!(uploads.len(), MAX_EXTERNAL_FILE_UPLOADS);
+
+        remove_abandoned_external_file_uploads(&mut uploads, now);
+
+        assert_eq!(uploads.len(), MAX_EXTERNAL_FILE_UPLOADS - 1);
+        assert!(!abandoned_directory.exists());
+        let active_directory = active_directory.expect("an active upload should be retained");
+        assert!(active_directory.exists());
+        drop(uploads);
+        assert!(!active_directory.exists());
+    }
+
+    #[test]
+    fn external_file_upload_sanitizes_names_and_removes_stale_files() {
+        let staging = TestWorkspace::new("external-file-upload-cleanup");
+        let vault = TestWorkspace::new("external-file-upload-cleanup-vault");
+        assert!(validate_external_file_drop_note(&vault.root, "Note.md").is_err());
+        fs::write(vault.root.join("Note.md"), "# Note")
+            .expect("saved note should be written");
+        assert!(validate_external_file_drop_note(&vault.root, "Note.md").is_ok());
+        assert!(begin_external_file_upload(
+            &staging.root,
+            "../escape.pdf".to_owned(),
+            1,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .is_err());
+        assert!(begin_external_file_upload(
+            &staging.root,
+            "large.pdf".to_owned(),
+            MAX_ATTACHMENT_BYTES + 1,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            1,
+        )
+        .is_err());
+
+        let stale_directory = staging.root.join("drop-stale-fixture");
+        fs::create_dir(&stale_directory).expect("stale directory should be created");
+        let stale_file = stale_directory.join("orphan.tmp");
+        fs::write(&stale_file, b"orphan").expect("stale file should be written");
+        set_file_modified_millis(&stale_file, 0)
+            .expect("stale modified time should be set");
+        prepare_external_file_staging_directory(&staging.root)
+            .expect("staging directory should be prepared");
+        assert!(!stale_file.exists());
+        assert!(!stale_directory.exists());
+    }
+
+    #[test]
+    fn staged_external_files_reuse_image_and_attachment_pipelines() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nexternal-drop-fixture";
+        let staging = TestWorkspace::new("external-file-upload-pipelines");
+        let vault = TestWorkspace::new("external-file-upload-pipelines-vault");
+        fs::write(vault.root.join("Note.md"), "# Note")
+            .expect("note should be written");
+        write_workspace_state(&vault.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        let image_revision = revision_for_root(&vault.root).unwrap();
+        let image_upload = begin_external_file_upload(
+            &staging.root,
+            "Dragged photo.png".to_owned(),
+            PNG.len() as u64,
+            ExternalFileUploadKind::Image,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            image_revision,
+        )
+        .expect("image upload should begin");
+        append_external_file_upload(&image_upload.id, 0, PNG)
+            .expect("image bytes should append");
+        let staged_image = finish_external_file_upload(
+            &image_upload.id,
+            ExternalFileUploadKind::Image,
+        )
+        .expect("image upload should finish");
+        let image_source = validate_image_source_path(&staged_image.path)
+            .expect("the staged image should remain a safe source file");
+        let image_bytes = read_image_file(&image_source)
+            .expect("the staged image should be readable");
+        let image = embed_workspace_image(
+            &vault.root,
+            "Note.md",
+            ImageEmbedSettings::default(),
+            &staged_image.file_name,
+            &image_bytes,
+            None,
+            image_revision,
+        )
+        .expect("staged image should embed");
+        assert_eq!(image.image.relative_path, "Dragged photo.png");
+        drop(staged_image);
+
+        let attachment_revision = revision_for_root(&vault.root).unwrap();
+        let attachment_upload = begin_external_file_upload(
+            &staging.root,
+            "Dragged report.pdf".to_owned(),
+            6,
+            ExternalFileUploadKind::Attachment,
+            vault.root.clone(),
+            "Note.md".to_owned(),
+            attachment_revision,
+        )
+        .expect("attachment upload should begin");
+        append_external_file_upload(&attachment_upload.id, 0, b"report")
+            .expect("attachment bytes should append");
+        let staged_attachment = finish_external_file_upload(
+            &attachment_upload.id,
+            ExternalFileUploadKind::Attachment,
+        )
+        .expect("attachment upload should finish");
+        let attachment_source = validate_attachment_source_path(&staged_attachment.path)
+            .expect("the staged attachment should remain a safe source file");
+        let attachment = embed_workspace_attachment(
+            &vault.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &attachment_source,
+            None,
+            attachment_revision,
+        )
+        .expect("staged attachment should embed");
+        assert_eq!(attachment.attachment.relative_path, "Dragged report.pdf");
+        drop(staged_attachment);
+
+        assert_eq!(
+            fs::read(vault.root.join("Dragged photo.png")).unwrap(),
+            PNG,
+        );
+        assert_eq!(
+            fs::read(vault.root.join("Dragged report.pdf")).unwrap(),
+            b"report",
+        );
     }
 }

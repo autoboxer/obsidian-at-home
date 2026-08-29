@@ -183,6 +183,11 @@ export interface WorkspaceEmbedAttachmentResult extends WorkspaceSaveResult {
   attachment: EmbeddedAttachment;
 }
 
+export interface WorkspaceExternalFileUpload {
+  id: string;
+  chunkBytes: number;
+}
+
 export interface WorkspaceImageNoteUpdate {
   noteId: string;
   relativePath: string;
