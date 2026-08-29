@@ -41,6 +41,12 @@ const appInteractionBlocked = computed(
     || vaultSession.busy,
 );
 
+function runToastAction(): void {
+  const action = uiState.toast?.action;
+  uiState.toast = null;
+  action?.run();
+}
+
 watch(
   () => uiState.zoom,
   (zoom) => void applyAppZoom(zoom),
@@ -206,6 +212,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeyboard));
           <AppIcon :name="uiState.toast.tone === 'success' ? 'check' : uiState.toast.tone === 'warning' ? 'info' : 'sparkles'" :size="15" />
         </span>
         <span>{{ uiState.toast.message }}</span>
+        <button
+          v-if="uiState.toast.action"
+          type="button"
+          class="app-toast-action"
+          @click="runToastAction"
+        >
+          {{ uiState.toast.action.label }}
+        </button>
       </div>
     </Transition>
   </div>

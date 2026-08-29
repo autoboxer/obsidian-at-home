@@ -24,6 +24,7 @@ import { liveMarkdownHeadingFoldingExtension } from "./liveMarkdownHeadingFoldin
 import {
   HorizontalRuleWidget,
   ListMarkerWidget,
+  MarkdownAttachmentWidget,
   MarkdownImageWidget,
   QuoteMarkerWidget,
   renderedListMarker,
@@ -38,6 +39,7 @@ import {
   TableDelimiterWidget,
 } from "./liveMarkdownRegionWidgets";
 import { sanitizeImageUrl, sanitizeLinkUrl } from "./markdown";
+import { parseMarkdownAttachmentAt } from "./markdownAttachments";
 import { parseMarkdownImageAt } from "./markdownImages";
 import { parseWikiLinks } from "./wikiLinks";
 import type {
@@ -55,6 +57,8 @@ import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import type { InlineMarkupKind } from "./inlineMarkup";
 import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
 import type { MarkdownImageSourceResolver } from "./liveMarkdownCodeMirrorWidgets";
+import type { MarkdownAttachmentMetadataResolver } from "./liveMarkdownCodeMirrorWidgets";
+import type { MarkdownAttachmentAction } from "./liveMarkdownCodeMirrorWidgets";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
 import type {
   LiveMarkdownTable,
@@ -63,9 +67,12 @@ import type {
 } from "./liveMarkdownTable";
 
 export interface LiveMarkdownOptions {
+  readonly acceptExtensionlessAttachment?: (destination: string) => boolean;
+  readonly activateAttachment?: MarkdownAttachmentAction;
   readonly documentId: string;
   readonly openLink: (href: string) => void;
   readonly openWiki: (target: string, heading?: string) => void;
+  readonly resolveAttachmentMetadata?: MarkdownAttachmentMetadataResolver;
   readonly resolveImageSource?: MarkdownImageSourceResolver;
   readonly wikiLinkIsResolved: (target: string) => boolean;
 }
@@ -1580,6 +1587,18 @@ function addInlineDecorations(
 
         return false;
       }
+      if (
+        node.name === "Link"
+        && addMarkdownAttachmentDecoration(
+          model,
+          node,
+          value,
+          options,
+          resolutionVersion,
+        )
+      ) {
+        return false;
+      }
       const span = inlineMarkupSpan(node, state);
       if (span) {
         syntaxSpans.push(span);
@@ -1606,6 +1625,41 @@ function addInlineDecorations(
   for (const span of pairedSpans) {
     addInlineMarkupDecoration(model, span);
   }
+}
+
+function addMarkdownAttachmentDecoration(
+  model: LiveMarkdownModel,
+  node: SyntaxNodeRef,
+  value: string,
+  options: LiveMarkdownOptions,
+  resolutionVersion: number,
+): boolean {
+  const attachment = parseMarkdownAttachmentAt(value, node.from, {
+    acceptExtensionless: options.acceptExtensionlessAttachment,
+  });
+  if (!attachment || attachment.end + 1 !== node.to) {
+    return false;
+  }
+
+  const range = { from: node.from, to: node.to };
+  const metadata = options.resolveAttachmentMetadata?.(attachment);
+  addConstruct(model, range.from, range.to, [{
+    ...range,
+    widget: new MarkdownAttachmentWidget(
+      attachment,
+      metadata,
+      range.from,
+      range.to,
+      resolutionVersion,
+      options.activateAttachment,
+    ),
+  }], [], {
+    atomicRanges: [range],
+    boundaryReveal: "construct",
+    revealWhenSelectedWithin: true,
+  });
+
+  return true;
 }
 
 function addMarkdownImageDecoration(

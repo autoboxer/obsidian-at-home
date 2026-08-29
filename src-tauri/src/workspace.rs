@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 use walkdir::{DirEntry, WalkDir};
 
 const STATE_DIRECTORY: &str = ".obsidian-at-home";
@@ -20,13 +22,14 @@ const TRANSACTIONS_DIRECTORY: &str = "transactions";
 const TRANSACTION_MANIFEST_FILE: &str = "manifest.json";
 const RECENTLY_DELETED_DIRECTORY: &str = "recently-deleted";
 const RECENTLY_DELETED_SNAPSHOT_VERSION: u32 = 1;
-const STATE_VERSION: u32 = 3;
+const STATE_VERSION: u32 = 4;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
-const TRANSACTION_VERSION: u32 = 4;
+const TRANSACTION_VERSION: u32 = 5;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
-const MAX_IMAGE_ASSETS: usize = 100_000;
+pub(crate) const MAX_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_VAULT_ASSETS: usize = 100_000;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
 const MAX_RECENT_NOTES: usize = 10;
@@ -39,6 +42,7 @@ const MAX_RECENTLY_DELETED_BYTES: u64 = MAX_TOTAL_NOTE_BYTES;
 const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
+const ATTACHMENT_COPY_BUFFER_BYTES: usize = 256 * 1024;
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -121,6 +125,8 @@ pub struct ImageEmbedSettings {
     pub folder_path: String,
 }
 
+pub type AttachmentEmbedSettings = ImageEmbedSettings;
+
 impl Default for ImageEmbedSettings {
     fn default() -> Self {
         Self {
@@ -149,6 +155,27 @@ pub struct VaultImageFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EmbeddedAttachment {
+    pub id: String,
+    pub relative_path: String,
+    pub media_type: String,
+    pub byte_length: u64,
+    pub opening_disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultAttachmentFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    pub relative_path: String,
+    pub media_type: String,
+    pub byte_length: u64,
+    pub opening_disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultData {
     pub name: String,
     #[serde(default)]
@@ -169,6 +196,12 @@ pub struct VaultData {
     pub image_files: Vec<VaultImageFile>,
     #[serde(default)]
     pub image_embed_settings: ImageEmbedSettings,
+    #[serde(default)]
+    pub embedded_attachments: Vec<EmbeddedAttachment>,
+    #[serde(default)]
+    pub attachment_files: Vec<VaultAttachmentFile>,
+    #[serde(default)]
+    pub attachment_embed_settings: AttachmentEmbedSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -283,6 +316,15 @@ pub struct WorkspaceEmbedImageResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceEmbedAttachmentResult {
+    pub attachment: EmbeddedAttachment,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceImageNoteUpdate {
     pub note_id: String,
     pub relative_path: String,
@@ -302,9 +344,27 @@ pub struct WorkspaceRelocateImageResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceRelocateAttachmentResult {
+    pub attachment: EmbeddedAttachment,
+    pub previous_relative_path: String,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAttachmentCopyResult {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceImportImagesResult {
     pub image_count: usize,
     pub image_files: Vec<VaultImageFile>,
+    pub attachment_count: usize,
+    pub attachment_files: Vec<VaultAttachmentFile>,
     pub path_mappings: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_id: Option<String>,
@@ -354,7 +414,22 @@ struct StoredRecentlyDeletedNote {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct StoredImageAsset {
+enum VaultAssetKind {
+    Image,
+    Attachment,
+}
+
+impl Default for VaultAssetKind {
+    fn default() -> Self {
+        Self::Image
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct StoredVaultAsset {
+    #[serde(default)]
+    kind: VaultAssetKind,
     relative_path: String,
     media_type: String,
     fingerprint: FileFingerprint,
@@ -392,10 +467,12 @@ struct WorkspaceState {
     recent_note_ids: Vec<String>,
     #[serde(default)]
     recently_deleted_notes: BTreeMap<String, StoredRecentlyDeletedNote>,
-    #[serde(default)]
-    image_assets: BTreeMap<String, StoredImageAsset>,
+    #[serde(default, alias = "imageAssets")]
+    assets: BTreeMap<String, StoredVaultAsset>,
     #[serde(default)]
     image_embed_settings: ImageEmbedSettings,
+    #[serde(default)]
+    attachment_embed_settings: AttachmentEmbedSettings,
     #[serde(default = "default_folder_selection")]
     selected_folder_id: String,
     #[serde(default)]
@@ -417,8 +494,9 @@ impl Default for WorkspaceState {
             active_note_id: None,
             recent_note_ids: Vec::new(),
             recently_deleted_notes: BTreeMap::new(),
-            image_assets: BTreeMap::new(),
+            assets: BTreeMap::new(),
             image_embed_settings: ImageEmbedSettings::default(),
+            attachment_embed_settings: AttachmentEmbedSettings::default(),
             selected_folder_id: default_folder_selection(),
             last_committed_transaction_id: None,
             last_committed_image_import_id: None,
@@ -511,6 +589,14 @@ struct ScannedImage {
 }
 
 #[derive(Debug)]
+struct ScannedAttachment {
+    relative_path: String,
+    media_type: String,
+    byte_length: u64,
+    opening_disabled: bool,
+}
+
+#[derive(Debug)]
 struct NoteWritePlan {
     id: String,
     old_relative_path: Option<String>,
@@ -584,6 +670,7 @@ struct TransactionOriginal {
 enum TransactionTargetKind {
     Markdown,
     Image,
+    Attachment,
 }
 
 impl Default for TransactionTargetKind {
@@ -1070,6 +1157,66 @@ pub fn workspace_embed_vault_image(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_attachment_file(
+    app: AppHandle,
+    path: String,
+    source_path: String,
+    note_relative_path: String,
+    settings: AttachmentEmbedSettings,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    let source = validate_attachment_source_file(&source_path)?;
+    let existing_relative_path = source
+        .strip_prefix(&root)
+        .ok()
+        .and_then(path_to_slash_string)
+        .filter(|relative| validate_attachment_relative_path(relative).is_ok());
+
+    embed_workspace_attachment(
+        &root,
+        &note_relative_path,
+        settings,
+        &source,
+        existing_relative_path.as_deref(),
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_embed_vault_attachment(
+    app: AppHandle,
+    path: String,
+    attachment_relative_path: String,
+    note_relative_path: String,
+    settings: AttachmentEmbedSettings,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    validate_attachment_relative_path(&attachment_relative_path)?;
+    let source = resolve_workspace_asset_file(
+        &root,
+        &attachment_relative_path,
+        false,
+    )?;
+
+    embed_workspace_attachment(
+        &root,
+        &note_relative_path,
+        settings,
+        &source,
+        Some(&attachment_relative_path),
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn workspace_relocate_image(
     app: AppHandle,
     path: String,
@@ -1092,6 +1239,81 @@ pub fn workspace_relocate_image(
         &note_updates,
         expected_revision,
         managed_by_note_move,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_relocate_attachment(
+    app: AppHandle,
+    path: String,
+    attachment_relative_path: String,
+    target_relative_path: String,
+    asset_id: String,
+    note_updates: Vec<WorkspaceImageNoteUpdate>,
+    expected_revision: u64,
+    managed_by_note_move: bool,
+) -> Result<WorkspaceRelocateAttachmentResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    relocate_workspace_attachment(
+        &root,
+        &attachment_relative_path,
+        &target_relative_path,
+        &asset_id,
+        &note_updates,
+        expected_revision,
+        managed_by_note_move,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_open_attachment(
+    app: AppHandle,
+    path: String,
+    attachment_relative_path: String,
+    asset_id: Option<String>,
+) -> Result<(), String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    let (_, source) = resolve_attachment_action_source(
+        &root,
+        &attachment_relative_path,
+        asset_id.as_deref(),
+    )?;
+    if is_archive_attachment_path(&source) {
+        return Err("Archives must be saved to a location outside the vault before opening."
+            .to_owned());
+    }
+    if attachment_opening_is_disabled(&source)? {
+        return Err(
+            "Opening executable or installer attachments is not supported.".to_owned(),
+        );
+    }
+    app.opener()
+        .open_path(path_string(&source)?, None::<&str>)
+        .map_err(|error| format!("Could not open the attachment: {error}"))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn workspace_save_attachment_copy(
+    app: AppHandle,
+    path: String,
+    attachment_relative_path: String,
+    asset_id: Option<String>,
+    preferred_directory: Option<String>,
+) -> Result<Option<WorkspaceAttachmentCopyResult>, String> {
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    save_workspace_attachment_copy(
+        &app,
+        &root,
+        &attachment_relative_path,
+        asset_id.as_deref(),
+        preferred_directory.as_deref(),
     )
 }
 
@@ -1174,7 +1396,36 @@ pub fn workspace_import_images(
     reject_home_vault(&app, &root)?;
     let source_root = validate_image_import_root(&source_path)?;
     let _workspace_guard = lock_workspace_files(&root)?;
-    begin_workspace_image_import(&root, &source_root, &image_paths, expected_revision)
+    begin_workspace_asset_import(
+        &root,
+        &source_root,
+        &image_paths,
+        &[],
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_import_assets(
+    app: AppHandle,
+    path: String,
+    source_path: String,
+    image_paths: Vec<String>,
+    attachment_paths: Vec<String>,
+    expected_revision: u64,
+) -> Result<WorkspaceImportImagesResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let source_root = validate_image_import_root(&source_path)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    begin_workspace_asset_import(
+        &root,
+        &source_root,
+        &image_paths,
+        &attachment_paths,
+        expected_revision,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1205,7 +1456,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         );
     }
     let mut state = stored_state.unwrap_or_default();
-    let (scanned_notes, scanned_folders, scanned_images) =
+    let (scanned_notes, scanned_folders, scanned_images, scanned_attachments) =
         scan_workspace_files(&root, &mut warnings)?;
 
     let mut used_note_ids = HashSet::new();
@@ -1348,7 +1599,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
     } else {
         defaults.snippets.clone()
     };
-    let embedded_images = reconcile_image_assets(&root, &mut state.image_assets, &mut warnings);
+    let embedded_images = reconcile_image_assets(&root, &mut state.assets, &mut warnings);
     let tracked_image_ids = embedded_images
         .iter()
         .map(|image| (portable_path_key(&image.relative_path), image.id.clone()))
@@ -1363,6 +1614,29 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             media_type: image.media_type,
         })
         .collect();
+    let embedded_attachments =
+        reconcile_attachment_assets(&root, &mut state.assets, &mut warnings);
+    let tracked_attachment_ids = embedded_attachments
+        .iter()
+        .map(|attachment| {
+            (
+                portable_path_key(&attachment.relative_path),
+                attachment.id.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let attachment_files = scanned_attachments
+        .into_iter()
+        .map(|attachment| VaultAttachmentFile {
+            asset_id: tracked_attachment_ids
+                .get(&portable_path_key(&attachment.relative_path))
+                .cloned(),
+            relative_path: attachment.relative_path,
+            media_type: attachment.media_type,
+            byte_length: attachment.byte_length,
+            opening_disabled: attachment.opening_disabled,
+        })
+        .collect();
     let image_embed_settings = match normalize_image_embed_settings(&state.image_embed_settings) {
         Ok(settings) => settings,
         Err(error) => {
@@ -1370,6 +1644,14 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             ImageEmbedSettings::default()
         }
     };
+    let attachment_embed_settings =
+        match normalize_attachment_embed_settings(&state.attachment_embed_settings) {
+            Ok(settings) => settings,
+            Err(error) => {
+                warnings.push(format!("Reset invalid attachment embed settings: {error}"));
+                AttachmentEmbedSettings::default()
+            }
+        };
     let vault_name = display_vault_name(
         if state_was_present && !state.name.trim().is_empty() {
             &state.name
@@ -1415,8 +1697,9 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         active_note_id: active_note_id.clone(),
         recent_note_ids: recent_note_ids.clone(),
         recently_deleted_notes: recently_deleted_state,
-        image_assets: state.image_assets.clone(),
+        assets: state.assets.clone(),
         image_embed_settings: image_embed_settings.clone(),
+        attachment_embed_settings: attachment_embed_settings.clone(),
         selected_folder_id: selected_folder_id.clone(),
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
         last_committed_image_import_id: state.last_committed_image_import_id.clone(),
@@ -1457,6 +1740,9 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             embedded_images,
             image_files,
             image_embed_settings,
+            embedded_attachments,
+            attachment_files,
+            attachment_embed_settings,
         },
         descriptor: VaultDescriptor {
             name: vault_name,
@@ -1505,7 +1791,7 @@ fn save_workspace_files_with_image_import(
                 &mut cleanup_warnings,
             ) {
                 result.warnings.push(format!(
-                    "The imported images were saved, but their transaction cleanup will be retried when the vault reopens: {error}"
+                    "The imported assets were saved, but their transaction cleanup will be retried when the vault reopens: {error}"
                 ));
             }
             result.warnings.extend(cleanup_warnings.finish());
@@ -1533,7 +1819,7 @@ fn save_workspace_files_with_image_import(
                     &mut cleanup_warnings,
                 ) {
                     cleanup_warnings.push(format!(
-                        "The committed image import will be cleaned up when the vault reopens: {cleanup_error}"
+                        "The committed asset import will be cleaned up when the vault reopens: {cleanup_error}"
                     ));
                 }
                 let state = state.expect("committed state should be available");
@@ -1554,7 +1840,7 @@ fn save_workspace_files_with_image_import(
             }
             if state.is_none() && state_file_was_present {
                 return Err(format!(
-                    "{error} The image import could not be rolled back because workspace metadata became unreadable. Reopen the vault before editing again."
+                    "{error} The asset import could not be rolled back because workspace metadata became unreadable. Reopen the vault before editing again."
                 ));
             }
 
@@ -1566,13 +1852,13 @@ fn save_workspace_files_with_image_import(
             )?;
             if !recovered {
                 return Err(format!(
-                    "{error} The imported images could not be fully rolled back. Reopen the vault before editing again."
+                    "{error} The imported assets could not be fully rolled back. Reopen the vault before editing again."
                 ));
             }
             let revision = revision_for_root(root)?;
             if revision_for_root(root)? != revision {
                 return Err(format!(
-                    "{error} The vault changed while the failed image import was being rolled back. Reload it before editing again."
+                    "{error} The vault changed while the failed asset import was being rolled back. Reload it before editing again."
                 ));
             }
             let mut warnings = state_warnings.finish();
@@ -1800,8 +2086,11 @@ fn save_workspace_files_with_recovery(
         active_note_id: vault.active_note_id.clone(),
         recent_note_ids,
         recently_deleted_notes,
-        image_assets: old_state.image_assets.clone(),
+        assets: old_state.assets.clone(),
         image_embed_settings: normalize_image_embed_settings(&vault.image_embed_settings)?,
+        attachment_embed_settings: normalize_attachment_embed_settings(
+            &vault.attachment_embed_settings,
+        )?,
         selected_folder_id: vault.selected_folder_id.clone(),
         last_committed_transaction_id: old_state.last_committed_transaction_id.clone(),
         last_committed_image_import_id: pending_image_import_id
@@ -2721,6 +3010,69 @@ fn image_destination_folder(
     }
 }
 
+fn normalize_attachment_embed_settings(
+    settings: &AttachmentEmbedSettings,
+) -> Result<AttachmentEmbedSettings, String> {
+    match settings.location {
+        ImageEmbedLocation::VaultRoot => Ok(AttachmentEmbedSettings::default()),
+        ImageEmbedLocation::NoteFolder => Ok(AttachmentEmbedSettings {
+            location: ImageEmbedLocation::NoteFolder,
+            folder_path: String::new(),
+        }),
+        ImageEmbedLocation::SpecifiedFolder => {
+            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
+            if folder_path.is_empty() {
+                return Err("Choose a vault-relative folder for embedded files.".to_owned());
+            }
+            validate_relative_path(&folder_path, false)?;
+            Ok(AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path,
+            })
+        }
+        ImageEmbedLocation::SpecifiedFolderMirrored => {
+            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
+            if folder_path.is_empty() {
+                return Err("Choose a vault-relative folder for embedded files.".to_owned());
+            }
+            validate_relative_path(&folder_path, false)?;
+            Ok(AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolderMirrored,
+                folder_path,
+            })
+        }
+    }
+}
+
+fn attachment_destination_folder(
+    note_relative_path: &str,
+    settings: &AttachmentEmbedSettings,
+) -> Result<String, String> {
+    validate_markdown_relative_path(note_relative_path)?;
+    let settings = normalize_attachment_embed_settings(settings)?;
+    match settings.location {
+        ImageEmbedLocation::VaultRoot => Ok(String::new()),
+        ImageEmbedLocation::NoteFolder => Ok(Path::new(note_relative_path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .and_then(path_to_slash_string)
+            .unwrap_or_default()),
+        ImageEmbedLocation::SpecifiedFolder => Ok(settings.folder_path),
+        ImageEmbedLocation::SpecifiedFolderMirrored => {
+            let note_folder = Path::new(note_relative_path)
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .and_then(path_to_slash_string)
+                .unwrap_or_default();
+            Ok(if note_folder.is_empty() {
+                settings.folder_path
+            } else {
+                format!("{}/{note_folder}", settings.folder_path)
+            })
+        }
+    }
+}
+
 fn embed_workspace_image(
     root: &Path,
     note_relative_path: &str,
@@ -2756,8 +3108,9 @@ fn embed_workspace_image(
     let fingerprint = fingerprint_bytes(bytes);
 
     if let Some(relative_path) = existing_relative_path.as_deref() {
-        if let Some((id, stored)) = state.image_assets.iter_mut().find(|(_, stored)| {
-            portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
+        if let Some((id, stored)) = state.assets.iter_mut().find(|(_, stored)| {
+            stored.kind == VaultAssetKind::Image
+                && portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
         }) {
             if stored.relative_path != relative_path {
                 let old_path = resolve_workspace_image_file(root, &stored.relative_path, true)?;
@@ -2789,9 +3142,9 @@ fn embed_workspace_image(
         }
     }
 
-    if state.image_assets.len() >= MAX_IMAGE_ASSETS {
+    if state.assets.len() >= MAX_VAULT_ASSETS {
         return Err(format!(
-            "This vault already tracks the maximum of {MAX_IMAGE_ASSETS} embedded images."
+            "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded images."
         ));
     }
 
@@ -2811,7 +3164,7 @@ fn embed_workspace_image(
         relative_path
     };
 
-    let mut used_ids = state.image_assets.keys().cloned().collect::<HashSet<_>>();
+    let mut used_ids = state.assets.keys().cloned().collect::<HashSet<_>>();
     let id_seed = format!(
         "{relative_path}:{}:{}:{}",
         fingerprint.length,
@@ -2832,9 +3185,10 @@ fn embed_workspace_image(
     };
     state.version = STATE_VERSION;
     state.image_embed_settings = settings;
-    state.image_assets.insert(
+    state.assets.insert(
         id.clone(),
-        StoredImageAsset {
+        StoredVaultAsset {
+            kind: VaultAssetKind::Image,
             relative_path: relative_path.clone(),
             media_type: media_type.to_owned(),
             fingerprint,
@@ -2863,8 +3217,151 @@ fn embed_workspace_image(
     })
 }
 
+fn embed_workspace_attachment(
+    root: &Path,
+    note_relative_path: &str,
+    settings: AttachmentEmbedSettings,
+    source: &Path,
+    existing_relative_path: Option<&str>,
+    expected_revision: u64,
+) -> Result<WorkspaceEmbedAttachmentResult, String> {
+    let settings = normalize_attachment_embed_settings(&settings)?;
+    let destination_folder = attachment_destination_folder(note_relative_path, &settings)?;
+    let file_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The selected attachment name is not valid Unicode.".to_owned())?;
+    let safe_name = safe_attachment_file_name(file_name)?;
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err(
+            "Embedded files cannot be changed while workspace metadata is unreadable or newer than this app."
+                .to_owned(),
+        );
+    }
+    recover_workspace_transactions(root, stored_state.as_ref(), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before embedding the file."
+                .to_owned(),
+        );
+    }
+
+    let mut state = stored_state.unwrap_or_default();
+    let existing_relative_path = existing_relative_path
+        .map(str::to_owned)
+        .filter(|path| validate_attachment_relative_path(path).is_ok());
+    if let Some(relative_path) = existing_relative_path.as_deref() {
+        if let Some((id, stored)) = state.assets.iter_mut().find(|(_, stored)| {
+            stored.kind == VaultAssetKind::Attachment
+                && portable_path_key(&stored.relative_path) == portable_path_key(relative_path)
+        }) {
+            if stored.relative_path != relative_path {
+                let old_path = resolve_workspace_asset_file(root, &stored.relative_path, true)?;
+                if old_path.exists() {
+                    return Err(format!(
+                        "The vault contains attachment paths that differ only by letter case near {relative_path}."
+                    ));
+                }
+                stored.relative_path = relative_path.to_owned();
+            }
+            let fingerprint = fingerprint_attachment_file(source)?;
+            stored.media_type = attachment_media_type_for_path(Path::new(relative_path)).to_owned();
+            stored.fingerprint = fingerprint.clone();
+            stored.modified_nanos = file_modified_nanos_for_path(source)?;
+            let attachment = EmbeddedAttachment {
+                id: id.clone(),
+                relative_path: relative_path.to_owned(),
+                media_type: stored.media_type.clone(),
+                byte_length: fingerprint.length,
+                opening_disabled: attachment_opening_is_disabled(source)?,
+            };
+            state.version = STATE_VERSION;
+            state.attachment_embed_settings = settings;
+            write_workspace_state(root, &state)?;
+
+            return Ok(WorkspaceEmbedAttachmentResult {
+                attachment,
+                revision: revision_for_root(root)?,
+                saved_at: now_millis(),
+                warnings: warnings.finish(),
+            });
+        }
+    }
+
+    if state.assets.len() >= MAX_VAULT_ASSETS {
+        return Err(format!(
+            "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded files."
+        ));
+    }
+
+    let mut copied_attachment = false;
+    let (relative_path, fingerprint) = if let Some(relative_path) = existing_relative_path {
+        (relative_path, fingerprint_attachment_file(source)?)
+    } else {
+        if !destination_folder.is_empty() {
+            ensure_directory_path(root, &destination_folder)?;
+        }
+        let relative_path = unique_attachment_relative_path(
+            root,
+            &destination_folder,
+            &safe_name,
+        )?;
+        let target = resolve_workspace_asset_file(root, &relative_path, true)?;
+        let fingerprint = copy_attachment_file_durable(source, &target)?;
+        copied_attachment = true;
+        (relative_path, fingerprint)
+    };
+    let stored_path = resolve_workspace_asset_file(root, &relative_path, false)?;
+    let modified_nanos = file_modified_nanos_for_path(&stored_path)?;
+    let opening_disabled = attachment_opening_is_disabled(&stored_path)?;
+    let media_type = attachment_media_type_for_path(Path::new(&relative_path)).to_owned();
+    let mut used_ids = state.assets.keys().cloned().collect::<HashSet<_>>();
+    let id_seed = format!(
+        "{relative_path}:{}:{}:{}",
+        fingerprint.length,
+        fingerprint.hash,
+        now_millis(),
+    );
+    let id = fresh_id("asset", &id_seed, &mut used_ids);
+    state.version = STATE_VERSION;
+    state.attachment_embed_settings = settings;
+    state.assets.insert(
+        id.clone(),
+        StoredVaultAsset {
+            kind: VaultAssetKind::Attachment,
+            relative_path: relative_path.clone(),
+            media_type: media_type.clone(),
+            fingerprint: fingerprint.clone(),
+            modified_nanos,
+        },
+    );
+    if let Err(error) = write_workspace_state(root, &state) {
+        if copied_attachment {
+            if let Ok(target) = resolve_workspace_asset_file(root, &relative_path, false) {
+                let _ = remove_file_durable(&target);
+            }
+        }
+        return Err(error);
+    }
+
+    Ok(WorkspaceEmbedAttachmentResult {
+        attachment: EmbeddedAttachment {
+            id,
+            relative_path,
+            media_type,
+            byte_length: fingerprint.length,
+            opening_disabled,
+        },
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
 #[derive(Debug)]
-struct PreparedImageNoteUpdate {
+struct PreparedAssetNoteUpdate {
     path: PathBuf,
     expected_content: Vec<u8>,
     content: Vec<u8>,
@@ -2884,7 +3381,7 @@ fn relocate_workspace_image(
     if image_relative_path == target_relative_path {
         return Err("The image is already at that path.".to_owned());
     }
-    if !is_valid_image_asset_id(asset_id) {
+    if !is_valid_asset_id(asset_id) {
         return Err("The image has an invalid stable ID.".to_owned());
     }
 
@@ -2955,24 +3452,29 @@ fn relocate_workspace_image(
         return Err(format!("A file named {target_relative_path} already exists."));
     }
 
-    if let Some(stored) = old_state.image_assets.get(asset_id) {
+    if let Some(stored) = old_state.assets.get(asset_id) {
+        if stored.kind != VaultAssetKind::Image {
+            return Err("The stable image record refers to a different file type.".to_owned());
+        }
         if portable_path_key(&stored.relative_path) != portable_path_key(image_relative_path) {
             return Err("The stable image record no longer points to that file. Reload the vault.".to_owned());
         }
     } else {
-        if old_state.image_assets.len() >= MAX_IMAGE_ASSETS {
+        if old_state.assets.len() >= MAX_VAULT_ASSETS {
             return Err(format!(
-                "This vault already tracks the maximum of {MAX_IMAGE_ASSETS} embedded images."
+                "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded images."
             ));
         }
-        if old_state.image_assets.values().any(|stored| {
-            portable_path_key(&stored.relative_path) == portable_path_key(image_relative_path)
+        if old_state.assets.values().any(|stored| {
+            stored.kind == VaultAssetKind::Image
+                && portable_path_key(&stored.relative_path)
+                    == portable_path_key(image_relative_path)
         }) {
             return Err("The image's stable record changed. Reload the vault.".to_owned());
         }
     }
 
-    let prepared_updates = prepare_image_note_updates(root, &old_state, note_updates)?;
+    let prepared_updates = prepare_asset_note_updates(root, &old_state, note_updates, "image")?;
     if revision_for_root(root)? != expected_revision {
         return Err(
             "The vault changed while the image move was being prepared. Reload it and try again."
@@ -2992,17 +3494,17 @@ fn relocate_workspace_image(
     }
 
     if managed_by_note_move {
-        ensure_import_image_parent(root, target_relative_path)?;
+        ensure_asset_parent(root, target_relative_path, "image")?;
     }
 
-    relocate_image_file_durable(&source, &target).map_err(|error| {
+    relocate_asset_file_durable(&source, &target).map_err(|error| {
         format!("Could not move the image to {target_relative_path}: {error}")
     })?;
 
     let mut applied_note_count = 0_usize;
     for update in &prepared_updates {
         if let Err(error) = atomic_write(&update.path, &update.content) {
-            let rollback_error = rollback_image_relocation(
+            let rollback_error = rollback_asset_relocation(
                 &source,
                 &target,
                 &prepared_updates[..=applied_note_count],
@@ -3022,7 +3524,7 @@ fn relocate_workspace_image(
     let modified_nanos = match image_modified_nanos_for_path(root, target_relative_path) {
         Ok(value) => value,
         Err(error) => {
-            let rollback_error = rollback_image_relocation(
+            let rollback_error = rollback_asset_relocation(
                 &source,
                 &target,
                 &prepared_updates,
@@ -3044,7 +3546,7 @@ fn relocate_workspace_image(
             Err(error) => Some(format!("an image reference could not be read: {error}")),
         };
         if let Some(verification_error) = verification_error {
-            let rollback_error = rollback_image_relocation(
+            let rollback_error = rollback_asset_relocation(
                 &source,
                 &target,
                 &prepared_updates,
@@ -3062,9 +3564,10 @@ fn relocate_workspace_image(
 
     let mut state = old_state.clone();
     state.version = STATE_VERSION;
-    state.image_assets.insert(
+    state.assets.insert(
         asset_id.to_owned(),
-        StoredImageAsset {
+        StoredVaultAsset {
+            kind: VaultAssetKind::Image,
             relative_path: target_relative_path.to_owned(),
             media_type: media_type.to_owned(),
             fingerprint: fingerprint_bytes(&bytes),
@@ -3072,7 +3575,7 @@ fn relocate_workspace_image(
         },
     );
     if let Err(error) = write_workspace_state(root, &state) {
-        let rollback_error = rollback_image_relocation(
+        let rollback_error = rollback_asset_relocation(
             &source,
             &target,
             &prepared_updates,
@@ -3100,11 +3603,292 @@ fn relocate_workspace_image(
     })
 }
 
-fn prepare_image_note_updates(
+fn relocate_workspace_attachment(
+    root: &Path,
+    attachment_relative_path: &str,
+    target_relative_path: &str,
+    asset_id: &str,
+    note_updates: &[WorkspaceImageNoteUpdate],
+    expected_revision: u64,
+    managed_by_note_move: bool,
+) -> Result<WorkspaceRelocateAttachmentResult, String> {
+    validate_attachment_relative_path(attachment_relative_path)?;
+    validate_attachment_relative_path(target_relative_path)?;
+    if attachment_relative_path == target_relative_path {
+        return Err("The attachment is already at that path.".to_owned());
+    }
+    if !is_valid_asset_id(asset_id) {
+        return Err("The attachment has an invalid stable ID.".to_owned());
+    }
+
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err(
+            "Attachments cannot be reorganized while workspace metadata is unreadable or newer than this app."
+                .to_owned(),
+        );
+    }
+    let old_state = stored_state.unwrap_or_default();
+    recover_workspace_transactions(root, Some(&old_state), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before moving the attachment."
+                .to_owned(),
+        );
+    }
+    let source_is_mirror_managed = attachment_path_is_mirror_managed(
+        attachment_relative_path,
+        &old_state.attachment_embed_settings,
+    )?;
+    if source_is_mirror_managed && !managed_by_note_move {
+        return Err(
+            "Attachments in the mirrored attachment folder are managed by note location and cannot be renamed or moved."
+                .to_owned(),
+        );
+    }
+    if managed_by_note_move {
+        let target_is_mirror_managed = attachment_path_is_mirror_managed(
+            target_relative_path,
+            &old_state.attachment_embed_settings,
+        )?;
+        let source_name = Path::new(attachment_relative_path).file_name();
+        let target_name = Path::new(target_relative_path).file_name();
+        if !source_is_mirror_managed
+            || !target_is_mirror_managed
+            || source_name.is_none()
+            || source_name != target_name
+        {
+            return Err(
+                "A note move can only carry a mirrored attachment, without renaming it."
+                    .to_owned(),
+            );
+        }
+    }
+
+    let source = resolve_workspace_asset_file(root, attachment_relative_path, false)?;
+    let fingerprint = fingerprint_attachment_file(&source)?;
+    let media_type = attachment_media_type_for_path(Path::new(target_relative_path));
+    let target = resolve_workspace_asset_file(root, target_relative_path, true)?;
+    let target_parent = target
+        .parent()
+        .ok_or_else(|| "The attachment destination has no parent folder.".to_owned())?;
+    match fs::symlink_metadata(target_parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("The attachment destination is not a regular vault folder.".to_owned());
+        }
+        Ok(_) => {}
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound && managed_by_note_move => {}
+        Err(error) => {
+            return Err(format!(
+                "Could not inspect the attachment destination folder: {error}"
+            ));
+        }
+    }
+    let case_only_rename = portable_path_key(attachment_relative_path)
+        == portable_path_key(target_relative_path);
+    if !case_only_rename && asset_path_exists_portably(root, target_relative_path)? {
+        return Err(format!("A file named {target_relative_path} already exists."));
+    }
+
+    if let Some(stored) = old_state.assets.get(asset_id) {
+        if stored.kind != VaultAssetKind::Attachment {
+            return Err("The stable attachment record refers to a different file type.".to_owned());
+        }
+        if portable_path_key(&stored.relative_path)
+            != portable_path_key(attachment_relative_path)
+        {
+            return Err(
+                "The stable attachment record no longer points to that file. Reload the vault."
+                    .to_owned(),
+            );
+        }
+    } else {
+        if old_state.assets.len() >= MAX_VAULT_ASSETS {
+            return Err(format!(
+                "This vault already tracks the maximum of {MAX_VAULT_ASSETS} embedded assets."
+            ));
+        }
+        if old_state.assets.values().any(|stored| {
+            stored.kind == VaultAssetKind::Attachment
+                && portable_path_key(&stored.relative_path)
+                    == portable_path_key(attachment_relative_path)
+        }) {
+            return Err("The attachment's stable record changed. Reload the vault.".to_owned());
+        }
+    }
+
+    let prepared_updates =
+        prepare_asset_note_updates(root, &old_state, note_updates, "attachment")?;
+    if revision_for_root(root)? != expected_revision {
+        return Err(
+            "The vault changed while the attachment move was being prepared. Reload it and try again."
+                .to_owned(),
+        );
+    }
+    for update in &prepared_updates {
+        if fs::read(&update.path)
+            .map_err(|error| format!("Could not recheck a note before moving the attachment: {error}"))?
+            != update.expected_content
+        {
+            return Err(
+                "A note changed before the attachment could be moved. Reload the vault and try again."
+                    .to_owned(),
+            );
+        }
+    }
+
+    if managed_by_note_move {
+        ensure_asset_parent(root, target_relative_path, "attachment")?;
+    }
+    relocate_asset_file_durable(&source, &target).map_err(|error| {
+        format!("Could not move the attachment to {target_relative_path}: {error}")
+    })?;
+
+    let mut applied_note_count = 0_usize;
+    for update in &prepared_updates {
+        if let Err(error) = atomic_write(&update.path, &update.content) {
+            let rollback_error = rollback_asset_relocation(
+                &source,
+                &target,
+                &prepared_updates[..=applied_note_count],
+                None,
+                root,
+            );
+            return Err(format!(
+                "Could not update attachment references: {error}{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+        applied_note_count += 1;
+    }
+
+    let target_fingerprint = match fingerprint_attachment_file(&target) {
+        Ok(value) if value == fingerprint => value,
+        Ok(_) => {
+            let rollback_error = rollback_asset_relocation(
+                &source,
+                &target,
+                &prepared_updates,
+                None,
+                root,
+            );
+            return Err(format!(
+                "The moved attachment failed its integrity check.{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+        Err(error) => {
+            let rollback_error = rollback_asset_relocation(
+                &source,
+                &target,
+                &prepared_updates,
+                None,
+                root,
+            );
+            return Err(format!(
+                "Could not verify the moved attachment: {error}{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+    };
+    let modified_nanos = match file_modified_nanos_for_path(&target) {
+        Ok(value) => value,
+        Err(error) => {
+            let rollback_error = rollback_asset_relocation(
+                &source,
+                &target,
+                &prepared_updates,
+                None,
+                root,
+            );
+            return Err(format!(
+                "Could not inspect the moved attachment: {error}{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+    };
+    for update in &prepared_updates {
+        let verification_error = match fs::read(&update.path) {
+            Ok(content) if content == update.content => None,
+            Ok(_) => Some("an attachment reference did not match the requested content".to_owned()),
+            Err(error) => Some(format!("an attachment reference could not be read: {error}")),
+        };
+        if let Some(verification_error) = verification_error {
+            let rollback_error = rollback_asset_relocation(
+                &source,
+                &target,
+                &prepared_updates,
+                None,
+                root,
+            );
+            return Err(format!(
+                "The move could not be verified because {verification_error}.{}",
+                rollback_error
+                    .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                    .unwrap_or_default(),
+            ));
+        }
+    }
+
+    let mut state = old_state.clone();
+    state.version = STATE_VERSION;
+    state.assets.insert(
+        asset_id.to_owned(),
+        StoredVaultAsset {
+            kind: VaultAssetKind::Attachment,
+            relative_path: target_relative_path.to_owned(),
+            media_type: media_type.to_owned(),
+            fingerprint: target_fingerprint.clone(),
+            modified_nanos,
+        },
+    );
+    if let Err(error) = write_workspace_state(root, &state) {
+        let rollback_error = rollback_asset_relocation(
+            &source,
+            &target,
+            &prepared_updates,
+            Some(&old_state),
+            root,
+        );
+        return Err(format!(
+            "Could not update the stable attachment record: {error}{}",
+            rollback_error
+                .map(|detail| format!(" The move could not be fully rolled back: {detail}"))
+                .unwrap_or_default(),
+        ));
+    }
+
+    Ok(WorkspaceRelocateAttachmentResult {
+        attachment: EmbeddedAttachment {
+            id: asset_id.to_owned(),
+            relative_path: target_relative_path.to_owned(),
+            media_type: media_type.to_owned(),
+            byte_length: target_fingerprint.length,
+            opening_disabled: attachment_opening_is_disabled(&target)?,
+        },
+        previous_relative_path: attachment_relative_path.to_owned(),
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+fn prepare_asset_note_updates(
     root: &Path,
     state: &WorkspaceState,
     note_updates: &[WorkspaceImageNoteUpdate],
-) -> Result<Vec<PreparedImageNoteUpdate>, String> {
+    asset_label: &str,
+) -> Result<Vec<PreparedAssetNoteUpdate>, String> {
     if note_updates.len() > MAX_NOTES {
         return Err(format!("Only {MAX_NOTES} notes can be updated at once."));
     }
@@ -3117,12 +3901,16 @@ fn prepare_image_note_updates(
         if state.note_paths.get(&update.note_id).map(String::as_str)
             != Some(update.relative_path.as_str())
         {
-            return Err("A note path changed before its image reference could be updated.".to_owned());
+            return Err(format!(
+                "A note path changed before its {asset_label} reference could be updated."
+            ));
         }
         if !seen_note_ids.insert(update.note_id.as_str())
             || !seen_paths.insert(portable_path_key(&update.relative_path))
         {
-            return Err("The image move contains a duplicate note update.".to_owned());
+            return Err(format!(
+                "The {asset_label} move contains a duplicate note update."
+            ));
         }
         if update.content.len() as u64 > MAX_NOTE_BYTES
             || update.expected_content.len() as u64 > MAX_NOTE_BYTES
@@ -3135,7 +3923,9 @@ fn prepare_image_note_updates(
         }
         total_bytes = total_bytes.saturating_add(update.content.len() as u64);
         if total_bytes > MAX_TOTAL_NOTE_BYTES {
-            return Err("The image move would update too much note content at once.".to_owned());
+            return Err(format!(
+                "The {asset_label} move would update too much note content at once."
+            ));
         }
         let path = resolve_workspace_file(root, &update.relative_path, false)?;
         let metadata = fs::symlink_metadata(&path)
@@ -3147,11 +3937,11 @@ fn prepare_image_note_updates(
             .map_err(|error| format!("Could not read {}: {error}", update.relative_path))?;
         if current != update.expected_content.as_bytes() {
             return Err(format!(
-                "{} changed before its image reference could be updated.",
+                "{} changed before its {asset_label} reference could be updated.",
                 update.relative_path,
             ));
         }
-        prepared.push(PreparedImageNoteUpdate {
+        prepared.push(PreparedAssetNoteUpdate {
             path,
             expected_content: current,
             content: update.content.as_bytes().to_vec(),
@@ -3173,17 +3963,30 @@ fn image_path_is_mirror_managed(
     Ok(image_key.starts_with(&format!("{folder_key}/")))
 }
 
-fn relocate_image_file_durable(source: &Path, target: &Path) -> io::Result<()> {
+fn attachment_path_is_mirror_managed(
+    attachment_relative_path: &str,
+    settings: &AttachmentEmbedSettings,
+) -> Result<bool, String> {
+    let normalized = normalize_attachment_embed_settings(settings)?;
+    if normalized.location != ImageEmbedLocation::SpecifiedFolderMirrored {
+        return Ok(false);
+    }
+    let attachment_key = portable_path_key(attachment_relative_path);
+    let folder_key = portable_path_key(&normalized.folder_path);
+    Ok(attachment_key.starts_with(&format!("{folder_key}/")))
+}
+
+fn relocate_asset_file_durable(source: &Path, target: &Path) -> io::Result<()> {
     if source == target {
         return Ok(());
     }
     if source.to_string_lossy().eq_ignore_ascii_case(&target.to_string_lossy()) {
         let parent = source
             .parent()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "image has no parent"))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "asset has no parent"))?;
         let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let temporary = parent.join(format!(
-            ".oah-image-rename-{}-{counter}.tmp",
+            ".oah-asset-rename-{}-{counter}.tmp",
             std::process::id(),
         ));
         rename_durable(source, &temporary)?;
@@ -3196,10 +3999,10 @@ fn relocate_image_file_durable(source: &Path, target: &Path) -> io::Result<()> {
     rename_durable(source, target)
 }
 
-fn rollback_image_relocation(
+fn rollback_asset_relocation(
     source: &Path,
     target: &Path,
-    applied_updates: &[PreparedImageNoteUpdate],
+    applied_updates: &[PreparedAssetNoteUpdate],
     old_state: Option<&WorkspaceState>,
     root: &Path,
 ) -> Option<String> {
@@ -3209,12 +4012,12 @@ fn rollback_image_relocation(
             errors.push(format!("could not restore a note: {error}"));
         }
     }
-    if let Err(error) = relocate_image_file_durable(target, source) {
-        errors.push(format!("could not restore the image: {error}"));
+    if let Err(error) = relocate_asset_file_durable(target, source) {
+        errors.push(format!("could not restore the asset: {error}"));
     }
     if let Some(state) = old_state {
         if let Err(error) = write_workspace_state(root, state) {
-            errors.push(format!("could not restore image metadata: {error}"));
+            errors.push(format!("could not restore asset metadata: {error}"));
         }
     }
     (!errors.is_empty()).then(|| errors.join("; "))
@@ -3232,10 +4035,15 @@ fn read_workspace_image(
         return Err("Workspace metadata is unreadable or newer than this app.".to_owned());
     }
     let mut state = stored_state.unwrap_or_default();
-    let valid_asset_id = asset_id.filter(|id| is_valid_image_asset_id(id));
-    let tracked_asset_id = valid_asset_id.filter(|id| state.image_assets.contains_key(*id));
+    let valid_asset_id = asset_id.filter(|id| is_valid_asset_id(id));
+    let tracked_asset_id = valid_asset_id.filter(|id| {
+        state
+            .assets
+            .get(*id)
+            .is_some_and(|asset| asset.kind == VaultAssetKind::Image)
+    });
     if let Some(relative_path) = tracked_asset_id
-        .and_then(|id| state.image_assets.get(id))
+        .and_then(|id| state.assets.get(id))
         .map(|asset| asset.relative_path.as_str())
     {
         if let Ok(bytes) = read_relative_workspace_image(root, relative_path) {
@@ -3243,9 +4051,9 @@ fn read_workspace_image(
         }
     }
     if tracked_asset_id.is_some() {
-        let _ = reconcile_image_assets(root, &mut state.image_assets, &mut warnings);
+        let _ = reconcile_image_assets(root, &mut state.assets, &mut warnings);
         if let Some(relative_path) = tracked_asset_id
-            .and_then(|id| state.image_assets.get(id))
+            .and_then(|id| state.assets.get(id))
             .map(|asset| asset.relative_path.as_str())
         {
             if let Ok(bytes) = read_relative_workspace_image(root, relative_path) {
@@ -3327,15 +4135,143 @@ fn workspace_image_import_path(
     ))
 }
 
-fn begin_workspace_image_import(
+fn workspace_attachment_import_path(
+    root: &Path,
+    source_relative_path: &str,
+    fingerprint: Option<&FileFingerprint>,
+    reserved_paths: &HashSet<String>,
+) -> Result<(String, bool), String> {
+    let source_key = portable_path_key(source_relative_path);
+    if !reserved_paths.contains(&source_key) {
+        let target = resolve_workspace_asset_file(root, source_relative_path, true)?;
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_file() => {
+                if fingerprint.is_some_and(|expected| {
+                    fingerprint_attachment_file(&target).as_ref() == Ok(expected)
+                }) {
+                    return Ok((source_relative_path.to_owned(), true));
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if !asset_path_exists_portably(root, source_relative_path)? {
+                    return Ok((source_relative_path.to_owned(), false));
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    let path = Path::new(source_relative_path);
+    let folder = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Attachment");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 2..=10_001_u32 {
+        let file_name = match extension {
+            Some(extension) => format!("{stem} {index}.{extension}"),
+            None => format!("{stem} {index}"),
+        };
+        let candidate = if folder.is_empty() {
+            file_name
+        } else {
+            format!("{folder}/{file_name}")
+        };
+        validate_attachment_relative_path(&candidate)?;
+        if !reserved_paths.contains(&portable_path_key(&candidate))
+            && !asset_path_exists_portably(root, &candidate)?
+        {
+            return Ok((candidate, false));
+        }
+    }
+
+    Err(format!(
+        "Could not choose a collision-free vault path for {source_relative_path}."
+    ))
+}
+
+fn resolve_attachment_import_source(
+    root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    validate_attachment_relative_path(relative_path)?;
+    let relative = checked_relative_path(relative_path, false)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("the source attachment could not be inspected: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err("symbolic links are not followed".to_owned());
+        }
+    }
+    let metadata = fs::symlink_metadata(&current)
+        .map_err(|error| format!("the source attachment could not be inspected: {error}"))?;
+    if !metadata.is_file() {
+        return Err("the source attachment is not a regular file".to_owned());
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "the source attachment is larger than {} GiB",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024
+        ));
+    }
+    Ok(current)
+}
+
+fn stage_workspace_attachment_import(
+    root: &Path,
+    transaction: &mut WorkspaceImageImportTransaction,
+    relative_path: &str,
+    source: &Path,
+    expected_fingerprint: &FileFingerprint,
+) -> Result<(), String> {
+    let transaction_root = match transaction.transaction_root.as_ref() {
+        Some(transaction_root) => transaction_root,
+        None => {
+            let created = prepare_transaction_root(root, &new_transaction_id())
+                .map_err(|error| format!("Could not prepare the asset import: {error}"))?;
+            transaction.transaction_root.insert(created)
+        }
+    };
+    let kind = TransactionTargetKind::Attachment;
+    let staged = staged_import_asset_path(transaction_root, relative_path, &kind)?;
+    let parent = staged
+        .parent()
+        .ok_or_else(|| "The staged attachment path has no parent folder.".to_owned())?;
+    ensure_private_directory_tree(transaction_root, parent)
+        .map_err(|error| format!("Could not prepare an attachment import: {error}"))?;
+    let copied_fingerprint = copy_attachment_file_durable(source, &staged)?;
+    if copied_fingerprint != *expected_fingerprint {
+        let _ = remove_file_durable(&staged);
+        return Err(format!(
+            "The staged copy of {relative_path} did not match the selected attachment."
+        ));
+    }
+    transaction.targets.push(TransactionTarget {
+        relative_path: relative_path.to_owned(),
+        fingerprint: copied_fingerprint,
+        kind,
+    });
+    Ok(())
+}
+
+fn begin_workspace_asset_import(
     root: &Path,
     source_root: &Path,
     image_paths: &[String],
+    attachment_paths: &[String],
     expected_revision: u64,
 ) -> Result<WorkspaceImportImagesResult, String> {
-    if image_paths.len() > MAX_IMAGE_ASSETS {
+    if image_paths.len().saturating_add(attachment_paths.len()) > MAX_VAULT_ASSETS {
         return Err(format!(
-            "Only {MAX_IMAGE_ASSETS} images can be imported at once."
+            "Only {MAX_VAULT_ASSETS} asset files can be imported at once."
         ));
     }
     let mut transaction = prepare_workspace_image_import(root, expected_revision)?;
@@ -3345,12 +4281,21 @@ fn begin_workspace_image_import(
         validate_image_relative_path(relative_path)?;
         if !unique_paths.insert(portable_path_key(relative_path)) {
             return Err(format!(
-                "The image import contains a duplicate path near {relative_path}."
+            "The asset import contains a duplicate path near {relative_path}."
+            ));
+        }
+    }
+    for relative_path in attachment_paths {
+        validate_attachment_relative_path(relative_path)?;
+        if !unique_paths.insert(portable_path_key(relative_path)) {
+            return Err(format!(
+                "The asset import contains a duplicate path near {relative_path}."
             ));
         }
     }
 
     let mut image_files = Vec::new();
+    let mut attachment_files = Vec::new();
     let mut path_mappings = BTreeMap::new();
     let mut reserved_paths = HashSet::new();
     let mut warnings = WarningCollector::default();
@@ -3436,8 +4381,102 @@ fn begin_workspace_image_import(
         });
     }
 
+    for relative_path in attachment_paths {
+        let source = match resolve_attachment_import_source(source_root, relative_path) {
+            Ok(source) => source,
+            Err(error) => {
+                match workspace_attachment_import_path(
+                    root,
+                    relative_path,
+                    None,
+                    &reserved_paths,
+                ) {
+                    Ok((target_path, _)) => {
+                        reserved_paths.insert(portable_path_key(&target_path));
+                        path_mappings.insert(relative_path.clone(), target_path);
+                    }
+                    Err(path_error) => warnings.push(format!(
+                        "Could not reserve a safe path for {relative_path}: {path_error}"
+                    )),
+                }
+                warnings.push(format!("Skipped {relative_path}: {error}"));
+                continue;
+            }
+        };
+        let fingerprint = match fingerprint_attachment_file(&source) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                match workspace_attachment_import_path(
+                    root,
+                    relative_path,
+                    None,
+                    &reserved_paths,
+                ) {
+                    Ok((target_path, _)) => {
+                        reserved_paths.insert(portable_path_key(&target_path));
+                        path_mappings.insert(relative_path.clone(), target_path);
+                    }
+                    Err(path_error) => warnings.push(format!(
+                        "Could not reserve a safe path for {relative_path}: {path_error}"
+                    )),
+                }
+                warnings.push(format!("Skipped {relative_path}: {error}"));
+                continue;
+            }
+        };
+        let (target_path, reuse_existing) = match workspace_attachment_import_path(
+            root,
+            relative_path,
+            Some(&fingerprint),
+            &reserved_paths,
+        ) {
+            Ok(target) => target,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not reserve a safe path for {relative_path}: {error}"
+                ));
+                continue;
+            }
+        };
+        reserved_paths.insert(portable_path_key(&target_path));
+        path_mappings.insert(relative_path.clone(), target_path.clone());
+        if target_path != *relative_path {
+            warnings.push(format!(
+                "Imported {relative_path} as {target_path} to avoid an existing vault path."
+            ));
+        }
+        let media_type = attachment_media_type_for_path(Path::new(&target_path)).to_owned();
+        let opening_disabled = if reuse_existing {
+            resolve_workspace_asset_file(root, &target_path, false)
+                .and_then(|path| attachment_opening_is_disabled(&path))
+                .unwrap_or(true)
+        } else {
+            attachment_opening_is_disabled(&source).unwrap_or(true)
+        };
+        if !reuse_existing {
+            if let Err(error) = stage_workspace_attachment_import(
+                root,
+                &mut transaction,
+                &target_path,
+                &source,
+                &fingerprint,
+            ) {
+                warnings.push(format!("Skipped {relative_path}: {error}"));
+                continue;
+            }
+        }
+        attachment_files.push(VaultAttachmentFile {
+            asset_id: None,
+            relative_path: target_path,
+            media_type,
+            byte_length: fingerprint.length,
+            opening_disabled,
+        });
+    }
+
     if let Some(missing_path) = image_paths
         .iter()
+        .chain(attachment_paths.iter())
         .find(|path| !path_mappings.contains_key(path.as_str()))
     {
         if let Some(transaction_root) = transaction.transaction_root.take() {
@@ -3453,12 +4492,24 @@ fn begin_workspace_image_import(
     Ok(WorkspaceImportImagesResult {
         image_count: image_files.len(),
         image_files,
+        attachment_count: attachment_files.len(),
+        attachment_files,
         path_mappings,
         transaction_id,
         revision,
         saved_at: now_millis(),
         warnings: warnings.finish(),
     })
+}
+
+#[cfg(test)]
+fn begin_workspace_image_import(
+    root: &Path,
+    source_root: &Path,
+    image_paths: &[String],
+    expected_revision: u64,
+) -> Result<WorkspaceImportImagesResult, String> {
+    begin_workspace_asset_import(root, source_root, image_paths, &[], expected_revision)
 }
 
 #[cfg(test)]
@@ -3490,7 +4541,7 @@ fn prepare_workspace_image_import(
     let baseline = revision_entries_for_root(root)?;
     if revision_for_entries(&baseline) != expected_revision {
         return Err(
-            "The vault changed before its images could be imported. Reload it and try again."
+            "The vault changed before its assets could be imported. Reload it and try again."
                 .to_owned(),
         );
     }
@@ -3511,7 +4562,7 @@ fn stage_workspace_image_import(
         Some(transaction_root) => transaction_root,
         None => {
             let created = prepare_transaction_root(root, &new_transaction_id())
-                .map_err(|error| format!("Could not prepare the image import: {error}"))?;
+                .map_err(|error| format!("Could not prepare the asset import: {error}"))?;
             transaction.transaction_root.insert(created)
         }
     };
@@ -3521,7 +4572,7 @@ fn stage_workspace_image_import(
         .parent()
         .ok_or_else(|| "The staged image path has no parent folder.".to_owned())?;
     ensure_private_directory_tree(transaction_root, parent)
-        .map_err(|error| format!("Could not prepare an image import: {error}"))?;
+        .map_err(|error| format!("Could not prepare an asset import: {error}"))?;
     atomic_write(&staged, bytes)
         .map_err(|error| format!("Could not stage {relative_path}: {error}"))?;
     if fingerprint_regular_file(&staged)? != Some(fingerprint.clone()) {
@@ -3562,7 +4613,7 @@ fn apply_workspace_image_import(
             discard_private_transaction(root, transaction_root, warnings);
         }
         return Err(
-            "The vault changed while its images were being prepared. Reload it and try again."
+            "The vault changed while its assets were being prepared. Reload it and try again."
                 .to_owned(),
         );
     }
@@ -3601,7 +4652,7 @@ fn apply_workspace_image_import(
         Some(transaction_id) => transaction_id.to_owned(),
         None => {
             discard_private_transaction(root, &transaction_root, warnings);
-            return Err("The image import transaction ID is invalid.".to_owned());
+            return Err("The asset import transaction ID is invalid.".to_owned());
         }
     };
     let mut manifest = TransactionManifest {
@@ -3623,7 +4674,7 @@ fn apply_workspace_image_import(
         Ok(_) => {
             discard_private_transaction(root, &transaction_root, warnings);
             return Err(
-                "The vault changed while its images were being prepared. Reload it and try again."
+                "The vault changed while its assets were being prepared. Reload it and try again."
                     .to_owned(),
             );
         }
@@ -3641,18 +4692,25 @@ fn apply_workspace_image_import(
     let result = (|| {
         if revision_entries_for_root(root)? != baseline {
             return Err(
-                "The vault changed before its images could be committed. Reload it and try again."
+                "The vault changed before its assets could be committed. Reload it and try again."
                     .to_owned(),
             );
         }
         for target in &manifest.targets {
-            ensure_import_image_parent(root, &target.relative_path)?;
+            let label = match target.kind {
+                TransactionTargetKind::Image => "image",
+                TransactionTargetKind::Attachment => "attachment",
+                TransactionTargetKind::Markdown => {
+                    return Err("A Markdown file was included in an asset import.".to_owned())
+                }
+            };
+            ensure_asset_parent(root, &target.relative_path, label)?;
             apply_staged_import_image(root, &transaction_root, target)?;
         }
         let committed_entries = verify_image_import_consistency(root, &baseline, &manifest)?;
         if verify_image_import_consistency(root, &baseline, &manifest)? != committed_entries {
             return Err(
-                "The vault changed while its imported images were being verified. Reload it and try again."
+                "The vault changed while its imported assets were being verified. Reload it and try again."
                     .to_owned(),
             );
         }
@@ -3673,7 +4731,7 @@ fn apply_workspace_image_import(
                 return Err(error);
             }
             return Err(format!(
-                "{error} The interrupted image import could not be fully rolled back. Reopen the vault before editing again."
+                "{error} The interrupted asset import could not be fully rolled back. Reopen the vault before editing again."
             ));
         }
     };
@@ -3687,7 +4745,7 @@ fn pending_workspace_image_import(
 ) -> Result<(PathBuf, TransactionManifest), String> {
     let transaction_root = existing_transaction_root(root, transaction_id)?;
     let manifest = read_transaction_manifest(&transaction_root)?
-        .ok_or_else(|| "The pending image import has no transaction manifest.".to_owned())?;
+        .ok_or_else(|| "The pending asset import has no transaction manifest.".to_owned())?;
     if manifest.id != transaction_id
         || manifest.version > TRANSACTION_VERSION
         || manifest.phase != TransactionPhase::Applying
@@ -3698,21 +4756,21 @@ fn pending_workspace_image_import(
         || manifest
             .targets
             .iter()
-            .any(|target| target.kind != TransactionTargetKind::Image)
+            .any(|target| target.kind == TransactionTargetKind::Markdown)
     {
-        return Err("The pending image import transaction is invalid.".to_owned());
+        return Err("The pending asset import transaction is invalid.".to_owned());
     }
     for target in &manifest.targets {
         if !import_image_was_applied(&transaction_root, target)? {
             return Err(format!(
-                "The pending image import did not create {}.",
+                "The pending asset import did not create {}.",
                 target.relative_path,
             ));
         }
-        let path = resolve_workspace_image_file(root, &target.relative_path, false)?;
+        let path = resolve_transaction_target_file(root, target, false)?;
         if fingerprint_regular_file(&path)? != Some(target.fingerprint.clone()) {
             return Err(format!(
-                "The imported image {} changed before its notes were saved.",
+                "The imported asset {} changed before its notes were saved.",
                 target.relative_path,
             ));
         }
@@ -3752,21 +4810,47 @@ fn staged_import_image_path(
     transaction_root: &Path,
     relative_path: &str,
 ) -> Result<PathBuf, String> {
-    validate_image_relative_path(relative_path)?;
+    staged_import_asset_path(
+        transaction_root,
+        relative_path,
+        &TransactionTargetKind::Image,
+    )
+}
+
+fn staged_import_asset_path(
+    transaction_root: &Path,
+    relative_path: &str,
+    kind: &TransactionTargetKind,
+) -> Result<PathBuf, String> {
+    match kind {
+        TransactionTargetKind::Image => validate_image_relative_path(relative_path)?,
+        TransactionTargetKind::Attachment => validate_attachment_relative_path(relative_path)?,
+        TransactionTargetKind::Markdown => {
+            return Err("Markdown files cannot be staged as imported assets.".to_owned())
+        }
+    }
     let internal_path = checked_internal_transaction_path(
-        &format!("images/{relative_path}"),
+        &format!("assets/{relative_path}"),
         true,
     )?;
     Ok(transaction_root.join(internal_path))
 }
 
-fn import_image_applied_marker_path(
+fn import_asset_applied_marker_path(
     transaction_root: &Path,
-    relative_path: &str,
+    target: &TransactionTarget,
 ) -> Result<PathBuf, String> {
-    validate_image_relative_path(relative_path)?;
+    match target.kind {
+        TransactionTargetKind::Image => validate_image_relative_path(&target.relative_path)?,
+        TransactionTargetKind::Attachment => {
+            validate_attachment_relative_path(&target.relative_path)?
+        }
+        TransactionTargetKind::Markdown => {
+            return Err("Markdown files do not use asset import markers.".to_owned())
+        }
+    }
     let internal_path = checked_internal_transaction_path(
-        &format!("applied/{relative_path}.json"),
+        &format!("applied/{}.json", target.relative_path),
         true,
     )?;
     Ok(transaction_root.join(internal_path))
@@ -3778,19 +4862,19 @@ fn validate_private_import_directory(
 ) -> Result<(), String> {
     let relative = directory
         .strip_prefix(transaction_root)
-        .map_err(|_| "A private image import path escaped its transaction.".to_owned())?;
+        .map_err(|_| "A private asset import path escaped its transaction.".to_owned())?;
     let root_metadata = fs::symlink_metadata(transaction_root)
-        .map_err(|error| format!("Could not inspect the image import transaction: {error}"))?;
+        .map_err(|error| format!("Could not inspect the asset import transaction: {error}"))?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err("The image import transaction is not a regular folder.".to_owned());
+        return Err("The asset import transaction is not a regular folder.".to_owned());
     }
     let mut current = transaction_root.to_path_buf();
     for component in relative.components() {
         current.push(component.as_os_str());
         let metadata = fs::symlink_metadata(&current)
-            .map_err(|error| format!("Could not inspect a private image import folder: {error}"))?;
+            .map_err(|error| format!("Could not inspect a private asset import folder: {error}"))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err("A private image import path is not a regular folder.".to_owned());
+            return Err("A private asset import path is not a regular folder.".to_owned());
         }
     }
     Ok(())
@@ -3800,21 +4884,18 @@ fn mark_import_image_applied(
     transaction_root: &Path,
     target: &TransactionTarget,
 ) -> Result<(), String> {
-    let marker = import_image_applied_marker_path(
-        transaction_root,
-        &target.relative_path,
-    )?;
+    let marker = import_asset_applied_marker_path(transaction_root, target)?;
     let parent = marker
         .parent()
-        .ok_or_else(|| "The image import marker has no parent folder.".to_owned())?;
+        .ok_or_else(|| "The asset import marker has no parent folder.".to_owned())?;
     ensure_private_directory_tree(transaction_root, parent)
-        .map_err(|error| format!("Could not prepare an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not prepare an asset import marker: {error}"))?;
     let bytes = serde_json::to_vec(&target.fingerprint)
-        .map_err(|error| format!("Could not encode an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not encode an asset import marker: {error}"))?;
     atomic_write(&marker, &bytes)
-        .map_err(|error| format!("Could not save an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not save an asset import marker: {error}"))?;
     if fingerprint_regular_file(&marker)? != Some(fingerprint_bytes(&bytes)) {
-        return Err("An image import marker failed its integrity check.".to_owned());
+        return Err("An asset import marker failed its integrity check.".to_owned());
     }
     Ok(())
 }
@@ -3823,30 +4904,27 @@ fn import_image_was_applied(
     transaction_root: &Path,
     target: &TransactionTarget,
 ) -> Result<bool, String> {
-    let marker = import_image_applied_marker_path(
-        transaction_root,
-        &target.relative_path,
-    )?;
+    let marker = import_asset_applied_marker_path(transaction_root, target)?;
     let metadata = match fs::symlink_metadata(&marker) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
-            return Err(format!("Could not inspect an image import marker: {error}"));
+            return Err(format!("Could not inspect an asset import marker: {error}"));
         }
     };
     let marker_parent = marker
         .parent()
-        .ok_or_else(|| "The image import marker has no parent folder.".to_owned())?;
+        .ok_or_else(|| "The asset import marker has no parent folder.".to_owned())?;
     validate_private_import_directory(transaction_root, marker_parent)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 {
-        return Err("An image import marker is unsafe or unexpectedly large.".to_owned());
+        return Err("An asset import marker is unsafe or unexpectedly large.".to_owned());
     }
     let bytes = fs::read(&marker)
-        .map_err(|error| format!("Could not read an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not read an asset import marker: {error}"))?;
     let fingerprint: FileFingerprint = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("Could not parse an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not parse an asset import marker: {error}"))?;
     if fingerprint != target.fingerprint {
-        return Err("An image import marker does not match its target.".to_owned());
+        return Err("An asset import marker does not match its target.".to_owned());
     }
     Ok(true)
 }
@@ -3856,13 +4934,17 @@ fn apply_staged_import_image(
     transaction_root: &Path,
     target: &TransactionTarget,
 ) -> Result<(), String> {
-    let staged = staged_import_image_path(transaction_root, &target.relative_path)?;
+    let staged = staged_import_asset_path(
+        transaction_root,
+        &target.relative_path,
+        &target.kind,
+    )?;
     let staged_parent = staged
         .parent()
-        .ok_or_else(|| "The staged image has no parent folder.".to_owned())?;
+        .ok_or_else(|| "The staged asset has no parent folder.".to_owned())?;
     validate_private_import_directory(transaction_root, staged_parent)?;
     let metadata = fs::symlink_metadata(&staged)
-        .map_err(|error| format!("Could not inspect staged image {}: {error}", target.relative_path))?;
+        .map_err(|error| format!("Could not inspect staged asset {}: {error}", target.relative_path))?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() != target.fingerprint.length
@@ -3873,15 +4955,15 @@ fn apply_staged_import_image(
         ));
     }
     let source = File::open(&staged)
-        .map_err(|error| format!("Could not open staged image {}: {error}", target.relative_path))?;
+        .map_err(|error| format!("Could not open staged asset {}: {error}", target.relative_path))?;
     let opened_metadata = source
         .metadata()
-        .map_err(|error| format!("Could not inspect staged image {}: {error}", target.relative_path))?;
+        .map_err(|error| format!("Could not inspect staged asset {}: {error}", target.relative_path))?;
     if !opened_metadata.is_file() || opened_metadata.len() != target.fingerprint.length {
         return Err(format!("The staged copy of {} changed.", target.relative_path));
     }
 
-    let destination = resolve_workspace_image_file(root, &target.relative_path, true)?;
+    let destination = resolve_transaction_target_file(root, target, true)?;
     if let Some(parent) = destination.parent() {
         ensure_existing_directory_without_symlink(root, parent)?;
     }
@@ -3903,7 +4985,7 @@ fn apply_staged_import_image(
         if copied != target.fingerprint.length {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "the staged image length changed",
+                "the staged asset length changed",
             ));
         }
         destination_file.flush()?;
@@ -3940,10 +5022,10 @@ fn verify_image_import_consistency(
     manifest: &TransactionManifest,
 ) -> Result<Vec<RevisionEntry>, String> {
     for target in &manifest.targets {
-        let destination = resolve_workspace_image_file(root, &target.relative_path, false)?;
+        let destination = resolve_transaction_target_file(root, target, false)?;
         if fingerprint_regular_file(&destination)? != Some(target.fingerprint.clone()) {
             return Err(format!(
-                "{} changed while its image import was being committed.",
+                "{} changed while its asset import was being committed.",
                 target.relative_path
             ));
         }
@@ -3966,7 +5048,7 @@ fn verify_image_import_consistency(
         .any(|label| !current.iter().any(|entry| &entry.0 == label))
     {
         return Err(
-            "The vault changed while its image folders were being committed. Reload it and try again."
+            "The vault changed while its asset folders were being committed. Reload it and try again."
                 .to_owned(),
         );
     }
@@ -3977,7 +5059,7 @@ fn verify_image_import_consistency(
         .collect::<Vec<_>>();
     if unaffected != baseline {
         return Err(
-            "The vault changed outside Obsidian At Home during the image import. Reload it before editing again."
+            "The vault changed outside Obsidian At Home during the asset import. Reload it before editing again."
                 .to_owned(),
         );
     }
@@ -3985,7 +5067,11 @@ fn verify_image_import_consistency(
     Ok(current)
 }
 
-fn ensure_import_image_parent(root: &Path, relative_path: &str) -> Result<(), String> {
+fn ensure_asset_parent(
+    root: &Path,
+    relative_path: &str,
+    asset_label: &str,
+) -> Result<(), String> {
     let parent = Path::new(relative_path)
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty());
@@ -3997,7 +5083,7 @@ fn ensure_import_image_parent(root: &Path, relative_path: &str) -> Result<(), St
         let name = component
             .as_os_str()
             .to_str()
-            .ok_or_else(|| "An image folder name is not valid Unicode.".to_owned())?;
+            .ok_or_else(|| format!("An {asset_label} folder name is not valid Unicode."))?;
         let mut case_collision = false;
         let mut exact_match = false;
         for entry in fs::read_dir(&current)
@@ -4032,7 +5118,10 @@ fn ensure_import_image_parent(root: &Path, relative_path: &str) -> Result<(), St
             }
         } else {
             create_directory_durable(&current).map_err(|error| {
-                format!("Could not create the image folder {}: {error}", current.display())
+                format!(
+                    "Could not create the {asset_label} folder {}: {error}",
+                    current.display()
+                )
             })?;
         }
     }
@@ -4041,22 +5130,22 @@ fn ensure_import_image_parent(root: &Path, relative_path: &str) -> Result<(), St
 
 fn validate_image_import_root(input: &str) -> Result<PathBuf, String> {
     if input.trim().is_empty() {
-        return Err("Choose a vault folder to import images from.".to_owned());
+        return Err("Choose a vault folder to import assets from.".to_owned());
     }
     let path = Path::new(input);
     if !path.is_absolute() {
-        return Err("The image import path must be absolute.".to_owned());
+        return Err("The asset import path must be absolute.".to_owned());
     }
     let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("The image import folder could not be opened: {error}"))?;
+        .map_err(|error| format!("The asset import folder could not be opened: {error}"))?;
     if metadata.file_type().is_symlink() {
-        return Err("The image import folder cannot be a symbolic link.".to_owned());
+        return Err("The asset import folder cannot be a symbolic link.".to_owned());
     }
     if !metadata.is_dir() {
-        return Err("The image import path is not a folder.".to_owned());
+        return Err("The asset import path is not a folder.".to_owned());
     }
     path.canonicalize()
-        .map_err(|error| format!("The image import folder could not be resolved: {error}"))
+        .map_err(|error| format!("The asset import folder could not be resolved: {error}"))
 }
 
 fn resolve_image_import_source(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
@@ -4100,6 +5189,478 @@ fn validate_image_source_file(input: &str) -> Result<PathBuf, String> {
     }
     path.canonicalize()
         .map_err(|error| format!("The selected image could not be resolved: {error}"))
+}
+
+fn validate_attachment_source_file(input: &str) -> Result<PathBuf, String> {
+    if input.trim().is_empty() {
+        return Err("Choose a file to embed.".to_owned());
+    }
+    let path = Path::new(input);
+    if !path.is_absolute() {
+        return Err("The selected attachment path must be absolute.".to_owned());
+    }
+    validate_attachment_relative_path(
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "The selected attachment name is not valid Unicode.".to_owned())?,
+    )?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("The selected attachment could not be opened: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("Choose a regular file, not a folder, symbolic link, or special file.".to_owned());
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "The selected attachment is larger than {} GiB.",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+        ));
+    }
+    path.canonicalize()
+        .map_err(|error| format!("The selected attachment could not be resolved: {error}"))
+}
+
+fn fingerprint_attachment_file(path: &Path) -> Result<FileFingerprint, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{} is not a regular attachment file.", path.display()));
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "The attachment is larger than {} GiB.",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+        ));
+    }
+    let mut file = File::open(path)
+        .map_err(|error| format!("Could not open {}: {error}", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
+        return Err("The attachment changed while it was being opened.".to_owned());
+    }
+
+    let mut buffer = vec![0_u8; ATTACHMENT_COPY_BUFFER_BYTES];
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut length = 0_u64;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        length = length
+            .checked_add(read as u64)
+            .filter(|value| *value <= MAX_ATTACHMENT_BYTES)
+            .ok_or_else(|| "The attachment became too large while it was being read.".to_owned())?;
+        fnv_update(&mut hash, &buffer[..read]);
+    }
+    if length != metadata.len() {
+        return Err("The attachment changed while it was being read.".to_owned());
+    }
+
+    Ok(FileFingerprint { length, hash })
+}
+
+fn copy_attachment_file_durable(
+    source: &Path,
+    destination: &Path,
+) -> Result<FileFingerprint, String> {
+    let source_metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("Could not inspect the selected attachment: {error}"))?;
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_file() {
+        return Err("The selected attachment is not a regular file.".to_owned());
+    }
+    if source_metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "The selected attachment is larger than {} GiB.",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024,
+        ));
+    }
+    let source_modified_nanos = image_modified_nanos(&source_metadata);
+    let mut source_file = File::open(source)
+        .map_err(|error| format!("Could not open the selected attachment: {error}"))?;
+    let opened_metadata = source_file
+        .metadata()
+        .map_err(|error| format!("Could not inspect the selected attachment: {error}"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() != source_metadata.len() {
+        return Err("The selected attachment changed while it was being opened.".to_owned());
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The attachment destination has no parent folder.".to_owned())?;
+    let mut destination_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("Could not create the embedded attachment: {error}"))?;
+
+    let copy_result = (|| -> Result<FileFingerprint, String> {
+        let mut buffer = vec![0_u8; ATTACHMENT_COPY_BUFFER_BYTES];
+        let mut hash = 0xcbf29ce484222325_u64;
+        let mut length = 0_u64;
+        loop {
+            let read = source_file
+                .read(&mut buffer)
+                .map_err(|error| format!("Could not read the selected attachment: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            length = length
+                .checked_add(read as u64)
+                .filter(|value| *value <= MAX_ATTACHMENT_BYTES)
+                .ok_or_else(|| {
+                    "The selected attachment became too large while it was copied.".to_owned()
+                })?;
+            destination_file
+                .write_all(&buffer[..read])
+                .map_err(|error| format!("Could not copy the embedded attachment: {error}"))?;
+            fnv_update(&mut hash, &buffer[..read]);
+        }
+        let final_source_metadata = source_file
+            .metadata()
+            .map_err(|error| format!("Could not recheck the selected attachment: {error}"))?;
+        if length != source_metadata.len()
+            || final_source_metadata.len() != source_metadata.len()
+            || image_modified_nanos(&final_source_metadata) != source_modified_nanos
+        {
+            return Err("The selected attachment changed while it was being copied.".to_owned());
+        }
+        destination_file
+            .flush()
+            .and_then(|_| destination_file.sync_all())
+            .map_err(|error| format!("Could not finish the embedded attachment: {error}"))?;
+
+        Ok(FileFingerprint { length, hash })
+    })();
+    drop(destination_file);
+    match copy_result {
+        Ok(fingerprint) => {
+            sync_directory(parent)
+                .map_err(|error| format!("Could not finish the attachment folder: {error}"))?;
+            Ok(fingerprint)
+        }
+        Err(error) => {
+            let _ = remove_file_durable(destination);
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn copy_attachment_file_for_transfer(
+    source: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let fingerprint = copy_attachment_file_durable(source, destination)?;
+    match fingerprint_attachment_file(destination) {
+        Ok(copied) if copied == fingerprint => Ok(()),
+        Ok(_) => {
+            let _ = remove_file_durable(destination);
+            Err("The transferred attachment failed its integrity check.".to_owned())
+        }
+        Err(error) => {
+            let _ = remove_file_durable(destination);
+            Err(format!("The transferred attachment could not be verified: {error}"))
+        }
+    }
+}
+
+fn resolve_attachment_action_source(
+    root: &Path,
+    attachment_relative_path: &str,
+    asset_id: Option<&str>,
+) -> Result<(String, PathBuf), String> {
+    let relative_path = if let Some(asset_id) = asset_id.filter(|id| !id.is_empty()) {
+        if !is_valid_asset_id(asset_id) {
+            return Err("The attachment has an invalid stable ID.".to_owned());
+        }
+        let mut warnings = WarningCollector::default();
+        let (state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+        if state.is_none() && state_file_was_present {
+            return Err(
+                "The attachment cannot be opened while workspace metadata is unreadable or newer than this app."
+                    .to_owned(),
+            );
+        }
+        if let Some(stored) = state.as_ref().and_then(|state| state.assets.get(asset_id)) {
+            if stored.kind != VaultAssetKind::Attachment {
+                return Err(
+                    "The stable attachment record refers to a different file type.".to_owned(),
+                );
+            }
+            stored.relative_path.clone()
+        } else {
+            attachment_relative_path.to_owned()
+        }
+    } else {
+        attachment_relative_path.to_owned()
+    };
+    validate_attachment_relative_path(&relative_path)?;
+    let source = resolve_workspace_asset_file(root, &relative_path, false)?;
+    let metadata = fs::symlink_metadata(&source)
+        .map_err(|error| format!("Could not inspect the attachment: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("The attachment is not a regular vault file.".to_owned());
+    }
+
+    Ok((relative_path, source))
+}
+
+fn is_archive_attachment_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "7z" | "bz2" | "gz" | "rar" | "tar" | "tgz" | "xz" | "zip"
+    )
+}
+
+fn is_executable_attachment_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "app"
+            | "appimage"
+            | "appx"
+            | "appxbundle"
+            | "bat"
+            | "bin"
+            | "cmd"
+            | "command"
+            | "com"
+            | "cpl"
+            | "deb"
+            | "desktop"
+            | "dmg"
+            | "exe"
+            | "fish"
+            | "hta"
+            | "jar"
+            | "js"
+            | "jse"
+            | "lnk"
+            | "msc"
+            | "msi"
+            | "msix"
+            | "msixbundle"
+            | "msp"
+            | "mst"
+            | "pif"
+            | "pkg"
+            | "ps1"
+            | "psm1"
+            | "py"
+            | "pyw"
+            | "reg"
+            | "rpm"
+            | "run"
+            | "scr"
+            | "sh"
+            | "tool"
+            | "vbe"
+            | "vbs"
+            | "wsf"
+            | "wsh"
+            | "zsh"
+    )
+}
+
+fn attachment_opening_is_disabled(path: &Path) -> Result<bool, String> {
+    if is_archive_attachment_path(path) {
+        return Ok(false);
+    }
+    if is_executable_attachment_path(path) {
+        return Ok(true);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = fs::metadata(path)
+            .map_err(|error| format!("Could not inspect the attachment before opening: {error}"))?;
+        if metadata.permissions().mode() & 0o111 != 0 {
+            return Ok(true);
+        }
+    }
+
+    let mut file = File::open(path)
+        .map_err(|error| format!("Could not inspect the attachment before opening: {error}"))?;
+    let mut prefix = [0_u8; 8];
+    let length = file
+        .read(&mut prefix)
+        .map_err(|error| format!("Could not inspect the attachment before opening: {error}"))?;
+
+    Ok(attachment_prefix_is_executable(&prefix[..length]))
+}
+
+fn attachment_prefix_is_executable(prefix: &[u8]) -> bool {
+    prefix.starts_with(b"#!")
+        || prefix.starts_with(b"MZ")
+        || prefix.starts_with(b"\x7fELF")
+        || matches!(
+            prefix.get(..4),
+            Some(
+                [0xfe, 0xed, 0xfa, 0xce]
+                    | [0xce, 0xfa, 0xed, 0xfe]
+                    | [0xfe, 0xed, 0xfa, 0xcf]
+                    | [0xcf, 0xfa, 0xed, 0xfe]
+                    | [0xca, 0xfe, 0xba, 0xbe]
+                    | [0xbe, 0xba, 0xfe, 0xca]
+                    | [0xca, 0xfe, 0xba, 0xbf]
+                    | [0xbf, 0xba, 0xfe, 0xca]
+            )
+        )
+}
+
+fn safe_external_copy_directory(root: &Path, input: &Path) -> Option<PathBuf> {
+    if !input.is_absolute() {
+        return None;
+    }
+    let metadata = fs::symlink_metadata(input).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return None;
+    }
+    let directory = input.canonicalize().ok()?;
+    (!directory.starts_with(root)).then_some(directory)
+}
+
+fn validate_external_attachment_copy_target(root: &Path, target: &Path) -> Result<PathBuf, String> {
+    if !target.is_absolute() {
+        return Err("Choose an absolute location outside the vault.".to_owned());
+    }
+    let file_name = target
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "Choose a file name for the attachment copy.".to_owned())?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| "The attachment copy location has no parent folder.".to_owned())?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .map_err(|error| format!("Could not inspect the attachment copy folder: {error}"))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err("Choose a regular folder, not a symbolic link.".to_owned());
+    }
+    let parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the attachment copy folder: {error}"))?;
+    if parent.starts_with(root) {
+        return Err(
+            "Archive copies must be saved outside the active vault to avoid untracked extracted files."
+                .to_owned(),
+        );
+    }
+    let target = parent.join(file_name);
+    match fs::symlink_metadata(&target) {
+        Ok(_) => {
+            return Err(
+                "A file already exists at that location. Choose a new name for the copy."
+                    .to_owned(),
+            );
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!("Could not inspect the attachment copy location: {error}"));
+        }
+    }
+
+    Ok(target)
+}
+
+fn save_workspace_attachment_copy(
+    app: &AppHandle,
+    root: &Path,
+    attachment_relative_path: &str,
+    asset_id: Option<&str>,
+    preferred_directory: Option<&str>,
+) -> Result<Option<WorkspaceAttachmentCopyResult>, String> {
+    let (source_name, baseline_fingerprint) = {
+        let _guard = lock_workspace_io()?;
+        let _workspace_guard = lock_workspace_files(root)?;
+        let (_, source) = resolve_attachment_action_source(
+            root,
+            attachment_relative_path,
+            asset_id,
+        )?;
+        if !is_archive_attachment_path(&source) {
+            return Err("Only archive attachments use the Save archive as flow.".to_owned());
+        }
+        let file_name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "The archive name is not valid Unicode.".to_owned())?
+            .to_owned();
+        (file_name, fingerprint_attachment_file(&source)?)
+    };
+
+    let preferred = preferred_directory
+        .map(Path::new)
+        .and_then(|directory| safe_external_copy_directory(root, directory));
+    let downloads = app
+        .path()
+        .download_dir()
+        .ok()
+        .and_then(|directory| safe_external_copy_directory(root, &directory));
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Save archive as")
+        .set_file_name(&source_name);
+    if let Some(directory) = preferred.or(downloads) {
+        dialog = dialog.set_directory(directory);
+    }
+    let Some(selected) = dialog.blocking_save_file() else {
+        return Ok(None);
+    };
+    let selected = selected
+        .into_path()
+        .map_err(|error| format!("The selected copy location is not a local path: {error}"))?;
+    let target = validate_external_attachment_copy_target(root, &selected)?;
+
+    let copied_fingerprint = {
+        let _guard = lock_workspace_io()?;
+        let _workspace_guard = lock_workspace_files(root)?;
+        let (_, source) = resolve_attachment_action_source(
+            root,
+            attachment_relative_path,
+            asset_id,
+        )?;
+        if !is_archive_attachment_path(&source) {
+            return Err("The attachment is no longer an archive.".to_owned());
+        }
+        if fingerprint_attachment_file(&source)? != baseline_fingerprint {
+            return Err(
+                "The archive changed while the copy location was being chosen. Try again."
+                    .to_owned(),
+            );
+        }
+        copy_attachment_file_durable(&source, &target)?
+    };
+    if copied_fingerprint != baseline_fingerprint
+        || fingerprint_attachment_file(&target)? != baseline_fingerprint
+    {
+        let _ = remove_file_durable(&target);
+        return Err("The saved archive copy failed its integrity check.".to_owned());
+    }
+
+    Ok(Some(WorkspaceAttachmentCopyResult {
+        path: path_string(&target)?,
+    }))
+}
+
+fn file_modified_nanos_for_path(path: &Path) -> Result<u64, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{} is not a regular file.", path.display()));
+    }
+    Ok(image_modified_nanos(&metadata))
 }
 
 fn read_image_file(path: &Path) -> Result<Vec<u8>, String> {
@@ -4237,6 +5798,130 @@ fn safe_image_file_name(file_name: &str, extension: &str) -> String {
     format!("{stem}.{extension}")
 }
 
+fn safe_attachment_file_name(file_name: &str) -> Result<String, String> {
+    let path = Path::new(file_name);
+    let stem = safe_file_stem(
+        path.file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Attachment"),
+        "Attachment",
+    );
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .filter(|character| {
+            !character.is_control() && !is_forbidden_component_character(*character)
+        })
+        .take(40)
+        .collect::<String>();
+    let safe_name = if extension.is_empty() {
+        stem
+    } else {
+        format!("{stem}.{extension}")
+    };
+    validate_attachment_relative_path(&safe_name)?;
+    Ok(safe_name)
+}
+
+fn unique_attachment_relative_path(
+    root: &Path,
+    folder: &str,
+    file_name: &str,
+) -> Result<String, String> {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Attachment");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 1..=10_000_u32 {
+        let candidate_name = if index == 1 {
+            file_name.to_owned()
+        } else if let Some(extension) = extension {
+            format!("{stem} {index}.{extension}")
+        } else {
+            format!("{stem} {index}")
+        };
+        let relative_path = if folder.is_empty() {
+            candidate_name
+        } else {
+            format!("{folder}/{candidate_name}")
+        };
+        validate_attachment_relative_path(&relative_path)?;
+        if !asset_path_exists_portably(root, &relative_path)? {
+            return Ok(relative_path);
+        }
+    }
+    Err("Could not choose a unique file name for the embedded attachment.".to_owned())
+}
+
+fn asset_path_exists_portably(root: &Path, relative_path: &str) -> Result<bool, String> {
+    let candidate = resolve_workspace_asset_file(root, relative_path, true)?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "The embedded attachment path has no parent folder.".to_owned())?;
+    let file_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The embedded attachment name is not valid Unicode.".to_owned())?;
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!("Could not inspect {}: {error}", parent.display()));
+        }
+    };
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("Could not inspect {}: {error}", parent.display()))?;
+        if entry.file_name().to_string_lossy().eq_ignore_ascii_case(file_name) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn attachment_media_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" | "tgz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "7z" => "application/x-7z-compressed",
+        "rar" => "application/vnd.rar",
+        "json" => "application/json",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "rtf" => "application/rtf",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        _ => "application/octet-stream",
+    }
+}
+
 fn unique_image_relative_path(
     root: &Path,
     folder: &str,
@@ -4308,7 +5993,19 @@ fn validate_image_relative_path(relative_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn is_valid_image_asset_id(id: &str) -> bool {
+fn validate_attachment_relative_path(relative_path: &str) -> Result<(), String> {
+    validate_relative_path(relative_path, false)?;
+    let path = Path::new(relative_path);
+    if is_markdown_path(path) {
+        return Err("Markdown notes should be linked as notes, not embedded as attachments.".to_owned());
+    }
+    if is_supported_image_path(path) {
+        return Err("Use image embedding for PNG, JPEG, GIF, WebP, BMP, and AVIF files.".to_owned());
+    }
+    Ok(())
+}
+
+fn is_valid_asset_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 180
         && id
@@ -4393,16 +6090,16 @@ fn hex_value(value: u8) -> Option<u8> {
 
 fn reconcile_image_assets(
     root: &Path,
-    assets: &mut BTreeMap<String, StoredImageAsset>,
+    assets: &mut BTreeMap<String, StoredVaultAsset>,
     warnings: &mut WarningCollector,
 ) -> Vec<EmbeddedImage> {
-    if assets.len() > MAX_IMAGE_ASSETS {
+    if assets.len() > MAX_VAULT_ASSETS {
         warnings.push(format!(
-            "Only the first {MAX_IMAGE_ASSETS} embedded image records were loaded."
+            "Only the first {MAX_VAULT_ASSETS} embedded image records were loaded."
         ));
         let retained = assets
             .keys()
-            .take(MAX_IMAGE_ASSETS)
+            .take(MAX_VAULT_ASSETS)
             .cloned()
             .collect::<HashSet<_>>();
         assets.retain(|id, _| retained.contains(id));
@@ -4410,9 +6107,15 @@ fn reconcile_image_assets(
     let invalid_ids = assets
         .iter()
         .filter_map(|(id, asset)| {
-            (!is_valid_image_asset_id(id)
-                || validate_image_relative_path(&asset.relative_path).is_err())
-            .then(|| id.clone())
+            let path_is_invalid = match asset.kind {
+                VaultAssetKind::Image => {
+                    validate_image_relative_path(&asset.relative_path).is_err()
+                }
+                VaultAssetKind::Attachment => {
+                    validate_attachment_relative_path(&asset.relative_path).is_err()
+                }
+            };
+            (!is_valid_asset_id(id) || path_is_invalid).then(|| id.clone())
         })
         .collect::<Vec<_>>();
     for id in invalid_ids {
@@ -4422,7 +6125,10 @@ fn reconcile_image_assets(
 
     let mut assigned_paths = HashSet::new();
     let mut missing_ids = Vec::new();
-    for (id, asset) in assets.iter_mut() {
+    for (id, asset) in assets
+        .iter_mut()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Image)
+    {
         let path = match resolve_workspace_image_file(root, &asset.relative_path, false) {
             Ok(path) => path,
             Err(_) => {
@@ -4538,6 +6244,7 @@ fn reconcile_image_assets(
 
     assets
         .iter()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Image)
         .map(|(id, asset)| EmbeddedImage {
             id: id.clone(),
             relative_path: asset.relative_path.clone(),
@@ -4546,13 +6253,168 @@ fn reconcile_image_assets(
         .collect()
 }
 
+fn reconcile_attachment_assets(
+    root: &Path,
+    assets: &mut BTreeMap<String, StoredVaultAsset>,
+    warnings: &mut WarningCollector,
+) -> Vec<EmbeddedAttachment> {
+    let mut assigned_paths = HashSet::new();
+    let mut missing_ids = Vec::new();
+    for (id, asset) in assets
+        .iter_mut()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Attachment)
+    {
+        let path = match resolve_workspace_asset_file(root, &asset.relative_path, false) {
+            Ok(path) => path,
+            Err(_) => {
+                missing_ids.push(id.clone());
+                continue;
+            }
+        };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata)
+                if !metadata.file_type().is_symlink()
+                    && metadata.is_file()
+                    && metadata.len() <= MAX_ATTACHMENT_BYTES => metadata,
+            _ => {
+                missing_ids.push(id.clone());
+                continue;
+            }
+        };
+        let media_type = attachment_media_type_for_path(Path::new(&asset.relative_path));
+        let modified_nanos = image_modified_nanos(&metadata);
+        if asset.modified_nanos != 0
+            && asset.modified_nanos == modified_nanos
+            && asset.fingerprint.length == metadata.len()
+            && asset.media_type == media_type
+        {
+            assigned_paths.insert(portable_path_key(&asset.relative_path));
+            continue;
+        }
+        match fingerprint_attachment_file(&path) {
+            Ok(fingerprint) => {
+                asset.media_type = media_type.to_owned();
+                asset.fingerprint = fingerprint;
+                asset.modified_nanos = modified_nanos;
+                assigned_paths.insert(portable_path_key(&asset.relative_path));
+            }
+            Err(_) => missing_ids.push(id.clone()),
+        }
+    }
+
+    if !missing_ids.is_empty() {
+        let missing_lengths = missing_ids
+            .iter()
+            .filter_map(|id| assets.get(id).map(|asset| asset.fingerprint.length))
+            .collect::<HashSet<_>>();
+        let mut candidates: HashMap<FileFingerprint, Vec<(String, String, u64)>> = HashMap::new();
+        for entry in WalkDir::new(root)
+            .follow_links(false)
+            .max_depth(128)
+            .into_iter()
+            .filter_entry(should_visit_workspace_entry)
+            .filter_map(Result::ok)
+        {
+            if entry.file_type().is_symlink() || !entry.file_type().is_file() {
+                continue;
+            }
+            let Some(relative_path) = entry
+                .path()
+                .strip_prefix(root)
+                .ok()
+                .and_then(path_to_slash_string)
+            else {
+                continue;
+            };
+            if assigned_paths.contains(&portable_path_key(&relative_path))
+                || validate_attachment_relative_path(&relative_path).is_err()
+            {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !missing_lengths.contains(&metadata.len()) {
+                continue;
+            }
+            let Ok(fingerprint) = fingerprint_attachment_file(entry.path()) else {
+                continue;
+            };
+            let modified_nanos = image_modified_nanos(&metadata);
+            candidates
+                .entry(fingerprint)
+                .or_default()
+                .push((
+                    relative_path.clone(),
+                    attachment_media_type_for_path(Path::new(&relative_path)).to_owned(),
+                    modified_nanos,
+                ));
+        }
+
+        for id in missing_ids {
+            let Some(asset) = assets.get_mut(&id) else {
+                continue;
+            };
+            let Some(matches) = candidates.get(&asset.fingerprint) else {
+                warnings.push(format!(
+                    "Could not find the embedded attachment {}.",
+                    asset.relative_path,
+                ));
+                continue;
+            };
+            if matches.len() != 1 {
+                warnings.push(format!(
+                    "Could not uniquely locate the moved embedded attachment {}.",
+                    asset.relative_path,
+                ));
+                continue;
+            }
+            let (relative_path, media_type, modified_nanos) = matches[0].clone();
+            asset.relative_path = relative_path.clone();
+            asset.media_type = media_type;
+            asset.modified_nanos = modified_nanos;
+            assigned_paths.insert(portable_path_key(&relative_path));
+            candidates.remove(&asset.fingerprint);
+        }
+    }
+
+    assets
+        .iter()
+        .filter(|(_, asset)| asset.kind == VaultAssetKind::Attachment)
+        .map(|(id, asset)| EmbeddedAttachment {
+            id: id.clone(),
+            relative_path: asset.relative_path.clone(),
+            media_type: asset.media_type.clone(),
+            byte_length: asset.fingerprint.length,
+            opening_disabled: attachment_opening_is_disabled(
+                &root.join(Path::new(&asset.relative_path)),
+            )
+            .unwrap_or(true),
+        })
+        .collect()
+}
+
+fn workspace_asset_limit_reached(
+    image_count: usize,
+    attachment_count: usize,
+    limit: usize,
+) -> bool {
+    image_count.saturating_add(attachment_count) >= limit
+}
+
 fn scan_workspace_files(
     root: &Path,
     warnings: &mut WarningCollector,
-) -> Result<(Vec<ScannedNote>, Vec<ScannedFolder>, Vec<ScannedImage>), String> {
+) -> Result<(
+    Vec<ScannedNote>,
+    Vec<ScannedFolder>,
+    Vec<ScannedImage>,
+    Vec<ScannedAttachment>,
+), String> {
     let mut notes = Vec::new();
     let mut folders = Vec::new();
     let mut images = Vec::new();
+    let mut attachments = Vec::new();
     let mut total_bytes = 0_u64;
     let walker = WalkDir::new(root)
         .follow_links(false)
@@ -4611,13 +6473,16 @@ fn scan_workspace_files(
         if !entry.file_type().is_file() {
             continue;
         }
+        let markdown = is_markdown_path(entry.path());
+        if !markdown
+            && workspace_asset_limit_reached(images.len(), attachments.len(), MAX_VAULT_ASSETS)
+        {
+            warnings.push(format!(
+                "Only the first {MAX_VAULT_ASSETS} asset files are shown in the vault."
+            ));
+            continue;
+        }
         if is_supported_image_path(entry.path()) {
-            if images.len() >= MAX_IMAGE_ASSETS {
-                warnings.push(format!(
-                    "Only the first {MAX_IMAGE_ASSETS} image files are shown in the vault tree."
-                ));
-                continue;
-            }
             if metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
                 continue;
             }
@@ -4634,7 +6499,16 @@ fn scan_workspace_files(
             });
             continue;
         }
-        if !is_markdown_path(entry.path()) {
+        if !markdown {
+            if metadata.len() > MAX_ATTACHMENT_BYTES {
+                continue;
+            }
+            attachments.push(ScannedAttachment {
+                relative_path,
+                media_type: attachment_media_type_for_path(entry.path()).to_owned(),
+                byte_length: metadata.len(),
+                opening_disabled: attachment_opening_is_disabled(entry.path()).unwrap_or(true),
+            });
             continue;
         }
         if notes.len() >= MAX_NOTES {
@@ -4678,7 +6552,8 @@ fn scan_workspace_files(
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     folders.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok((notes, folders, images))
+    attachments.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok((notes, folders, images, attachments))
 }
 
 fn load_recently_deleted_notes(
@@ -5780,11 +7655,7 @@ fn revision_entries_for_root(root: &Path) -> Result<Vec<RevisionEntry>, String> 
         };
         if entry.file_type().is_dir() && relative != STATE_DIRECTORY {
             entries.push((format!("D:{relative}"), None));
-        } else if entry.file_type().is_file()
-            && (is_markdown_path(entry.path())
-                || is_supported_image_path(entry.path())
-                || relative == format!("{STATE_DIRECTORY}/{STATE_FILE}"))
-        {
+        } else if entry.file_type().is_file() {
             let metadata = entry.metadata().map_err(|error| {
                 format!("Could not inspect {}: {error}", entry.path().display())
             })?;
@@ -6771,6 +8642,9 @@ fn resolve_transaction_target_file(
         TransactionTargetKind::Image => {
             resolve_workspace_image_file(root, &target.relative_path, allow_missing)
         }
+        TransactionTargetKind::Attachment => {
+            resolve_workspace_asset_file(root, &target.relative_path, allow_missing)
+        }
     }
 }
 
@@ -6782,7 +8656,10 @@ fn rollback_transaction(
 ) -> bool {
     let mut recovered = rollback_recovery_targets(root, &manifest.recovery_targets, warnings);
     for target in manifest.targets.iter().rev() {
-        if matches!(target.kind, TransactionTargetKind::Image) {
+        if matches!(
+            target.kind,
+            TransactionTargetKind::Image | TransactionTargetKind::Attachment
+        ) {
             match import_image_was_applied(transaction_root, target) {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -7518,7 +9395,7 @@ fn existing_transaction_root(root: &Path, transaction_id: &str) -> Result<PathBu
     for (path, label) in [
         (&state_directory, "workspace metadata"),
         (&transactions_directory, "save transactions"),
-        (&transaction_root, "image import transaction"),
+        (&transaction_root, "asset import transaction"),
     ] {
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| format!("Could not inspect the {label} folder: {error}"))?;
@@ -7556,6 +9433,50 @@ fn resolve_workspace_image_file(
         for component in parent
             .strip_prefix(root)
             .map_err(|_| "An image path escaped the vault.".to_owned())?
+            .components()
+        {
+            current.push(component.as_os_str());
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "Refusing to follow the symbolic link {}.",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => return Err(format!("{} is not a folder.", current.display())),
+                Err(error) if error.kind() == io::ErrorKind::NotFound && allow_missing => break,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    return Err(format!("Could not inspect {}: {error}", current.display()));
+                }
+            }
+        }
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Refusing to use the symbolic link {}.",
+                target.display()
+            ));
+        }
+    }
+    Ok(target)
+}
+
+fn resolve_workspace_asset_file(
+    root: &Path,
+    relative_path: &str,
+    allow_missing: bool,
+) -> Result<PathBuf, String> {
+    validate_attachment_relative_path(relative_path)?;
+    let relative = checked_relative_path(relative_path, false)?;
+    let target = root.join(&relative);
+    if let Some(parent) = target.parent() {
+        let mut current = root.to_path_buf();
+        for component in parent
+            .strip_prefix(root)
+            .map_err(|_| "An attachment path escaped the vault.".to_owned())?
             .components()
         {
             current.push(component.as_os_str());
@@ -8356,7 +10277,19 @@ mod tests {
             embedded_images: Vec::new(),
             image_files: Vec::new(),
             image_embed_settings: ImageEmbedSettings::default(),
+            embedded_attachments: Vec::new(),
+            attachment_files: Vec::new(),
+            attachment_embed_settings: AttachmentEmbedSettings::default(),
         }
+    }
+
+    #[test]
+    fn workspace_asset_limit_counts_images_and_attachments_together() {
+        assert!(!workspace_asset_limit_reached(1, 1, 3));
+        assert!(workspace_asset_limit_reached(2, 1, 3));
+        assert!(workspace_asset_limit_reached(1, 2, 3));
+        assert!(workspace_asset_limit_reached(0, 3, 3));
+        assert!(workspace_asset_limit_reached(usize::MAX, 1, usize::MAX));
     }
 
     fn test_note(content: &str) -> Note {
@@ -8478,6 +10411,74 @@ mod tests {
     }
 
     #[test]
+    fn version_three_image_assets_migrate_to_vault_assets() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nlegacy-image-asset";
+        let workspace = TestWorkspace::new("state-v3-image-asset-migration");
+        fs::write(workspace.root.join("Legacy.png"), PNG)
+            .expect("legacy image should be written");
+        fs::create_dir(workspace.root.join(STATE_DIRECTORY))
+            .expect("state directory should be created");
+        let legacy_state = serde_json::json!({
+            "version": 3,
+            "name": "Legacy vault",
+            "imageAssets": {
+                "image-legacy": {
+                    "relativePath": "Legacy.png",
+                    "mediaType": "image/png",
+                    "fingerprint": fingerprint_bytes(PNG),
+                    "modifiedNanos": 0
+                }
+            }
+        });
+        fs::write(
+            workspace.root.join(STATE_DIRECTORY).join(STATE_FILE),
+            serde_json::to_vec_pretty(&legacy_state).expect("legacy state should encode"),
+        )
+        .expect("legacy state should be written");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Fallback"))
+            .expect("legacy workspace should load");
+        assert_eq!(
+            loaded.vault.embedded_images,
+            vec![EmbeddedImage {
+                id: "image-legacy".to_owned(),
+                relative_path: "Legacy.png".to_owned(),
+                media_type: "image/png".to_owned(),
+            }],
+        );
+
+        let migrated: serde_json::Value = serde_json::from_slice(
+            &fs::read(workspace.root.join(STATE_DIRECTORY).join(STATE_FILE))
+                .expect("migrated state should be readable"),
+        )
+        .expect("migrated state should decode");
+        assert_eq!(migrated["version"], STATE_VERSION);
+        assert!(migrated.get("imageAssets").is_none());
+        assert_eq!(migrated["assets"]["image-legacy"]["kind"], "image");
+    }
+
+    #[test]
+    fn image_reconciliation_leaves_attachment_assets_untouched() {
+        let workspace = TestWorkspace::new("attachment-survives-image-reconciliation");
+        let attachment = StoredVaultAsset {
+            kind: VaultAssetKind::Attachment,
+            relative_path: "Files/Archive.zip".to_owned(),
+            media_type: "application/zip".to_owned(),
+            fingerprint: fingerprint_bytes(b"not-yet-managed"),
+            modified_nanos: 0,
+        };
+        let mut assets = BTreeMap::from([("asset-archive".to_owned(), attachment.clone())]);
+
+        assert!(reconcile_image_assets(
+            &workspace.root,
+            &mut assets,
+            &mut WarningCollector::default(),
+        )
+        .is_empty());
+        assert_eq!(assets.get("asset-archive"), Some(&attachment));
+    }
+
+    #[test]
     fn version_two_transactions_default_recovery_targets() {
         let manifest: TransactionManifest = serde_json::from_value(serde_json::json!({
             "version": 2,
@@ -8575,7 +10576,7 @@ mod tests {
         );
         assert!(snapshot_path.is_file());
 
-        let (scanned_notes, _, _) = scan_workspace_files(
+        let (scanned_notes, _, _, _) = scan_workspace_files(
             &workspace.root,
             &mut WarningCollector::default(),
         )
@@ -9809,7 +11810,7 @@ mod tests {
         assert_eq!(
             state
                 .expect("state should remain readable")
-                .image_assets
+                .assets
                 .get(&embedded.image.id)
                 .expect("asset should remain indexed")
                 .relative_path,
@@ -9958,7 +11959,7 @@ mod tests {
         let mut warnings = WarningCollector::default();
         let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
         assert_eq!(
-            state.unwrap().image_assets[&embedded.image.id].relative_path,
+            state.unwrap().assets[&embedded.image.id].relative_path,
             "Other Images/Renamed.png",
         );
     }
@@ -10014,7 +12015,7 @@ mod tests {
         let mut warnings = WarningCollector::default();
         let (state, _) = read_workspace_state(&workspace.root, &mut warnings);
         assert_eq!(
-            state.unwrap().image_assets["image-loose"].relative_path,
+            state.unwrap().assets["image-loose"].relative_path,
             "Archive/Loose 2.png",
         );
         assert_eq!(fs::read_to_string(workspace.root.join("Note.md")).unwrap(), updated);
@@ -10035,9 +12036,10 @@ mod tests {
             location: ImageEmbedLocation::SpecifiedFolderMirrored,
             folder_path: "Images".to_owned(),
         };
-        state.image_assets.insert(
+        state.assets.insert(
             "image-managed".to_owned(),
-            StoredImageAsset {
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
                 relative_path: "Images/Notes/Photo.png".to_owned(),
                 media_type: "image/png".to_owned(),
                 fingerprint: fingerprint_bytes(PNG),
@@ -10080,9 +12082,10 @@ mod tests {
             location: ImageEmbedLocation::SpecifiedFolderMirrored,
             folder_path: "Images".to_owned(),
         };
-        state.image_assets.insert(
+        state.assets.insert(
             "image-managed".to_owned(),
-            StoredImageAsset {
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
                 relative_path: "Images/Notes/Photo.png".to_owned(),
                 media_type: "image/png".to_owned(),
                 fingerprint: fingerprint_bytes(PNG),
@@ -10274,6 +12277,607 @@ mod tests {
     }
 
     #[test]
+    fn attachment_storage_streams_files_handles_collisions_and_reuses_ids() {
+        let source = TestWorkspace::new("embedded-attachment-source");
+        let workspace = TestWorkspace::new("embedded-attachment-target");
+        let bytes = (0..ATTACHMENT_COPY_BUFFER_BYTES * 3 + 37)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let source_path = source.root.join("Quarterly report.pdf");
+        fs::write(&source_path, &bytes).expect("source attachment should be written");
+        fs::create_dir(workspace.root.join("Projects")).expect("note folder should be created");
+        fs::write(workspace.root.join("Projects/Plan.md"), "# Plan")
+            .expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        let note_folder_settings = AttachmentEmbedSettings {
+            location: ImageEmbedLocation::NoteFolder,
+            folder_path: "ignored".to_owned(),
+        };
+        let first = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            note_folder_settings.clone(),
+            &source_path,
+            None,
+            revision_for_root(&workspace.root).expect("revision should be available"),
+        )
+        .expect("streamed attachment should be embedded");
+        let second = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            note_folder_settings,
+            &source_path,
+            None,
+            first.revision,
+        )
+        .expect("colliding attachment should receive a portable unique name");
+
+        assert_eq!(first.attachment.relative_path, "Projects/Quarterly report.pdf");
+        assert_eq!(second.attachment.relative_path, "Projects/Quarterly report 2.pdf");
+        assert_eq!(first.attachment.media_type, "application/pdf");
+        assert_eq!(first.attachment.byte_length, bytes.len() as u64);
+        assert_eq!(
+            fs::read(workspace.root.join(&first.attachment.relative_path)).unwrap(),
+            bytes,
+        );
+        assert_eq!(
+            fingerprint_attachment_file(&source_path).unwrap(),
+            fingerprint_bytes(&bytes),
+        );
+
+        let root_attachment = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &source_path,
+            None,
+            second.revision,
+        )
+        .expect("vault-root attachment should be embedded");
+        assert_eq!(root_attachment.attachment.relative_path, "Quarterly report.pdf");
+
+        let existing_path = workspace.root.join("Projects/Archive.zip");
+        fs::write(&existing_path, b"existing vault archive")
+            .expect("existing vault attachment should be written");
+        let existing = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &existing_path,
+            Some("Projects/Archive.zip"),
+            revision_for_root(&workspace.root).expect("revision should include the new file"),
+        )
+        .expect("existing vault attachment should be registered without copying");
+        let reused = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &existing_path,
+            Some("Projects/Archive.zip"),
+            existing.revision,
+        )
+        .expect("registered attachment should reuse its stable ID");
+        assert_eq!(reused.attachment.id, existing.attachment.id);
+        assert_eq!(reused.attachment.relative_path, "Projects/Archive.zip");
+        assert!(!workspace.root.join("Archive.zip").exists());
+
+        let case_collision_path = workspace.root.join("Projects/archive.ZIP");
+        fs::write(&case_collision_path, b"different case-only attachment")
+            .expect("case-only collision should be written on this test filesystem");
+        let error = embed_workspace_attachment(
+            &workspace.root,
+            "Projects/Plan.md",
+            AttachmentEmbedSettings::default(),
+            &case_collision_path,
+            Some("Projects/archive.ZIP"),
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect_err("case-only vault attachment collisions should be rejected");
+        assert!(error.contains("differ only by letter case"));
+        fs::remove_file(case_collision_path).expect("case-only fixture should be removed");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("attachment inventory should reload");
+        assert_eq!(loaded.vault.embedded_attachments.len(), 4);
+        assert_eq!(loaded.vault.attachment_files.len(), 4);
+        let loaded_first = loaded
+            .vault
+            .attachment_files
+            .iter()
+            .find(|file| file.asset_id.as_deref() == Some(first.attachment.id.as_str()))
+            .expect("streamed attachment should keep its stable ID");
+        assert_eq!(loaded_first.relative_path, first.attachment.relative_path);
+        assert_eq!(loaded_first.byte_length, bytes.len() as u64);
+        assert_eq!(
+            loaded.vault.attachment_embed_settings,
+            AttachmentEmbedSettings::default(),
+        );
+    }
+
+    #[test]
+    fn attachment_storage_honors_mirrored_locations_and_empty_files() {
+        let source = TestWorkspace::new("mirrored-attachment-source");
+        let workspace = TestWorkspace::new("mirrored-attachment-target");
+        let first_source = source.root.join("First.zip");
+        let empty_source = source.root.join("Empty export");
+        fs::write(&first_source, b"first archive").expect("first source should be written");
+        File::create(&empty_source).expect("empty source should be created");
+        fs::create_dir(workspace.root.join("test1")).expect("test1 should be created");
+        fs::create_dir(workspace.root.join("test2")).expect("test2 should be created");
+        fs::write(workspace.root.join("test1/doc1.md"), "# Doc 1")
+            .expect("doc1 should be written");
+        fs::write(workspace.root.join("test2/doc2.md"), "# Doc 2")
+            .expect("doc2 should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let settings = AttachmentEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Files".to_owned(),
+        };
+
+        let first = embed_workspace_attachment(
+            &workspace.root,
+            "test1/doc1.md",
+            settings.clone(),
+            &first_source,
+            None,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect("first mirrored attachment should be embedded");
+        let second = embed_workspace_attachment(
+            &workspace.root,
+            "test2/doc2.md",
+            settings.clone(),
+            &empty_source,
+            None,
+            first.revision,
+        )
+        .expect("empty extensionless attachment should be embedded");
+
+        assert_eq!(first.attachment.relative_path, "Files/test1/First.zip");
+        assert_eq!(second.attachment.relative_path, "Files/test2/Empty export");
+        assert_eq!(second.attachment.byte_length, 0);
+        assert_eq!(second.attachment.media_type, "application/octet-stream");
+        assert_eq!(fs::read(workspace.root.join(&second.attachment.relative_path)).unwrap(), b"");
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("mirrored attachments should reload");
+        assert_eq!(loaded.vault.attachment_embed_settings, settings);
+        assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test1"));
+        assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test2"));
+    }
+
+    #[test]
+    fn reorganizing_an_attachment_moves_it_and_updates_references() {
+        let source = TestWorkspace::new("reorganized-attachment-source");
+        let workspace = TestWorkspace::new("reorganized-attachment-target");
+        let bytes = b"portable report contents";
+        let source_path = source.root.join("Quarterly report.pdf");
+        fs::write(&source_path, bytes).expect("source attachment should be written");
+        fs::create_dir(workspace.root.join("Files")).expect("file folder should be created");
+        fs::create_dir(workspace.root.join("Archive")).expect("archive folder should be created");
+        fs::write(workspace.root.join("Note.md"), "# Note")
+            .expect("note should be written");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("note-1".to_owned(), "Note.md".to_owned());
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let embedded = embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Files".to_owned(),
+            },
+            &source_path,
+            None,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect("attachment should be embedded");
+        let original = format!(
+            "[Tracked](Files/Quarterly%20report.pdf#oah-asset={})\n[Path only](Files/Quarterly%20report.pdf)",
+            embedded.attachment.id,
+        );
+        fs::write(workspace.root.join("Note.md"), &original)
+            .expect("attachment references should be written");
+        let updated = format!(
+            "[Tracked](Archive/Report.pdf#oah-asset={})\n[Path only](Archive/Report.pdf#oah-asset={})",
+            embedded.attachment.id, embedded.attachment.id,
+        );
+
+        let moved = relocate_workspace_attachment(
+            &workspace.root,
+            "Files/Quarterly report.pdf",
+            "Archive/Report.pdf",
+            &embedded.attachment.id,
+            &[WorkspaceImageNoteUpdate {
+                note_id: "note-1".to_owned(),
+                relative_path: "Note.md".to_owned(),
+                expected_content: original,
+                content: updated.clone(),
+            }],
+            revision_for_root(&workspace.root).unwrap(),
+            false,
+        )
+        .expect("attachment should move and be renamed");
+
+        assert!(!workspace.root.join("Files/Quarterly report.pdf").exists());
+        assert_eq!(fs::read(workspace.root.join("Archive/Report.pdf")).unwrap(), bytes);
+        assert_eq!(fs::read_to_string(workspace.root.join("Note.md")).unwrap(), updated);
+        assert_eq!(moved.attachment.relative_path, "Archive/Report.pdf");
+        assert_eq!(moved.attachment.byte_length, bytes.len() as u64);
+        let (state, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+        assert_eq!(
+            state.unwrap().assets[&embedded.attachment.id].relative_path,
+            "Archive/Report.pdf",
+        );
+    }
+
+    #[test]
+    fn mirrored_attachments_only_move_with_their_note() {
+        let workspace = TestWorkspace::new("managed-note-move-attachment");
+        let bytes = b"managed attachment";
+        fs::create_dir_all(workspace.root.join("Files/Notes"))
+            .expect("source mirror folder should be created");
+        fs::create_dir(workspace.root.join("Elsewhere"))
+            .expect("ordinary destination should be created");
+        fs::write(workspace.root.join("Files/Notes/Report.pdf"), bytes)
+            .expect("managed attachment should be written");
+        let mut state = WorkspaceState::default();
+        state.attachment_embed_settings = AttachmentEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Files".to_owned(),
+        };
+        state.assets.insert(
+            "attachment-managed".to_owned(),
+            StoredVaultAsset {
+                kind: VaultAssetKind::Attachment,
+                relative_path: "Files/Notes/Report.pdf".to_owned(),
+                media_type: "application/pdf".to_owned(),
+                fingerprint: fingerprint_bytes(bytes),
+                modified_nanos: file_modified_nanos_for_path(
+                    &workspace.root.join("Files/Notes/Report.pdf"),
+                )
+                .unwrap(),
+            },
+        );
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+
+        let manual_error = relocate_workspace_attachment(
+            &workspace.root,
+            "Files/Notes/Report.pdf",
+            "Elsewhere/Report.pdf",
+            "attachment-managed",
+            &[],
+            revision_for_root(&workspace.root).unwrap(),
+            false,
+        )
+        .expect_err("mirrored attachments should reject manual moves");
+        assert!(manual_error.contains("mirrored attachment folder"));
+
+        let rename_error = relocate_workspace_attachment(
+            &workspace.root,
+            "Files/Notes/Report.pdf",
+            "Files/Archive/Renamed.pdf",
+            "attachment-managed",
+            &[],
+            revision_for_root(&workspace.root).unwrap(),
+            true,
+        )
+        .expect_err("managed note moves must preserve the attachment name");
+        assert!(rename_error.contains("without renaming"));
+
+        let moved = relocate_workspace_attachment(
+            &workspace.root,
+            "Files/Notes/Report.pdf",
+            "Files/Archive/Report.pdf",
+            "attachment-managed",
+            &[],
+            revision_for_root(&workspace.root).unwrap(),
+            true,
+        )
+        .expect("a note move should carry its managed attachment");
+        assert_eq!(moved.attachment.relative_path, "Files/Archive/Report.pdf");
+        assert_eq!(fs::read(workspace.root.join("Files/Archive/Report.pdf")).unwrap(), bytes);
+        assert!(!workspace.root.join("Files/Notes/Report.pdf").exists());
+    }
+
+    #[test]
+    fn attachment_reconciliation_recovers_external_moves_by_stable_id() {
+        let source = TestWorkspace::new("moved-attachment-source");
+        let workspace = TestWorkspace::new("moved-attachment-target");
+        let source_path = source.root.join("Archive.zip");
+        fs::write(&source_path, b"unique archive bytes")
+            .expect("source archive should be written");
+        fs::write(workspace.root.join("Note.md"), "# Note")
+            .expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let embedded = embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &source_path,
+            None,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect("archive should be embedded");
+        fs::create_dir(workspace.root.join("Moved"))
+            .expect("external destination should be created");
+        fs::rename(
+            workspace.root.join("Archive.zip"),
+            workspace.root.join("Moved/Renamed.zip"),
+        )
+        .expect("archive should move outside the app");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("workspace should recover the moved archive");
+        let recovered = loaded
+            .vault
+            .embedded_attachments
+            .iter()
+            .find(|attachment| attachment.id == embedded.attachment.id)
+            .expect("stable attachment should remain indexed");
+        assert_eq!(recovered.relative_path, "Moved/Renamed.zip");
+        assert_eq!(
+            loaded
+                .vault
+                .attachment_files
+                .iter()
+                .find(|attachment| attachment.asset_id.as_deref()
+                    == Some(embedded.attachment.id.as_str()))
+                .expect("moved file should retain its stable ID")
+                .relative_path,
+            "Moved/Renamed.zip",
+        );
+        let (_, resolved) = resolve_attachment_action_source(
+            &workspace.root,
+            "Archive.zip",
+            Some(&embedded.attachment.id),
+        )
+        .expect("stable action resolution should use the recovered path");
+        assert_eq!(resolved, workspace.root.join("Moved/Renamed.zip"));
+    }
+
+    #[test]
+    fn attachment_actions_use_portable_paths_only_when_stable_metadata_is_absent() {
+        let workspace = TestWorkspace::new("portable-attachment-action");
+        fs::create_dir(workspace.root.join("Files"))
+            .expect("attachment folder should be created");
+        fs::write(workspace.root.join("Files/Report#1.pdf"), b"portable report")
+            .expect("portable attachment should be written");
+
+        let (relative_path, source) = resolve_attachment_action_source(
+            &workspace.root,
+            "Files/Report#1.pdf",
+            Some("attachment-exported"),
+        )
+        .expect("an exported stable ID should fall back to its portable path");
+        assert_eq!(relative_path, "Files/Report#1.pdf");
+        assert_eq!(source, workspace.root.join("Files/Report#1.pdf"));
+
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("empty workspace state should be written");
+        let (_, source_with_empty_state) = resolve_attachment_action_source(
+            &workspace.root,
+            "Files/Report#1.pdf",
+            Some("attachment-exported"),
+        )
+        .expect("an empty stable index should also use the portable path");
+        assert_eq!(
+            source_with_empty_state,
+            workspace.root.join("Files/Report#1.pdf"),
+        );
+
+        let invalid_id_error = resolve_attachment_action_source(
+            &workspace.root,
+            "Files/Report#1.pdf",
+            Some("attachment/invalid"),
+        )
+        .expect_err("an invalid stable ID should not fall back to the portable path");
+        assert!(invalid_id_error.contains("invalid stable ID"));
+
+        let mut state = WorkspaceState::default();
+        state.assets.insert(
+            "attachment-exported".to_owned(),
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
+                relative_path: "Image.png".to_owned(),
+                media_type: "image/png".to_owned(),
+                fingerprint: fingerprint_bytes(b"different asset kind"),
+                modified_nanos: 0,
+            },
+        );
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+        let wrong_kind_error = resolve_attachment_action_source(
+            &workspace.root,
+            "Files/Report#1.pdf",
+            Some("attachment-exported"),
+        )
+        .expect_err("a wrong-kind stable record should remain authoritative");
+        assert!(wrong_kind_error.contains("different file type"));
+
+        fs::write(workspace_state_path(&workspace.root), b"not json")
+            .expect("unreadable workspace metadata should be written");
+        let unreadable_state_error = resolve_attachment_action_source(
+            &workspace.root,
+            "Files/Report#1.pdf",
+            Some("attachment-exported"),
+        )
+        .expect_err("unreadable metadata should not permit a portable fallback");
+        assert!(unreadable_state_error.contains("metadata is unreadable or newer"));
+    }
+
+    #[test]
+    fn attachment_actions_classify_risky_files_and_keep_archive_copies_outside_the_vault() {
+        let workspace = TestWorkspace::new("attachment-action-vault");
+        let outside = TestWorkspace::new("attachment-action-outside");
+        assert!(is_archive_attachment_path(Path::new("Backup.ZIP")));
+        assert!(is_executable_attachment_path(Path::new("Installer.MSI")));
+        for path in [
+            "Script.command",
+            "Script.vbs",
+            "Page.hta",
+            "Screen.scr",
+            "Control.cpl",
+            "Package.msix",
+        ] {
+            assert!(
+                is_executable_attachment_path(Path::new(path)),
+                "{path} should be blocked"
+            );
+        }
+        assert!(!is_executable_attachment_path(Path::new("Report.pdf")));
+
+        let extensionless_script = workspace.root.join("extensionless-script");
+        fs::write(&extensionless_script, b"#!/bin/sh\necho unsafe\n")
+            .expect("extensionless script should be written");
+        assert!(attachment_opening_is_disabled(&extensionless_script).unwrap());
+
+        let disguised_binary = workspace.root.join("disguised-document.txt");
+        fs::write(&disguised_binary, b"\x7fELF\x02\x01\x01\x00")
+            .expect("disguised executable should be written");
+        assert!(attachment_opening_is_disabled(&disguised_binary).unwrap());
+
+        let extensionless_text = workspace.root.join("extensionless-text");
+        fs::write(&extensionless_text, b"ordinary text")
+            .expect("extensionless text should be written");
+        assert!(!attachment_opening_is_disabled(&extensionless_text).unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = fs::metadata(&extensionless_text).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&extensionless_text, permissions).unwrap();
+            assert!(attachment_opening_is_disabled(&extensionless_text).unwrap());
+        }
+
+        let inside = workspace.root.join("Copy.zip");
+        let error = validate_external_attachment_copy_target(&workspace.root, &inside)
+            .expect_err("archive copies inside the vault should be rejected");
+        assert!(error.contains("outside the active vault"));
+
+        let outside_target = outside.root.join("Copy.zip");
+        assert_eq!(
+            validate_external_attachment_copy_target(&workspace.root, &outside_target)
+                .expect("an unused external path should be accepted"),
+            outside_target,
+        );
+        fs::write(&outside_target, b"existing")
+            .expect("existing target should be written");
+        assert!(validate_external_attachment_copy_target(
+            &workspace.root,
+            &outside_target,
+        )
+        .expect_err("archive copies should not overwrite existing files")
+        .contains("already exists"));
+    }
+
+    #[test]
+    fn attachment_storage_rejects_stale_unsafe_and_oversized_sources() {
+        let source = TestWorkspace::new("attachment-validation-source");
+        let workspace = TestWorkspace::new("attachment-validation-target");
+        fs::write(workspace.root.join("Note.md"), "# Note").expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+        let source_path = source.root.join("Document.pdf");
+        fs::write(&source_path, b"document").expect("source should be written");
+        fs::write(source.root.join("Note.md"), "# Not an attachment")
+            .expect("Markdown source should be written");
+        fs::write(source.root.join("Image.png"), b"not relevant")
+            .expect("image source should be written");
+
+        assert!(validate_attachment_source_file(
+            source.root.join("Note.md").to_str().unwrap(),
+        )
+        .is_err());
+        assert!(validate_attachment_source_file(
+            source.root.join("Image.png").to_str().unwrap(),
+        )
+        .is_err());
+        assert!(validate_attachment_source_file(source.root.to_str().unwrap()).is_err());
+        assert!(validate_attachment_source_file("relative.pdf").is_err());
+
+        let oversized = source.root.join("Oversized.zip");
+        File::create(&oversized)
+            .expect("oversized fixture should be created")
+            .set_len(MAX_ATTACHMENT_BYTES + 1)
+            .expect("sparse oversized fixture should be sized");
+        let oversized_error = validate_attachment_source_file(oversized.to_str().unwrap())
+            .expect_err("oversized attachment should be rejected before reading");
+        assert!(oversized_error.contains("larger than"));
+
+        let stale_revision = revision_for_root(&workspace.root).unwrap();
+        fs::write(workspace.root.join("External.zip"), b"external change")
+            .expect("external attachment should be written");
+        assert_ne!(revision_for_root(&workspace.root).unwrap(), stale_revision);
+        let error = embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &source_path,
+            None,
+            stale_revision,
+        )
+        .expect_err("stale revision should reject the attachment copy");
+        assert!(error.contains("vault changed"));
+        assert!(!workspace.root.join("Document.pdf").exists());
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
+            .expect("untracked attachment should be inventoried");
+        assert_eq!(loaded.vault.attachment_files.len(), 1);
+        assert_eq!(loaded.vault.attachment_files[0].relative_path, "External.zip");
+        assert_eq!(loaded.vault.attachment_files[0].asset_id, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_storage_refuses_source_and_destination_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let source = TestWorkspace::new("attachment-symlink-source");
+        let workspace = TestWorkspace::new("attachment-symlink-target");
+        let outside = TestWorkspace::new("attachment-symlink-outside");
+        let source_path = source.root.join("Archive.zip");
+        fs::write(&source_path, b"archive").expect("source should be written");
+        symlink(&source_path, source.root.join("Archive link.zip"))
+            .expect("source symlink should be created");
+        symlink(&outside.root, workspace.root.join("Linked"))
+            .expect("destination symlink should be created");
+        fs::write(workspace.root.join("Note.md"), "# Note").expect("note should be written");
+        write_workspace_state(&workspace.root, &WorkspaceState::default())
+            .expect("workspace state should be written");
+
+        assert!(validate_attachment_source_file(
+            source.root.join("Archive link.zip").to_str().unwrap(),
+        )
+        .is_err());
+        let error = embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Linked".to_owned(),
+            },
+            &source_path,
+            None,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect_err("destination symlink should be rejected");
+        assert!(error.contains("symbolic link"));
+        assert!(!outside.root.join("Archive.zip").exists());
+    }
+
+    #[test]
     fn imports_images_without_overwriting_vault_collisions() {
         const IMPORTED: &[u8] = b"\x89PNG\r\n\x1a\nimported-image";
         const EXISTING: &[u8] = b"\x89PNG\r\n\x1a\nexisting-image";
@@ -10361,25 +12965,126 @@ mod tests {
     }
 
     #[test]
-    fn failed_note_import_rolls_back_its_copied_images() {
+    fn imports_images_and_streamed_attachments_in_one_transaction() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\ncombined-import-image";
+        const REPORT: &[u8] = b"combined-import-attachment";
+        const EXISTING: &[u8] = b"existing-report";
+        let source = TestWorkspace::new("portable-asset-source");
+        let workspace = TestWorkspace::new("portable-asset-target");
+        fs::create_dir_all(source.root.join("Assets")).unwrap();
+        fs::create_dir_all(workspace.root.join("Assets")).unwrap();
+        fs::write(source.root.join("Assets/Diagram.png"), PNG).unwrap();
+        fs::write(source.root.join("Assets/Report.pdf"), REPORT).unwrap();
+        fs::write(source.root.join("Assets/Empty.bin"), []).unwrap();
+        fs::write(workspace.root.join("Assets/Report.pdf"), EXISTING).unwrap();
+
+        let mut result = begin_workspace_asset_import(
+            &workspace.root,
+            &source.root,
+            &["Assets/Diagram.png".to_owned()],
+            &[
+                "Assets/Report.pdf".to_owned(),
+                "Assets/Empty.bin".to_owned(),
+            ],
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect("images and attachments should share an import transaction");
+
+        assert_eq!(result.image_count, 1);
+        assert_eq!(result.attachment_count, 2);
+        assert_eq!(
+            result.path_mappings.get("Assets/Report.pdf"),
+            Some(&"Assets/Report 2.pdf".to_owned()),
+        );
+        assert_eq!(
+            result.attachment_files,
+            vec![
+                VaultAttachmentFile {
+                    asset_id: None,
+                    relative_path: "Assets/Report 2.pdf".to_owned(),
+                    media_type: "application/pdf".to_owned(),
+                    byte_length: REPORT.len() as u64,
+                    opening_disabled: false,
+                },
+                VaultAttachmentFile {
+                    asset_id: None,
+                    relative_path: "Assets/Empty.bin".to_owned(),
+                    media_type: "application/octet-stream".to_owned(),
+                    byte_length: 0,
+                    opening_disabled: true,
+                },
+            ],
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Assets/Diagram.png")).unwrap(),
+            PNG,
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Assets/Report.pdf")).unwrap(),
+            EXISTING,
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Assets/Report 2.pdf")).unwrap(),
+            REPORT,
+        );
+        assert_eq!(
+            fs::metadata(workspace.root.join("Assets/Empty.bin"))
+                .unwrap()
+                .len(),
+            0,
+        );
+
+        let transaction_id = result
+            .transaction_id
+            .take()
+            .expect("copied assets should retain a transaction");
+        let (_, manifest) = pending_workspace_image_import(&workspace.root, &transaction_id)
+            .expect("both asset kinds should produce a valid pending import");
+        assert!(manifest
+            .targets
+            .iter()
+            .any(|target| target.kind == TransactionTargetKind::Image));
+        assert_eq!(
+            manifest
+                .targets
+                .iter()
+                .filter(|target| target.kind == TransactionTargetKind::Attachment)
+                .count(),
+            2,
+        );
+        finalize_workspace_image_import(
+            &workspace.root,
+            &transaction_id,
+            &mut WarningCollector::default(),
+        )
+        .expect("the combined transaction should finalize");
+    }
+
+    #[test]
+    fn failed_note_import_rolls_back_its_copied_assets() {
         const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrollback-with-notes";
+        const PDF: &[u8] = b"rollback-attachment-with-notes";
         let source = TestWorkspace::new("portable-image-note-rollback-source");
         let workspace = TestWorkspace::new("portable-image-note-rollback-target");
         fs::write(source.root.join("Image.png"), PNG)
             .expect("source image should be written");
+        fs::write(source.root.join("Report.pdf"), PDF)
+            .expect("source attachment should be written");
         let original_revision = revision_for_root(&workspace.root).unwrap();
-        let image_result = begin_workspace_image_import(
+        let image_result = begin_workspace_asset_import(
             &workspace.root,
             &source.root,
             &["Image.png".to_owned()],
+            &["Report.pdf".to_owned()],
             original_revision,
         )
-        .expect("image import should begin");
+        .expect("asset import should begin");
         let transaction_id = image_result
             .transaction_id
             .as_deref()
             .expect("copied images should retain a transaction");
         assert!(workspace.root.join("Image.png").exists());
+        assert!(workspace.root.join("Report.pdf").exists());
 
         let mut invalid_vault = empty_vault("Invalid import");
         invalid_vault.folders.push(Folder {
@@ -10399,6 +13104,7 @@ mod tests {
         assert!(!result.saved);
         assert!(result.error.is_some_and(|error| error.contains("folder")));
         assert!(!workspace.root.join("Image.png").exists());
+        assert!(!workspace.root.join("Report.pdf").exists());
         assert_eq!(result.revision, original_revision);
         assert!(existing_transaction_root(&workspace.root, transaction_id).is_err());
     }
@@ -10658,7 +13364,7 @@ mod tests {
         };
         write_transaction_manifest(&transaction_root, &manifest)
             .expect("applying manifest should be written");
-        ensure_import_image_parent(&workspace.root, &target.relative_path)
+        ensure_asset_parent(&workspace.root, &target.relative_path, "image")
             .expect("target parent should be created");
         apply_staged_import_image(&workspace.root, &transaction_root, &target)
             .expect("image should begin applying");

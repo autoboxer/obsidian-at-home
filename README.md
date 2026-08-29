@@ -16,7 +16,7 @@
 
 Notes stay as Markdown files in folders you choose. No account is required, and notes are not sent to a server.
 
-This is not a complete Obsidian replacement: cloud sync, non-image attachments, graph view, automation, and community plugins are not supported.
+This is not a complete Obsidian replacement: cloud sync, graph view, automation, and community plugins are not supported.
 
 > [!NOTE]
 > This project is not affiliated with or endorsed by Obsidian or Dynalist Inc.
@@ -26,7 +26,7 @@ This is not a complete Obsidian replacement: cloud sync, non-image attachments, 
 - Create, open, and switch between vaults of ordinary `.md` and `.markdown` files.
 - Organize notes in nested folders with drag-and-drop and right-click file actions.
 - Write in a unified live Markdown editor with inline formatting, interactive task checkboxes, tables, spellcheck, syntax-highlighted fenced code blocks, and find-in-note.
-- Embed local images from a file or the clipboard, resize them in Markdown, and keep their files with the vault.
+- Embed local images or other files, resize images in Markdown, and keep assets with the vault.
 - Move through note history with back and forward controls, or revisit notes from **Recent notes**.
 - Return to each note's cursor and scroll position, even after restarting the app.
 - Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
@@ -43,10 +43,10 @@ Each vault is a folder on your computer. Notes are ordinary Markdown files you c
 
 Open an existing Markdown or Obsidian vault directly, or use Settings to:
 
-- **Import from Obsidian** copies notes, folders, supported image files, and CSS snippets into the current vault. Notes can be merged or replaced; the source is unchanged.
-- **Export portable vault** creates an Obsidian-compatible copy of notes, image files, templates, and CSS snippets without overwriting existing folders.
+- **Import from Obsidian** copies notes, folders, supported image files, non-image attachments, and CSS snippets into the current vault. Notes can be merged or replaced; the source is unchanged.
+- **Export portable vault** creates an Obsidian-compatible copy of notes, image files, non-image attachments, templates, and CSS snippets without overwriting existing folders.
 
-Neither option copies non-image attachments, Canvas files, themes, plugins, hotkeys, or workspace settings. They are not backup or sync tools.
+Neither option copies Canvas files, themes, plugins, hotkeys, or workspace settings. They are not backup or sync tools.
 
 ### Embedded images
 
@@ -55,6 +55,14 @@ Use the image button, press `Ctrl/Cmd` + `Shift` + `I`, or paste an image from t
 Settings can store new images at the vault root, beside the containing note, in a chosen vault-relative folder, or in that chosen folder with the note's folder path mirrored below it. App-created references include an `#oah-image=...` fragment so the app can recover a uniquely identifiable renamed or moved image while retaining a portable relative path for other Markdown readers.
 
 Supported image files appear in the left file tree. Drag an image from the tree into a note to insert another reference without duplicating the file, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed from the tree or dragged between folders; references update with the file. A mirrored image folder is app-managed, so its images cannot be manually renamed or moved. Removing the final reference does not delete the image, so an unused image remains available in the tree until it is removed from the vault explicitly.
+
+### Embedded files
+
+Use the file button or press `Ctrl/Cmd` + `Shift` + `A` to copy a non-image file into the vault. Attachments use ordinary Markdown links such as `[Report.pdf](Attachments/Report.pdf)`, so other Markdown readers retain a usable path. App-created links also include an `#oah-asset=...` fragment that lets Obsidian At Home recover a uniquely identifiable attachment after it is renamed or moved.
+
+Attachment cards work on their own and inside lists, tasks, blockquotes, and tables. Ordinary documents open in their operating-system default app only after an explicit click. Archives use **Save archive as…** instead of opening or extracting inside the vault; the destination must be outside the active vault. Executables and installers cannot be opened from the app.
+
+Settings provide the same root, beside-note, chosen-folder, and mirrored-folder storage options used by images. Attachments appear in the left file tree and can be dragged into notes or organized between ordinary folders while their references update. Mirrored attachment folders are app-managed. Removing the final reference does not delete the attachment.
 
 ## Build and install
 

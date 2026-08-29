@@ -4,6 +4,12 @@ import { markdownHeadingSlug } from "./headingLinks";
 import { highlightCode } from "./highlight";
 import { findClosingInlineMarkupDelimiter } from "./inlineMarkup";
 import {
+  markdownAttachmentPresentation,
+  parseMarkdownAttachmentAt,
+  type MarkdownAttachmentMetadata,
+  type ParsedMarkdownAttachment,
+} from "./markdownAttachments";
+import {
   markdownImageStyle,
   parseMarkdownImageAt,
   type ParsedMarkdownImage,
@@ -11,6 +17,8 @@ import {
 import { parseWikiLinkAt } from "./wikiLinks";
 
 export interface MarkdownRenderOptions {
+  /** Recognize an extensionless attachment only when its vault inventory contains the file. */
+  acceptExtensionlessAttachment?: (destination: string) => boolean;
   /** Used only to decorate resolvable/unresolvable wiki links. */
   resolveWikiLink?: (
     target: string,
@@ -18,6 +26,9 @@ export interface MarkdownRenderOptions {
   ) => Note | boolean | null | undefined;
   headingIdPrefix?: string;
   externalLinksInNewTab?: boolean;
+  resolveAttachment?: (
+    attachment: ParsedMarkdownAttachment,
+  ) => MarkdownAttachmentMetadata | null | undefined;
   resolveImage?: (image: ParsedMarkdownImage) => string | null | undefined;
 }
 
@@ -411,6 +422,15 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
       }
 
       if (character === "[") {
+        const attachment = parseMarkdownAttachmentAt(source, index, {
+          acceptExtensionless: context.options.acceptExtensionlessAttachment,
+        });
+        if (attachment) {
+          html += renderMarkdownAttachment(attachment, context);
+          index = attachment.end;
+          continue;
+        }
+
         const markdownLink = parseMarkdownLink(source, index, context, depth);
         if (markdownLink) {
           html += markdownLink.html;
@@ -481,6 +501,31 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
   }
 
   return html;
+}
+
+function renderMarkdownAttachment(
+  attachment: ParsedMarkdownAttachment,
+  context: RenderContext,
+): string {
+  const metadata = context.options.resolveAttachment?.(attachment) ?? undefined;
+  const presentation = markdownAttachmentPresentation(attachment, metadata);
+  const assetAttribute = attachment.assetId
+    ? ` data-attachment-asset-id="${escapeHtml(attachment.assetId)}"`
+    : "";
+  const titleAttribute = attachment.title
+    ? ` title="${escapeHtml(attachment.title)}"`
+    : "";
+  const ariaLabel = `${presentation.name}, ${presentation.typeLabel}, ${presentation.sizeLabel}`;
+
+  return `<span class="markdown-attachment-card" role="group" aria-label="${escapeHtml(
+    ariaLabel,
+  )}" data-attachment-destination="${escapeHtml(attachment.destination)}"${assetAttribute}${titleAttribute}><span class="attachment-card__icon" aria-hidden="true">${escapeHtml(
+    presentation.iconLabel,
+  )}</span><span class="attachment-card__copy"><span class="attachment-card__name">${escapeHtml(
+    presentation.name,
+  )}</span><span class="attachment-card__details">${escapeHtml(
+    `${presentation.typeLabel} · ${presentation.sizeLabel}`,
+  )}</span></span></span>`;
 }
 
 function renderMarkdownImage(

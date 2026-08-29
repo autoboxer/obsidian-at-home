@@ -2,12 +2,15 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { formatCommandShortcut } from "../lib/keyboard";
 import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
+import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
 import {
   createFolder,
   createNote,
   FOLDER_DRAG_MIME,
+  isMirrorManagedAttachment,
   isMirrorManagedImage,
   moveFolder,
+  moveVaultAttachmentToFolder,
   moveVaultImageToFolder,
   moveNoteToFolder,
   NOTE_DRAG_MIME,
@@ -22,6 +25,7 @@ import {
   visibleNotes,
 } from "../stores/vault";
 import AppIcon from "./AppIcon.vue";
+import VaultTreeAttachment from "./VaultTreeAttachment.vue";
 import VaultTreeFolder from "./VaultTreeFolder.vue";
 import VaultTreeImage from "./VaultTreeImage.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
@@ -106,6 +110,23 @@ const rootImages = computed(() => visibleImages.value.filter((image) =>
   !image.relativePath.includes("/"),
 ));
 
+const visibleAttachments = computed(() => {
+  if (vaultState.selectedFolderId !== "all") {
+    return [];
+  }
+  const filter = uiState.noteFilter.trim().toLocaleLowerCase();
+
+  return [...vaultState.attachmentFiles]
+    .filter((attachment) =>
+      !filter || attachment.relativePath.toLocaleLowerCase().includes(filter)
+    )
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+});
+
+const rootAttachments = computed(() => visibleAttachments.value.filter((attachment) =>
+  !attachment.relativePath.includes("/"),
+));
+
 const emptyTreeMessage = computed(() => {
   if (vaultState.selectedFolderId === "recent") {
     return "No recent notes";
@@ -143,9 +164,14 @@ const emptyTreeIcon = computed(() => {
 });
 
 watch(
-  () => [treeDragState.noteId, treeDragState.folderId, treeDragState.imagePath] as const,
-  ([noteId, folderId, imagePath]) => {
-    if (!noteId && !folderId && !imagePath) {
+  () => [
+    treeDragState.noteId,
+    treeDragState.folderId,
+    treeDragState.imagePath,
+    treeDragState.attachmentPath,
+  ] as const,
+  ([noteId, folderId, imagePath, attachmentPath]) => {
+    if (!noteId && !folderId && !imagePath && !attachmentPath) {
       rootDropActive.value = false;
       rootDropInvalid.value = false;
     }
@@ -186,10 +212,16 @@ function openVaultChooser(): void {
 function isTreeDrag(event: DragEvent): boolean {
   const types = Array.from(event.dataTransfer?.types ?? []);
 
-  return Boolean(treeDragState.noteId || treeDragState.folderId || treeDragState.imagePath)
+  return Boolean(
+    treeDragState.noteId
+    || treeDragState.folderId
+    || treeDragState.imagePath
+    || treeDragState.attachmentPath
+  )
     || types.includes(NOTE_DRAG_MIME)
     || types.includes(FOLDER_DRAG_MIME)
-    || types.includes(VAULT_IMAGE_DRAG_MIME);
+    || types.includes(VAULT_IMAGE_DRAG_MIME)
+    || types.includes(VAULT_ATTACHMENT_DRAG_MIME);
 }
 
 function handleRootDragEnter(event: DragEvent): void {
@@ -237,6 +269,7 @@ async function handleRootDrop(event: DragEvent): Promise<void> {
     treeDragState.noteId = null;
     treeDragState.folderId = null;
     treeDragState.imagePath = null;
+    treeDragState.attachmentPath = null;
 
     return;
   }
@@ -244,10 +277,19 @@ async function handleRootDrop(event: DragEvent): Promise<void> {
   const folderId = event.dataTransfer?.getData(FOLDER_DRAG_MIME).trim() || treeDragState.folderId;
   const imagePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim()
     || treeDragState.imagePath;
+  const attachmentPath = event.dataTransfer?.getData(VAULT_ATTACHMENT_DRAG_MIME).trim()
+    || treeDragState.attachmentPath;
   const image = imagePath
     ? vaultState.imageFiles.find((candidate) => candidate.relativePath === imagePath)
     : undefined;
-  if (image) {
+  const attachment = attachmentPath
+    ? vaultState.attachmentFiles.find((candidate) =>
+      candidate.relativePath === attachmentPath
+    )
+    : undefined;
+  if (attachment) {
+    await moveVaultAttachmentToFolder(attachment, null);
+  } else if (image) {
     await moveVaultImageToFolder(image, null);
   } else if (noteId) {
     await moveNoteToFolder(noteId, null);
@@ -257,10 +299,20 @@ async function handleRootDrop(event: DragEvent): Promise<void> {
   treeDragState.noteId = null;
   treeDragState.folderId = null;
   treeDragState.imagePath = null;
+  treeDragState.attachmentPath = null;
   rootExpanded.value = true;
 }
 
 function isInvalidRootFolderDrop(): boolean {
+  if (treeDragState.attachmentPath) {
+    const attachment = vaultState.attachmentFiles.find((candidate) =>
+      candidate.relativePath === treeDragState.attachmentPath
+    );
+    if (attachment) {
+      return isMirrorManagedAttachment(attachment.relativePath)
+        || !attachment.relativePath.includes("/");
+    }
+  }
   if (treeDragState.imagePath) {
     const image = vaultState.imageFiles.find((candidate) =>
       candidate.relativePath === treeDragState.imagePath
@@ -418,7 +470,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
                 type="button"
                 class="vault-tree-root-main"
                 :aria-expanded="rootExpanded"
-                title="Vault root · Drop notes, folders, or images here to move them to the root"
+                title="Vault root · Drop notes, folders, images, or attachments here to move them to the root"
                 @click="rootExpanded = !rootExpanded"
                 @keydown="handleRootKeydown"
               >
@@ -437,6 +489,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
                   :folder="folder"
                   :notes="visibleNotes"
                   :images="visibleImages"
+                  :attachments="visibleAttachments"
                   :depth="1"
                   :show-empty-folders="showEmptyFolders"
                 />
@@ -447,8 +500,17 @@ function handleRootKeydown(event: KeyboardEvent): void {
                   :image="image"
                   :depth="1"
                 />
+                <VaultTreeAttachment
+                  v-for="attachment in rootAttachments"
+                  :key="attachment.relativePath"
+                  :attachment="attachment"
+                  :depth="1"
+                />
 
-                <div v-if="!visibleNotes.length && !visibleImages.length" class="vault-tree-empty">
+                <div
+                  v-if="!visibleNotes.length && !visibleImages.length && !visibleAttachments.length"
+                  class="vault-tree-empty"
+                >
                   <AppIcon :name="emptyTreeIcon" :size="18" />
                   <span>{{ emptyTreeMessage }}</span>
                 </div>
@@ -471,7 +533,10 @@ function handleRootKeydown(event: KeyboardEvent): void {
     </div>
 
     <footer class="explorer-footer">
-      <span>{{ vaultState.notes.length }} notes · {{ vaultState.imageFiles.length }} images</span>
+      <span>
+        {{ vaultState.notes.length }} notes · {{ vaultState.imageFiles.length }} images ·
+        {{ vaultState.attachmentFiles.length }} attachments
+      </span>
     </footer>
   </aside>
 </template>

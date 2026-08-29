@@ -4,6 +4,7 @@ import {
   writeText as writeNativeClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import type {
+  AttachmentEmbedSettings,
   ExportResult,
   ImageEmbedSettings,
   ImportResult,
@@ -12,13 +13,17 @@ import type {
   VaultData,
   VaultDescriptor,
   WorkspaceArchiveResult,
+  WorkspaceAttachmentCopyResult,
+  WorkspaceAttachmentNoteUpdate,
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
+  WorkspaceEmbedAttachmentResult,
   WorkspaceImageNoteUpdate,
-  WorkspaceImportImagesResult,
+  WorkspaceImportAssetsResult,
   WorkspaceImportSaveResult,
   WorkspaceLoad,
   WorkspaceRelocateImageResult,
+  WorkspaceRelocateAttachmentResult,
   WorkspaceRecoveryMutationResult,
   WorkspaceRestoreResult,
   WorkspaceSaveResult,
@@ -121,6 +126,10 @@ export async function pickFolder(): Promise<string | null> {
 
 export async function pickImageFile(): Promise<string | null> {
   return invoke<string | null>("pick_image_file");
+}
+
+export async function pickAttachmentFile(): Promise<string | null> {
+  return invoke<string | null>("pick_attachment_file");
 }
 
 export async function bootstrapWorkspace(defaults: VaultData): Promise<WorkspaceBootstrap> {
@@ -267,6 +276,38 @@ export async function embedWorkspaceVaultImage(
   });
 }
 
+export async function embedWorkspaceAttachmentFile(
+  path: string,
+  sourcePath: string,
+  noteRelativePath: string,
+  settings: AttachmentEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedAttachmentResult> {
+  return invoke<WorkspaceEmbedAttachmentResult>("workspace_embed_attachment_file", {
+    path,
+    sourcePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
+export async function embedWorkspaceVaultAttachment(
+  path: string,
+  attachmentRelativePath: string,
+  noteRelativePath: string,
+  settings: AttachmentEmbedSettings,
+  expectedRevision: number,
+): Promise<WorkspaceEmbedAttachmentResult> {
+  return invoke<WorkspaceEmbedAttachmentResult>("workspace_embed_vault_attachment", {
+    path,
+    attachmentRelativePath,
+    noteRelativePath,
+    settings,
+    expectedRevision,
+  });
+}
+
 export async function relocateWorkspaceImage(
   path: string,
   imageRelativePath: string,
@@ -284,6 +325,52 @@ export async function relocateWorkspaceImage(
     noteUpdates,
     expectedRevision,
     managedByNoteMove,
+  });
+}
+
+export async function relocateWorkspaceAttachment(
+  path: string,
+  attachmentRelativePath: string,
+  targetRelativePath: string,
+  assetId: string,
+  noteUpdates: WorkspaceAttachmentNoteUpdate[],
+  expectedRevision: number,
+  managedByNoteMove = false,
+): Promise<WorkspaceRelocateAttachmentResult> {
+  return invoke<WorkspaceRelocateAttachmentResult>("workspace_relocate_attachment", {
+    path,
+    attachmentRelativePath,
+    targetRelativePath,
+    assetId,
+    noteUpdates,
+    expectedRevision,
+    managedByNoteMove,
+  });
+}
+
+export async function openWorkspaceAttachment(
+  path: string,
+  attachmentRelativePath: string,
+  assetId?: string,
+): Promise<void> {
+  await invoke<void>("workspace_open_attachment", {
+    path,
+    attachmentRelativePath,
+    assetId,
+  });
+}
+
+export async function saveWorkspaceAttachmentCopy(
+  path: string,
+  attachmentRelativePath: string,
+  assetId?: string,
+  preferredDirectory?: string,
+): Promise<WorkspaceAttachmentCopyResult | null> {
+  return invoke<WorkspaceAttachmentCopyResult | null>("workspace_save_attachment_copy", {
+    path,
+    attachmentRelativePath,
+    assetId,
+    preferredDirectory,
   });
 }
 
@@ -330,16 +417,18 @@ export async function importObsidianVault(path: string): Promise<ImportResult> {
   return invoke<ImportResult>("import_obsidian_vault", { path });
 }
 
-export async function importWorkspaceImages(
+export async function importWorkspaceAssets(
   path: string,
   sourcePath: string,
   imagePaths: string[],
+  attachmentPaths: string[],
   expectedRevision: number,
-): Promise<WorkspaceImportImagesResult> {
-  return invoke<WorkspaceImportImagesResult>("workspace_import_images", {
+): Promise<WorkspaceImportAssetsResult> {
+  return invoke<WorkspaceImportAssetsResult>("workspace_import_assets", {
     path,
     sourcePath,
     imagePaths,
+    attachmentPaths,
     expectedRevision,
   });
 }

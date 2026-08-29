@@ -25,8 +25,8 @@ Use the vault name at the top of the left panel to switch between recent vaults,
 
 - **Create vault** makes a new folder for Markdown notes.
 - **Open folder** edits the Markdown files in that folder directly.
-- **Import from Obsidian** copies selected notes and their image files into the current vault; it does not change the source folder.
-- **Export portable vault** creates a separate copy, including image files, that Obsidian can open.
+- **Import from Obsidian** copies selected notes and their image and attachment files into the current vault; it does not change the source folder.
+- **Export portable vault** creates a separate copy, including image and attachment files, that Obsidian can open.
 
 ## Organize notes
 
@@ -90,7 +90,13 @@ Add an Obsidian-compatible suffix to the alt text to control its displayed size:
 
 Images work on their own and inside lists, tasks, blockquotes, and tables. The app escapes the sizing separator when it inserts an image into a table. App-created references also contain an \`#oah-image=...\` fragment; leave it in place so the app can recover a uniquely identifiable image if its file is renamed or moved. Image files remain in the left file tree after their final reference is removed; drag one from the tree into a note to use it again, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed or dragged between folders. Mirrored image folders are app-managed, so their images cannot be manually renamed or moved.
 
-### 6. Quotes and code blocks
+### 6. Files
+
+In the desktop app, use the file button or press **⌘/Ctrl Shift A** to copy a non-image file into the vault. The app inserts an ordinary Markdown link such as \`[Report.pdf](Attachments/Report.pdf)\`, with an \`#oah-asset=...\` fragment that lets it recover a uniquely identifiable file after a rename or move. Choose root, beside-note, specific-folder, or mirrored-folder storage under **Settings → Current vault**.
+
+File cards work on their own and inside lists, tasks, blockquotes, and tables. Click an ordinary document to open it in the system's default app. Archives use **Save archive as…** to a location outside the vault and are never extracted in place. Executables and installers cannot be opened from the app. Attachment files remain in the left file tree after their final reference is removed, where ordinary attachments can be dragged into notes, renamed, or moved between folders. Mirrored attachment folders are app-managed.
+
+### 7. Quotes and code blocks
 
 > Start a line with \`>\` to create a blockquote.
 
@@ -117,6 +123,7 @@ For a broader syntax reference, see the [CommonMark Markdown Reference](https://
 - **⌘/Ctrl I** — toggle italic text
 - **⌘/Ctrl K** — create a Markdown link
 - **⌘/Ctrl Shift I** — choose and embed an image
+- **⌘/Ctrl Shift A** — choose and embed a non-image file
 - **⌘/Ctrl V** — embed an image when the clipboard contains one
 - **⌘/Ctrl Shift X** — toggle strikethrough text
 - **⌘/Ctrl F** — find text in the current note; use Tab/Shift+Tab, Enter/Shift+Enter, or F3/Shift+F3 to move through matches
@@ -231,6 +238,12 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     embeddedImages: [],
     imageFiles: [],
     imageEmbedSettings: {
+      location: "vault-root",
+      folderPath: "",
+    },
+    embeddedAttachments: [],
+    attachmentFiles: [],
+    attachmentEmbedSettings: {
       location: "vault-root",
       folderPath: "",
     },

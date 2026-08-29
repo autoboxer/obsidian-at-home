@@ -12,6 +12,7 @@ pub fn run() {
             appearance::list_system_fonts,
             vault::pick_folder,
             vault::pick_image_file,
+            vault::pick_attachment_file,
             vault::import_obsidian_vault,
             vault::export_obsidian_vault,
             workspace::workspace_bootstrap,
@@ -29,9 +30,15 @@ pub fn run() {
             workspace::workspace_embed_image_file,
             workspace::workspace_embed_vault_image,
             workspace::workspace_relocate_image,
+            workspace::workspace_relocate_attachment,
+            workspace::workspace_open_attachment,
+            workspace::workspace_save_attachment_copy,
             workspace::workspace_embed_image_bytes,
+            workspace::workspace_embed_attachment_file,
+            workspace::workspace_embed_vault_attachment,
             workspace::workspace_read_image,
             workspace::workspace_import_images,
+            workspace::workspace_import_assets,
         ])
         .run(tauri::generate_context!())
         .expect("Obsidian At Home failed to start");

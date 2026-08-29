@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { validateImageFolderPath } from "../lib/imageEmbeds";
-import type { ExportResult, ImageEmbedLocation, ImportResult } from "../types";
+import { validateAssetFolderPath } from "../lib/imageEmbeds";
+import type {
+  AttachmentEmbedLocation,
+  ExportResult,
+  ImageEmbedLocation,
+  ImportResult,
+} from "../types";
 import {
   appearanceState,
   fontOptions,
@@ -55,6 +60,10 @@ const feedback = ref<Feedback | null>(null);
 const replaceConfirming = ref(false);
 const clearConfirming = ref(false);
 const forgetConfirming = ref(false);
+const attachmentFolderDraft = ref(
+  vaultState.attachmentEmbedSettings.folderPath || "Attachments",
+);
+const attachmentFolderError = ref("");
 const imageFolderDraft = ref(vaultState.imageEmbedSettings.folderPath || "Attachments");
 const imageFolderError = ref("");
 
@@ -95,6 +104,8 @@ const importPreviewOverflow = computed(() =>
 );
 
 const exportPayload = computed(() => ({
+  attachments: vaultState.attachmentFiles.length,
+  images: vaultState.imageFiles.length,
   notes: vaultState.notes.length,
   templates: vaultState.templates.length,
   snippets: vaultState.snippets.length,
@@ -123,6 +134,19 @@ watch(
   },
 );
 
+watch(
+  [
+    () => vaultSession.path,
+    () => vaultState.attachmentEmbedSettings.location,
+    () => vaultState.attachmentEmbedSettings.folderPath,
+  ],
+  () => {
+    attachmentFolderDraft.value = vaultState.attachmentEmbedSettings.folderPath
+      || "Attachments";
+    attachmentFolderError.value = "";
+  },
+);
+
 function updateAppearanceFont(event: Event): void {
   const select = event.currentTarget as HTMLSelectElement;
   setAppearanceFont(select.value);
@@ -137,7 +161,7 @@ function updateImageEmbedLocation(event: Event): void {
   const location = (event.currentTarget as HTMLSelectElement).value as ImageEmbedLocation;
   imageFolderError.value = "";
   if (location === "specified-folder" || location === "specified-folder-mirrored") {
-    const validated = validateImageFolderPath(imageFolderDraft.value || "Attachments");
+    const validated = validateAssetFolderPath(imageFolderDraft.value || "Attachments");
     imageFolderDraft.value = validated.error ? "Attachments" : validated.value;
     vaultState.imageEmbedSettings = {
       folderPath: imageFolderDraft.value,
@@ -151,7 +175,7 @@ function updateImageEmbedLocation(event: Event): void {
 }
 
 function saveImageFolderPath(): void {
-  const validated = validateImageFolderPath(imageFolderDraft.value);
+  const validated = validateAssetFolderPath(imageFolderDraft.value);
   if (validated.error) {
     imageFolderError.value = validated.error;
 
@@ -163,6 +187,43 @@ function saveImageFolderPath(): void {
   vaultState.imageEmbedSettings = {
     folderPath: validated.value,
     location: vaultState.imageEmbedSettings.location === "specified-folder-mirrored"
+      ? "specified-folder-mirrored"
+      : "specified-folder",
+  };
+}
+
+function updateAttachmentEmbedLocation(event: Event): void {
+  const location = (event.currentTarget as HTMLSelectElement).value as AttachmentEmbedLocation;
+  attachmentFolderError.value = "";
+  if (location === "specified-folder" || location === "specified-folder-mirrored") {
+    const validated = validateAssetFolderPath(
+      attachmentFolderDraft.value || "Attachments",
+    );
+    attachmentFolderDraft.value = validated.error ? "Attachments" : validated.value;
+    vaultState.attachmentEmbedSettings = {
+      folderPath: attachmentFolderDraft.value,
+      location,
+    };
+
+    return;
+  }
+
+  vaultState.attachmentEmbedSettings = { folderPath: "", location };
+}
+
+function saveAttachmentFolderPath(): void {
+  const validated = validateAssetFolderPath(attachmentFolderDraft.value);
+  if (validated.error) {
+    attachmentFolderError.value = validated.error;
+
+    return;
+  }
+
+  attachmentFolderDraft.value = validated.value;
+  attachmentFolderError.value = "";
+  vaultState.attachmentEmbedSettings = {
+    folderPath: validated.value,
+    location: vaultState.attachmentEmbedSettings.location === "specified-folder-mirrored"
       ? "specified-folder-mirrored"
       : "specified-folder",
   };
@@ -228,6 +289,8 @@ async function chooseVaultToImport(): Promise<void> {
         result.notes.length === 1 ? "note" : "notes"
       } and ${formatCount(result.images.length)} ${
         result.images.length === 1 ? "image" : "images"
+      } and ${formatCount(result.attachments.length)} ${
+        result.attachments.length === 1 ? "attachment" : "attachments"
       }. Choose how to bring them in.`,
     };
   } catch (error) {
@@ -264,6 +327,7 @@ async function applyImport(replace: boolean): Promise<void> {
   activeTask.value = "import";
   try {
     const {
+      attachmentCount,
       imageCount,
       noteCount,
       saved,
@@ -286,6 +350,12 @@ async function applyImport(replace: boolean): Promise<void> {
         ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"}${
           imageCount
             ? ` and ${formatCount(imageCount)} ${imageCount === 1 ? "image was" : "images were"}`
+            : ""
+        }${
+          attachmentCount
+            ? ` and ${formatCount(attachmentCount)} ${
+              attachmentCount === 1 ? "attachment was" : "attachments were"
+            }`
             : ""
         } copied from ${result.vaultName || "the selected vault"}.`
         : "The current vault was restored because the imported notes could not be saved. Resolve the vault message, then try the import again.",
@@ -339,6 +409,8 @@ async function exportVault(): Promise<void> {
         result.noteCount === 1 ? "note" : "notes"
       } and ${formatCount(result.imageCount)} ${
         result.imageCount === 1 ? "image" : "images"
+      } and ${formatCount(result.attachmentCount)} ${
+        result.attachmentCount === 1 ? "attachment" : "attachments"
       } to a new folder.`,
       warnings: result.warnings,
     };
@@ -701,6 +773,66 @@ async function forgetVault(): Promise<void> {
         </div>
       </div>
 
+      <div class="settings-image-storage">
+        <span class="settings-image-storage__icon">
+          <AppIcon name="paperclip" :size="18" />
+        </span>
+        <div class="settings-image-storage__copy">
+          <label for="settings-attachment-location">Embedded file location</label>
+          <p id="settings-attachment-location-help">
+            Choose where newly embedded non-image files are stored. Existing files are not moved.
+          </p>
+        </div>
+        <div class="settings-image-storage__controls">
+          <select
+            id="settings-attachment-location"
+            :value="vaultState.attachmentEmbedSettings.location"
+            :disabled="!nativeAvailable || !vaultSession.path"
+            aria-describedby="settings-attachment-location-help"
+            @change="updateAttachmentEmbedLocation"
+          >
+            <option value="vault-root">Vault root</option>
+            <option value="note-folder">Same folder as the note</option>
+            <option value="specified-folder">A specific vault folder</option>
+            <option value="specified-folder-mirrored">A specific folder, mirroring note folders</option>
+          </select>
+          <label
+            v-if="vaultState.attachmentEmbedSettings.location === 'specified-folder'
+              || vaultState.attachmentEmbedSettings.location === 'specified-folder-mirrored'"
+            class="settings-image-folder-field"
+          >
+            <span>Vault-relative folder</span>
+            <input
+              v-model="attachmentFolderDraft"
+              type="text"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="Attachments/Files"
+              :aria-invalid="Boolean(attachmentFolderError)"
+              :aria-describedby="attachmentFolderError
+                ? 'settings-attachment-folder-error'
+                : undefined"
+              @blur="saveAttachmentFolderPath"
+              @keydown.enter.prevent="saveAttachmentFolderPath"
+            />
+            <small
+              v-if="attachmentFolderError"
+              id="settings-attachment-folder-error"
+              role="alert"
+            >
+              {{ attachmentFolderError }}
+            </small>
+            <small
+              v-else-if="vaultState.attachmentEmbedSettings.location
+                === 'specified-folder-mirrored'"
+            >
+              Note folders are recreated below this folder, such as Files/Projects.
+            </small>
+          </label>
+        </div>
+      </div>
+
       <div class="settings-import-choice">
         <div class="settings-import-choice__copy">
           <strong>Current vault storage</strong>
@@ -798,7 +930,7 @@ async function forgetVault(): Promise<void> {
             <div>
               <h3 class="settings-transfer-card__title">Import from Obsidian</h3>
               <p class="settings-transfer-card__description">
-                Copy Markdown notes, folders, embedded images, frontmatter tags, and CSS snippets into this vault.
+                Copy Markdown notes, folders, embedded files, frontmatter tags, and CSS snippets into this vault.
               </p>
             </div>
           </div>
@@ -807,6 +939,7 @@ async function forgetVault(): Promise<void> {
             <li><AppIcon name="check" :size="14" /> Original Markdown content</li>
             <li><AppIcon name="check" :size="14" /> Nested note folders</li>
             <li><AppIcon name="check" :size="14" /> Embedded image files</li>
+            <li><AppIcon name="check" :size="14" /> Linked attachment files</li>
             <li><AppIcon name="check" :size="14" /> Enabled CSS snippet state</li>
           </ul>
 
@@ -837,6 +970,8 @@ async function forgetVault(): Promise<void> {
 
           <div class="settings-export-summary" aria-label="Items ready to export">
             <span><strong>{{ formatCount(exportPayload.notes) }}</strong> notes</span>
+            <span><strong>{{ formatCount(exportPayload.images) }}</strong> images</span>
+            <span><strong>{{ formatCount(exportPayload.attachments) }}</strong> attachments</span>
             <span><strong>{{ formatCount(exportPayload.templates) }}</strong> templates</span>
             <span><strong>{{ formatCount(exportPayload.snippets) }}</strong> snippets</span>
           </div>
@@ -861,7 +996,8 @@ async function forgetVault(): Promise<void> {
                 <code class="settings-export-receipt__path">{{ exportResult.path }}</code>
                 <span class="settings-export-receipt__counts">
                   {{ exportResult.noteCount }} notes · {{ exportResult.templateCount }} templates ·
-                  {{ exportResult.snippetCount }} snippets · {{ exportResult.imageCount }} images
+                  {{ exportResult.snippetCount }} snippets · {{ exportResult.imageCount }} images ·
+                  {{ exportResult.attachmentCount }} attachments
                 </span>
               </div>
             </div>
@@ -912,6 +1048,10 @@ async function forgetVault(): Promise<void> {
             <span>Images</span>
           </div>
           <div class="settings-import-review__stat">
+            <strong>{{ formatCount(importReview.attachments.length) }}</strong>
+            <span>Attachments</span>
+          </div>
+          <div class="settings-import-review__stat">
             <strong>{{ formatCount(importReview.snippets.length) }}</strong>
             <span>CSS snippets</span>
           </div>
@@ -932,7 +1072,8 @@ async function forgetVault(): Promise<void> {
 
         <div v-else class="settings-import-empty" role="note">
           <AppIcon name="info" :size="17" />
-          No Markdown notes were found. You can still import discovered images and CSS snippets.
+          No Markdown notes were found. You can still import discovered images, attachments,
+          and CSS snippets.
         </div>
 
         <details v-if="importReview.warnings.length" class="settings-warning-details settings-warning-details--review">

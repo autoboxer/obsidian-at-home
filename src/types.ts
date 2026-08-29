@@ -62,16 +62,21 @@ export interface CssSnippet {
   builtIn?: boolean;
 }
 
-export type ImageEmbedLocation =
+export type AssetEmbedLocation =
   | "vault-root"
   | "note-folder"
   | "specified-folder"
   | "specified-folder-mirrored";
 
-export interface ImageEmbedSettings {
-  location: ImageEmbedLocation;
+export interface AssetEmbedSettings {
+  location: AssetEmbedLocation;
   folderPath: string;
 }
+
+export type ImageEmbedLocation = AssetEmbedLocation;
+export type ImageEmbedSettings = AssetEmbedSettings;
+export type AttachmentEmbedLocation = AssetEmbedLocation;
+export type AttachmentEmbedSettings = AssetEmbedSettings;
 
 export interface EmbeddedImage {
   id: string;
@@ -85,12 +90,31 @@ export interface VaultImageFile {
   mediaType: string;
 }
 
-export interface ImageInsertionCapture {
+export interface EmbeddedAttachment {
+  id: string;
+  relativePath: string;
+  mediaType: string;
+  byteLength: number;
+  openingDisabled: boolean;
+}
+
+export interface VaultAttachmentFile {
+  assetId?: string;
+  relativePath: string;
+  mediaType: string;
+  byteLength: number;
+  openingDisabled: boolean;
+}
+
+export interface AssetInsertionCapture {
   inTable: boolean;
   noteId: string;
   selectedText: string;
   token: string;
 }
+
+export type ImageInsertionCapture = AssetInsertionCapture;
+export type AttachmentInsertionCapture = AssetInsertionCapture;
 
 export interface VaultData {
   name: string;
@@ -104,6 +128,9 @@ export interface VaultData {
   embeddedImages: EmbeddedImage[];
   imageFiles: VaultImageFile[];
   imageEmbedSettings: ImageEmbedSettings;
+  embeddedAttachments: EmbeddedAttachment[];
+  attachmentFiles: VaultAttachmentFile[];
+  attachmentEmbedSettings: AttachmentEmbedSettings;
 }
 
 export interface VaultDescriptor {
@@ -152,6 +179,10 @@ export interface WorkspaceEmbedImageResult extends WorkspaceSaveResult {
   image: EmbeddedImage;
 }
 
+export interface WorkspaceEmbedAttachmentResult extends WorkspaceSaveResult {
+  attachment: EmbeddedAttachment;
+}
+
 export interface WorkspaceImageNoteUpdate {
   noteId: string;
   relativePath: string;
@@ -159,9 +190,20 @@ export interface WorkspaceImageNoteUpdate {
   content: string;
 }
 
+export type WorkspaceAttachmentNoteUpdate = WorkspaceImageNoteUpdate;
+
 export interface WorkspaceRelocateImageResult extends WorkspaceSaveResult {
   image: EmbeddedImage;
   previousRelativePath: string;
+}
+
+export interface WorkspaceRelocateAttachmentResult extends WorkspaceSaveResult {
+  attachment: EmbeddedAttachment;
+  previousRelativePath: string;
+}
+
+export interface WorkspaceAttachmentCopyResult {
+  path: string;
 }
 
 export interface VaultSessionState {
@@ -211,6 +253,10 @@ export interface ImportedImage {
   relativePath: string;
 }
 
+export interface ImportedAttachment {
+  relativePath: string;
+}
+
 export interface ImportedSnippet {
   name: string;
   css: string;
@@ -220,6 +266,7 @@ export interface ImportedSnippet {
 export interface ImportResult {
   vaultName: string;
   images: ImportedImage[];
+  attachments: ImportedAttachment[];
   notes: ImportedNote[];
   snippets: ImportedSnippet[];
   warnings: string[];
@@ -246,15 +293,18 @@ export interface ExportSnippet {
 export interface ExportResult {
   path: string;
   imageCount: number;
+  attachmentCount: number;
   noteCount: number;
   templateCount: number;
   snippetCount: number;
   warnings: string[];
 }
 
-export interface WorkspaceImportImagesResult extends WorkspaceSaveResult {
+export interface WorkspaceImportAssetsResult extends WorkspaceSaveResult {
   imageCount: number;
   imageFiles: VaultImageFile[];
+  attachmentCount: number;
+  attachmentFiles: VaultAttachmentFile[];
   pathMappings: Record<string, string>;
   transactionId?: string;
 }

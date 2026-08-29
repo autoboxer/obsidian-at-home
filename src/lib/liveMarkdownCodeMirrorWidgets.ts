@@ -1,5 +1,12 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { NOTE_IMAGE_DRAG_MIME } from "./imageEmbeds";
+import {
+  markdownAttachmentIsArchive,
+  markdownAttachmentIsExecutable,
+  markdownAttachmentPresentation,
+  type MarkdownAttachmentMetadata,
+  type ParsedMarkdownAttachment,
+} from "./markdownAttachments";
 import type { Rect } from "@codemirror/view";
 import type { LiveMarkdownBlock } from "./liveMarkdown";
 import type { ParsedMarkdownImage } from "./markdownImages";
@@ -251,6 +258,113 @@ export class WikiLinkWidget extends WidgetType {
 export type MarkdownImageSourceResolver = (
   image: ParsedMarkdownImage,
 ) => Promise<string | null | undefined> | string | null | undefined;
+
+export type MarkdownAttachmentMetadataResolver = (
+  attachment: ParsedMarkdownAttachment,
+) => MarkdownAttachmentMetadata | null | undefined;
+
+export type MarkdownAttachmentAction = (
+  attachment: ParsedMarkdownAttachment,
+  metadata: MarkdownAttachmentMetadata | null | undefined,
+) => void;
+
+export class MarkdownAttachmentWidget extends WidgetType {
+  constructor(
+    private readonly attachment: ParsedMarkdownAttachment,
+    private readonly metadata: MarkdownAttachmentMetadata | null | undefined,
+    private readonly from: number,
+    private readonly to: number,
+    private readonly resolutionVersion: number,
+    private readonly activateAttachment?: MarkdownAttachmentAction,
+  ) {
+    super();
+  }
+
+  eq(other: MarkdownAttachmentWidget): boolean {
+    return this.attachment.raw === other.attachment.raw
+      && this.metadata?.byteLength === other.metadata?.byteLength
+      && this.metadata?.mediaType === other.metadata?.mediaType
+      && this.metadata?.openingDisabled === other.metadata?.openingDisabled
+      && this.metadata?.relativePath === other.metadata?.relativePath
+      && this.from === other.from
+      && this.to === other.to
+      && this.resolutionVersion === other.resolutionVersion
+      && this.activateAttachment === other.activateAttachment;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const document = view.dom.ownerDocument;
+    const presentation = markdownAttachmentPresentation(
+      this.attachment,
+      this.metadata ?? undefined,
+    );
+    const card = document.createElement("span");
+    const icon = document.createElement("span");
+    const copy = document.createElement("span");
+    const name = document.createElement("span");
+    const details = document.createElement("span");
+    const action = document.createElement("button");
+    const archive = markdownAttachmentIsArchive(
+      this.metadata?.relativePath ?? this.attachment.destination,
+      this.metadata?.mediaType,
+    );
+    const executable = markdownAttachmentIsExecutable(
+      this.metadata?.relativePath ?? this.attachment.destination,
+      this.metadata?.openingDisabled,
+    );
+
+    card.className = "live-attachment-card";
+    card.dataset.attachmentAssetId = this.attachment.assetId ?? "";
+    card.dataset.attachmentDestination = this.attachment.destination;
+    card.setAttribute("contenteditable", "false");
+    card.setAttribute("role", "group");
+    card.setAttribute(
+      "aria-label",
+      `${presentation.name}, ${presentation.typeLabel}, ${presentation.sizeLabel}`,
+    );
+    icon.className = "attachment-card__icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = presentation.iconLabel;
+    copy.className = "attachment-card__copy";
+    name.className = "attachment-card__name";
+    name.textContent = presentation.name;
+    details.className = "attachment-card__details";
+    details.textContent = `${presentation.typeLabel} · ${presentation.sizeLabel}`;
+    copy.append(name, details);
+    action.className = "attachment-card__action";
+    action.type = "button";
+    action.disabled = executable;
+    action.textContent = executable
+      ? "Unavailable"
+      : archive ? "Save archive as…" : "Open";
+    action.title = executable
+      ? "Opening executable or installer attachments is not supported"
+      : archive ? "Save the archive outside the vault" : "Open with the default application";
+    action.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    action.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!executable) {
+        this.activateAttachment?.(this.attachment, this.metadata);
+      }
+    });
+    card.append(icon, copy, action);
+    card.addEventListener("mousedown", (event) => {
+      if (event.button === 0) {
+        event.stopPropagation();
+        view.focus();
+      }
+    });
+    card.addEventListener("click", (event) =>
+      revealWidgetSource(view, card, event, this.from, this.to)
+    );
+
+    return card;
+  }
+}
 
 export class MarkdownImageWidget extends WidgetType {
   constructor(

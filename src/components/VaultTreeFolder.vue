@@ -7,8 +7,10 @@ import {
   FOLDER_DRAG_MIME,
   folderChildren,
   folderPath,
+  isMirrorManagedAttachment,
   isMirrorManagedImage,
   moveFolder,
+  moveVaultAttachmentToFolder,
   moveVaultImageToFolder,
   moveNoteToFolder,
   NOTE_DRAG_MIME,
@@ -16,9 +18,11 @@ import {
   treeDragState,
   vaultState,
 } from "../stores/vault";
-import type { Folder, Note, VaultImageFile } from "../types";
+import type { Folder, Note, VaultAttachmentFile, VaultImageFile } from "../types";
 import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
+import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
 import AppIcon from "./AppIcon.vue";
+import VaultTreeAttachment from "./VaultTreeAttachment.vue";
 import VaultTreeImage from "./VaultTreeImage.vue";
 import VaultTreeNote from "./VaultTreeNote.vue";
 
@@ -29,6 +33,7 @@ const props = withDefaults(
     folder: Folder;
     notes: Note[];
     images: VaultImageFile[];
+    attachments: VaultAttachmentFile[];
     depth?: number;
     showEmptyFolders?: boolean;
   }>(),
@@ -67,6 +72,12 @@ const currentFolderPath = computed(() => folderPath(props.folder.id));
 const directImages = computed(() => props.images
   .filter((image) => image.relativePath.slice(0, image.relativePath.lastIndexOf("/")) === currentFolderPath.value)
   .sort((left, right) => left.relativePath.localeCompare(right.relativePath)));
+const directAttachments = computed(() => props.attachments
+  .filter((attachment) =>
+    attachment.relativePath.slice(0, attachment.relativePath.lastIndexOf("/"))
+      === currentFolderPath.value
+  )
+  .sort((left, right) => left.relativePath.localeCompare(right.relativePath)));
 
 const children = computed(() => folderChildren(props.folder.id)
   .filter((folder) => props.showEmptyFolders || branchContainsPassedNote(folder.id)));
@@ -75,13 +86,17 @@ const moveDestinations = computed(() => vaultState.folders
   .sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
 
 const hasContents = computed(() =>
-  children.value.length > 0 || directNotes.value.length > 0 || directImages.value.length > 0
+  children.value.length > 0
+  || directNotes.value.length > 0
+  || directImages.value.length > 0
+  || directAttachments.value.length > 0
 );
 const canExpand = computed(() => hasContents.value || subfolderInputOpen.value);
 const branchVisible = computed(() => props.showEmptyFolders || hasContents.value);
 const passedContentKey = computed(() => [
   ...props.notes.map((note) => `note:${note.id}`),
   ...props.images.map((image) => `image:${image.relativePath}`),
+  ...props.attachments.map((attachment) => `attachment:${attachment.relativePath}`),
 ].sort().join("\u0000"));
 const activeNoteFolderId = computed(
   () => vaultState.notes.find((note) => note.id === vaultState.activeNoteId)?.folderId ?? null,
@@ -117,9 +132,14 @@ watch(
 );
 
 watch(
-  () => [treeDragState.noteId, treeDragState.folderId, treeDragState.imagePath] as const,
-  ([noteId, folderId, imagePath]) => {
-    if (!noteId && !folderId && !imagePath) {
+  () => [
+    treeDragState.noteId,
+    treeDragState.folderId,
+    treeDragState.imagePath,
+    treeDragState.attachmentPath,
+  ] as const,
+  ([noteId, folderId, imagePath, attachmentPath]) => {
+    if (!noteId && !folderId && !imagePath && !attachmentPath) {
       dropActive.value = false;
       dropInvalid.value = false;
       clearExpandTimer();
@@ -140,6 +160,11 @@ function branchContainsPassedNote(folderId: string, visited = new Set<string>())
 
   const path = folderPath(folderId);
   if (props.images.some((image) => image.relativePath.startsWith(`${path}/`))) {
+    return true;
+  }
+  if (props.attachments.some((attachment) =>
+    attachment.relativePath.startsWith(`${path}/`)
+  )) {
     return true;
   }
 
@@ -166,10 +191,16 @@ function branchContainsFolder(folderId: string): boolean {
 function isTreeDrag(event: DragEvent): boolean {
   const types = Array.from(event.dataTransfer?.types ?? []);
 
-  return Boolean(treeDragState.noteId || treeDragState.folderId || treeDragState.imagePath)
+  return Boolean(
+    treeDragState.noteId
+    || treeDragState.folderId
+    || treeDragState.imagePath
+    || treeDragState.attachmentPath
+  )
     || types.includes(NOTE_DRAG_MIME)
     || types.includes(FOLDER_DRAG_MIME)
-    || types.includes(VAULT_IMAGE_DRAG_MIME);
+    || types.includes(VAULT_IMAGE_DRAG_MIME)
+    || types.includes(VAULT_ATTACHMENT_DRAG_MIME);
 }
 
 function startFolderDrag(event: DragEvent): void {
@@ -183,6 +214,7 @@ function startFolderDrag(event: DragEvent): void {
   event.dataTransfer.setData("text/plain", props.folder.name);
   treeDragState.noteId = null;
   treeDragState.imagePath = null;
+  treeDragState.attachmentPath = null;
   treeDragState.folderId = props.folder.id;
   dragging.value = true;
 }
@@ -222,8 +254,32 @@ function isInvalidImageTarget(): boolean {
   return isMirrorManagedImage(image.relativePath) || currentParent === currentFolderPath.value;
 }
 
+function draggedAttachment(): VaultAttachmentFile | undefined {
+  const relativePath = treeDragState.attachmentPath;
+  if (!relativePath) {
+    return undefined;
+  }
+
+  return vaultState.attachmentFiles.find((attachment) =>
+    attachment.relativePath === relativePath
+  );
+}
+
+function isInvalidAttachmentTarget(): boolean {
+  const attachment = draggedAttachment();
+  if (!attachment) {
+    return false;
+  }
+  const currentParent = attachment.relativePath.split("/").slice(0, -1).join("/");
+
+  return isMirrorManagedAttachment(attachment.relativePath)
+    || currentParent === currentFolderPath.value;
+}
+
 function isInvalidDropTarget(): boolean {
-  return isInvalidFolderTarget() || isInvalidImageTarget();
+  return isInvalidFolderTarget()
+    || isInvalidImageTarget()
+    || isInvalidAttachmentTarget();
 }
 
 function folderIsWithin(folderId: string, ancestorId: string): boolean {
@@ -314,6 +370,7 @@ async function handleDrop(event: DragEvent): Promise<void> {
     treeDragState.noteId = null;
     treeDragState.folderId = null;
     treeDragState.imagePath = null;
+    treeDragState.attachmentPath = null;
 
     return;
   }
@@ -321,11 +378,20 @@ async function handleDrop(event: DragEvent): Promise<void> {
   const folderId = event.dataTransfer?.getData(FOLDER_DRAG_MIME).trim() || treeDragState.folderId;
   const imagePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim()
     || treeDragState.imagePath;
+  const attachmentPath = event.dataTransfer?.getData(VAULT_ATTACHMENT_DRAG_MIME).trim()
+    || treeDragState.attachmentPath;
   const image = imagePath
     ? vaultState.imageFiles.find((candidate) => candidate.relativePath === imagePath)
     : undefined;
+  const attachment = attachmentPath
+    ? vaultState.attachmentFiles.find((candidate) =>
+      candidate.relativePath === attachmentPath
+    )
+    : undefined;
   let moved = false;
-  if (image) {
+  if (attachment) {
+    moved = await moveVaultAttachmentToFolder(attachment, props.folder.id);
+  } else if (image) {
     moved = await moveVaultImageToFolder(image, props.folder.id);
   } else if (noteId) {
     moved = await moveNoteToFolder(noteId, props.folder.id);
@@ -335,6 +401,7 @@ async function handleDrop(event: DragEvent): Promise<void> {
   treeDragState.noteId = null;
   treeDragState.folderId = null;
   treeDragState.imagePath = null;
+  treeDragState.attachmentPath = null;
   if (moved) {
     expanded.value = true;
   }
@@ -678,6 +745,7 @@ function removeFolder(): void {
           :folder="child"
           :notes="notes"
           :images="images"
+          :attachments="attachments"
           :depth="depth + 1"
           :show-empty-folders="showEmptyFolders"
         />
@@ -691,6 +759,12 @@ function removeFolder(): void {
           v-for="image in directImages"
           :key="image.relativePath"
           :image="image"
+          :depth="depth + 1"
+        />
+        <VaultTreeAttachment
+          v-for="attachment in directAttachments"
+          :key="attachment.relativePath"
+          :attachment="attachment"
           :depth="depth + 1"
         />
       </div>
