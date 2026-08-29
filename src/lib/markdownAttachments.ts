@@ -93,10 +93,16 @@ export interface FormatMarkdownAttachmentOptions {
   title?: string;
 }
 
+export interface ParseMarkdownAttachmentsOptions {
+  /** Accept an extensionless link only when the caller can identify its destination as a file. */
+  acceptExtensionless?: (destination: string) => boolean;
+}
+
 /** Parse a portable local, non-image attachment link. */
 export function parseMarkdownAttachmentAt(
   source: string,
   start: number,
+  options: ParseMarkdownAttachmentsOptions = {},
 ): ParsedMarkdownAttachment | undefined {
   const link = parseInlineMarkdownLinkAt(source, start);
   if (!link) {
@@ -104,7 +110,11 @@ export function parseMarkdownAttachmentAt(
   }
 
   const asset = splitAssetFragment(link.destination);
-  if (!isPortableAttachmentDestination(asset.destination, Boolean(asset.assetId))) {
+  if (!isPortableAttachmentDestination(
+    asset.destination,
+    Boolean(asset.assetId),
+    options.acceptExtensionless,
+  )) {
     return undefined;
   }
 
@@ -116,7 +126,10 @@ export function parseMarkdownAttachmentAt(
 }
 
 /** Return only attachment links recognized by the editor's Markdown parser. */
-export function parseMarkdownAttachments(source: string): ParsedMarkdownAttachment[] {
+export function parseMarkdownAttachments(
+  source: string,
+  options: ParseMarkdownAttachmentsOptions = {},
+): ParsedMarkdownAttachment[] {
   const bodyStart = leadingFrontmatterEnd(source) ?? 0;
   const attachments: ParsedMarkdownAttachment[] = [];
   markdownLanguage.parser.parse(source).iterate({
@@ -124,7 +137,11 @@ export function parseMarkdownAttachments(source: string): ParsedMarkdownAttachme
       if (node.name !== "Link" || node.from < bodyStart) {
         return;
       }
-      const attachment = parseMarkdownAttachmentAt(source, node.from);
+      const attachment = parseMarkdownAttachmentAt(
+        source,
+        node.from,
+        options,
+      );
       if (attachment && attachment.end + 1 === node.to) {
         attachments.push(attachment);
       }
@@ -216,6 +233,7 @@ export function markdownAttachmentIsExecutable(
 function isPortableAttachmentDestination(
   destination: string,
   hasAssetId: boolean,
+  acceptExtensionless: ParseMarkdownAttachmentsOptions["acceptExtensionless"],
 ): boolean {
   if (!destination || destination.includes("#") || destination.includes("?")) {
     return false;
@@ -243,7 +261,9 @@ function isPortableAttachmentDestination(
     return false;
   }
 
-  return hasAssetId || Boolean(extension);
+  return hasAssetId
+    || Boolean(extension)
+    || Boolean(acceptExtensionless?.(destination));
 }
 
 function splitAssetFragment(destination: string): {

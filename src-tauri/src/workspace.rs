@@ -25,10 +25,10 @@ const RECENTLY_DELETED_SNAPSHOT_VERSION: u32 = 1;
 const STATE_VERSION: u32 = 4;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
-const TRANSACTION_VERSION: u32 = 4;
+const TRANSACTION_VERSION: u32 = 5;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
-const MAX_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+pub(crate) const MAX_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_VAULT_ASSETS: usize = 100_000;
 const MAX_TOTAL_NOTE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_NOTES: usize = 100_000;
@@ -363,6 +363,8 @@ pub struct WorkspaceAttachmentCopyResult {
 pub struct WorkspaceImportImagesResult {
     pub image_count: usize,
     pub image_files: Vec<VaultImageFile>,
+    pub attachment_count: usize,
+    pub attachment_files: Vec<VaultAttachmentFile>,
     pub path_mappings: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_id: Option<String>,
@@ -668,6 +670,7 @@ struct TransactionOriginal {
 enum TransactionTargetKind {
     Markdown,
     Image,
+    Attachment,
 }
 
 impl Default for TransactionTargetKind {
@@ -1393,7 +1396,36 @@ pub fn workspace_import_images(
     reject_home_vault(&app, &root)?;
     let source_root = validate_image_import_root(&source_path)?;
     let _workspace_guard = lock_workspace_files(&root)?;
-    begin_workspace_image_import(&root, &source_root, &image_paths, expected_revision)
+    begin_workspace_asset_import(
+        &root,
+        &source_root,
+        &image_paths,
+        &[],
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_import_assets(
+    app: AppHandle,
+    path: String,
+    source_path: String,
+    image_paths: Vec<String>,
+    attachment_paths: Vec<String>,
+    expected_revision: u64,
+) -> Result<WorkspaceImportImagesResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let source_root = validate_image_import_root(&source_path)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    begin_workspace_asset_import(
+        &root,
+        &source_root,
+        &image_paths,
+        &attachment_paths,
+        expected_revision,
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1759,7 +1791,7 @@ fn save_workspace_files_with_image_import(
                 &mut cleanup_warnings,
             ) {
                 result.warnings.push(format!(
-                    "The imported images were saved, but their transaction cleanup will be retried when the vault reopens: {error}"
+                    "The imported assets were saved, but their transaction cleanup will be retried when the vault reopens: {error}"
                 ));
             }
             result.warnings.extend(cleanup_warnings.finish());
@@ -1787,7 +1819,7 @@ fn save_workspace_files_with_image_import(
                     &mut cleanup_warnings,
                 ) {
                     cleanup_warnings.push(format!(
-                        "The committed image import will be cleaned up when the vault reopens: {cleanup_error}"
+                        "The committed asset import will be cleaned up when the vault reopens: {cleanup_error}"
                     ));
                 }
                 let state = state.expect("committed state should be available");
@@ -1808,7 +1840,7 @@ fn save_workspace_files_with_image_import(
             }
             if state.is_none() && state_file_was_present {
                 return Err(format!(
-                    "{error} The image import could not be rolled back because workspace metadata became unreadable. Reopen the vault before editing again."
+                    "{error} The asset import could not be rolled back because workspace metadata became unreadable. Reopen the vault before editing again."
                 ));
             }
 
@@ -1820,13 +1852,13 @@ fn save_workspace_files_with_image_import(
             )?;
             if !recovered {
                 return Err(format!(
-                    "{error} The imported images could not be fully rolled back. Reopen the vault before editing again."
+                    "{error} The imported assets could not be fully rolled back. Reopen the vault before editing again."
                 ));
             }
             let revision = revision_for_root(root)?;
             if revision_for_root(root)? != revision {
                 return Err(format!(
-                    "{error} The vault changed while the failed image import was being rolled back. Reload it before editing again."
+                    "{error} The vault changed while the failed asset import was being rolled back. Reload it before editing again."
                 ));
             }
             let mut warnings = state_warnings.finish();
@@ -4103,15 +4135,143 @@ fn workspace_image_import_path(
     ))
 }
 
-fn begin_workspace_image_import(
+fn workspace_attachment_import_path(
+    root: &Path,
+    source_relative_path: &str,
+    fingerprint: Option<&FileFingerprint>,
+    reserved_paths: &HashSet<String>,
+) -> Result<(String, bool), String> {
+    let source_key = portable_path_key(source_relative_path);
+    if !reserved_paths.contains(&source_key) {
+        let target = resolve_workspace_asset_file(root, source_relative_path, true)?;
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_file() => {
+                if fingerprint.is_some_and(|expected| {
+                    fingerprint_attachment_file(&target).as_ref() == Ok(expected)
+                }) {
+                    return Ok((source_relative_path.to_owned(), true));
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if !asset_path_exists_portably(root, source_relative_path)? {
+                    return Ok((source_relative_path.to_owned(), false));
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    let path = Path::new(source_relative_path);
+    let folder = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Attachment");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 2..=10_001_u32 {
+        let file_name = match extension {
+            Some(extension) => format!("{stem} {index}.{extension}"),
+            None => format!("{stem} {index}"),
+        };
+        let candidate = if folder.is_empty() {
+            file_name
+        } else {
+            format!("{folder}/{file_name}")
+        };
+        validate_attachment_relative_path(&candidate)?;
+        if !reserved_paths.contains(&portable_path_key(&candidate))
+            && !asset_path_exists_portably(root, &candidate)?
+        {
+            return Ok((candidate, false));
+        }
+    }
+
+    Err(format!(
+        "Could not choose a collision-free vault path for {source_relative_path}."
+    ))
+}
+
+fn resolve_attachment_import_source(
+    root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    validate_attachment_relative_path(relative_path)?;
+    let relative = checked_relative_path(relative_path, false)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("the source attachment could not be inspected: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err("symbolic links are not followed".to_owned());
+        }
+    }
+    let metadata = fs::symlink_metadata(&current)
+        .map_err(|error| format!("the source attachment could not be inspected: {error}"))?;
+    if !metadata.is_file() {
+        return Err("the source attachment is not a regular file".to_owned());
+    }
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "the source attachment is larger than {} GiB",
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024
+        ));
+    }
+    Ok(current)
+}
+
+fn stage_workspace_attachment_import(
+    root: &Path,
+    transaction: &mut WorkspaceImageImportTransaction,
+    relative_path: &str,
+    source: &Path,
+    expected_fingerprint: &FileFingerprint,
+) -> Result<(), String> {
+    let transaction_root = match transaction.transaction_root.as_ref() {
+        Some(transaction_root) => transaction_root,
+        None => {
+            let created = prepare_transaction_root(root, &new_transaction_id())
+                .map_err(|error| format!("Could not prepare the asset import: {error}"))?;
+            transaction.transaction_root.insert(created)
+        }
+    };
+    let kind = TransactionTargetKind::Attachment;
+    let staged = staged_import_asset_path(transaction_root, relative_path, &kind)?;
+    let parent = staged
+        .parent()
+        .ok_or_else(|| "The staged attachment path has no parent folder.".to_owned())?;
+    ensure_private_directory_tree(transaction_root, parent)
+        .map_err(|error| format!("Could not prepare an attachment import: {error}"))?;
+    let copied_fingerprint = copy_attachment_file_durable(source, &staged)?;
+    if copied_fingerprint != *expected_fingerprint {
+        let _ = remove_file_durable(&staged);
+        return Err(format!(
+            "The staged copy of {relative_path} did not match the selected attachment."
+        ));
+    }
+    transaction.targets.push(TransactionTarget {
+        relative_path: relative_path.to_owned(),
+        fingerprint: copied_fingerprint,
+        kind,
+    });
+    Ok(())
+}
+
+fn begin_workspace_asset_import(
     root: &Path,
     source_root: &Path,
     image_paths: &[String],
+    attachment_paths: &[String],
     expected_revision: u64,
 ) -> Result<WorkspaceImportImagesResult, String> {
-    if image_paths.len() > MAX_VAULT_ASSETS {
+    if image_paths.len().saturating_add(attachment_paths.len()) > MAX_VAULT_ASSETS {
         return Err(format!(
-            "Only {MAX_VAULT_ASSETS} images can be imported at once."
+            "Only {MAX_VAULT_ASSETS} asset files can be imported at once."
         ));
     }
     let mut transaction = prepare_workspace_image_import(root, expected_revision)?;
@@ -4121,12 +4281,21 @@ fn begin_workspace_image_import(
         validate_image_relative_path(relative_path)?;
         if !unique_paths.insert(portable_path_key(relative_path)) {
             return Err(format!(
-                "The image import contains a duplicate path near {relative_path}."
+            "The asset import contains a duplicate path near {relative_path}."
+            ));
+        }
+    }
+    for relative_path in attachment_paths {
+        validate_attachment_relative_path(relative_path)?;
+        if !unique_paths.insert(portable_path_key(relative_path)) {
+            return Err(format!(
+                "The asset import contains a duplicate path near {relative_path}."
             ));
         }
     }
 
     let mut image_files = Vec::new();
+    let mut attachment_files = Vec::new();
     let mut path_mappings = BTreeMap::new();
     let mut reserved_paths = HashSet::new();
     let mut warnings = WarningCollector::default();
@@ -4212,8 +4381,102 @@ fn begin_workspace_image_import(
         });
     }
 
+    for relative_path in attachment_paths {
+        let source = match resolve_attachment_import_source(source_root, relative_path) {
+            Ok(source) => source,
+            Err(error) => {
+                match workspace_attachment_import_path(
+                    root,
+                    relative_path,
+                    None,
+                    &reserved_paths,
+                ) {
+                    Ok((target_path, _)) => {
+                        reserved_paths.insert(portable_path_key(&target_path));
+                        path_mappings.insert(relative_path.clone(), target_path);
+                    }
+                    Err(path_error) => warnings.push(format!(
+                        "Could not reserve a safe path for {relative_path}: {path_error}"
+                    )),
+                }
+                warnings.push(format!("Skipped {relative_path}: {error}"));
+                continue;
+            }
+        };
+        let fingerprint = match fingerprint_attachment_file(&source) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                match workspace_attachment_import_path(
+                    root,
+                    relative_path,
+                    None,
+                    &reserved_paths,
+                ) {
+                    Ok((target_path, _)) => {
+                        reserved_paths.insert(portable_path_key(&target_path));
+                        path_mappings.insert(relative_path.clone(), target_path);
+                    }
+                    Err(path_error) => warnings.push(format!(
+                        "Could not reserve a safe path for {relative_path}: {path_error}"
+                    )),
+                }
+                warnings.push(format!("Skipped {relative_path}: {error}"));
+                continue;
+            }
+        };
+        let (target_path, reuse_existing) = match workspace_attachment_import_path(
+            root,
+            relative_path,
+            Some(&fingerprint),
+            &reserved_paths,
+        ) {
+            Ok(target) => target,
+            Err(error) => {
+                warnings.push(format!(
+                    "Could not reserve a safe path for {relative_path}: {error}"
+                ));
+                continue;
+            }
+        };
+        reserved_paths.insert(portable_path_key(&target_path));
+        path_mappings.insert(relative_path.clone(), target_path.clone());
+        if target_path != *relative_path {
+            warnings.push(format!(
+                "Imported {relative_path} as {target_path} to avoid an existing vault path."
+            ));
+        }
+        let media_type = attachment_media_type_for_path(Path::new(&target_path)).to_owned();
+        let opening_disabled = if reuse_existing {
+            resolve_workspace_asset_file(root, &target_path, false)
+                .and_then(|path| attachment_opening_is_disabled(&path))
+                .unwrap_or(true)
+        } else {
+            attachment_opening_is_disabled(&source).unwrap_or(true)
+        };
+        if !reuse_existing {
+            if let Err(error) = stage_workspace_attachment_import(
+                root,
+                &mut transaction,
+                &target_path,
+                &source,
+                &fingerprint,
+            ) {
+                warnings.push(format!("Skipped {relative_path}: {error}"));
+                continue;
+            }
+        }
+        attachment_files.push(VaultAttachmentFile {
+            asset_id: None,
+            relative_path: target_path,
+            media_type,
+            byte_length: fingerprint.length,
+            opening_disabled,
+        });
+    }
+
     if let Some(missing_path) = image_paths
         .iter()
+        .chain(attachment_paths.iter())
         .find(|path| !path_mappings.contains_key(path.as_str()))
     {
         if let Some(transaction_root) = transaction.transaction_root.take() {
@@ -4229,12 +4492,24 @@ fn begin_workspace_image_import(
     Ok(WorkspaceImportImagesResult {
         image_count: image_files.len(),
         image_files,
+        attachment_count: attachment_files.len(),
+        attachment_files,
         path_mappings,
         transaction_id,
         revision,
         saved_at: now_millis(),
         warnings: warnings.finish(),
     })
+}
+
+#[cfg(test)]
+fn begin_workspace_image_import(
+    root: &Path,
+    source_root: &Path,
+    image_paths: &[String],
+    expected_revision: u64,
+) -> Result<WorkspaceImportImagesResult, String> {
+    begin_workspace_asset_import(root, source_root, image_paths, &[], expected_revision)
 }
 
 #[cfg(test)]
@@ -4266,7 +4541,7 @@ fn prepare_workspace_image_import(
     let baseline = revision_entries_for_root(root)?;
     if revision_for_entries(&baseline) != expected_revision {
         return Err(
-            "The vault changed before its images could be imported. Reload it and try again."
+            "The vault changed before its assets could be imported. Reload it and try again."
                 .to_owned(),
         );
     }
@@ -4287,7 +4562,7 @@ fn stage_workspace_image_import(
         Some(transaction_root) => transaction_root,
         None => {
             let created = prepare_transaction_root(root, &new_transaction_id())
-                .map_err(|error| format!("Could not prepare the image import: {error}"))?;
+                .map_err(|error| format!("Could not prepare the asset import: {error}"))?;
             transaction.transaction_root.insert(created)
         }
     };
@@ -4297,7 +4572,7 @@ fn stage_workspace_image_import(
         .parent()
         .ok_or_else(|| "The staged image path has no parent folder.".to_owned())?;
     ensure_private_directory_tree(transaction_root, parent)
-        .map_err(|error| format!("Could not prepare an image import: {error}"))?;
+        .map_err(|error| format!("Could not prepare an asset import: {error}"))?;
     atomic_write(&staged, bytes)
         .map_err(|error| format!("Could not stage {relative_path}: {error}"))?;
     if fingerprint_regular_file(&staged)? != Some(fingerprint.clone()) {
@@ -4338,7 +4613,7 @@ fn apply_workspace_image_import(
             discard_private_transaction(root, transaction_root, warnings);
         }
         return Err(
-            "The vault changed while its images were being prepared. Reload it and try again."
+            "The vault changed while its assets were being prepared. Reload it and try again."
                 .to_owned(),
         );
     }
@@ -4377,7 +4652,7 @@ fn apply_workspace_image_import(
         Some(transaction_id) => transaction_id.to_owned(),
         None => {
             discard_private_transaction(root, &transaction_root, warnings);
-            return Err("The image import transaction ID is invalid.".to_owned());
+            return Err("The asset import transaction ID is invalid.".to_owned());
         }
     };
     let mut manifest = TransactionManifest {
@@ -4399,7 +4674,7 @@ fn apply_workspace_image_import(
         Ok(_) => {
             discard_private_transaction(root, &transaction_root, warnings);
             return Err(
-                "The vault changed while its images were being prepared. Reload it and try again."
+                "The vault changed while its assets were being prepared. Reload it and try again."
                     .to_owned(),
             );
         }
@@ -4417,18 +4692,25 @@ fn apply_workspace_image_import(
     let result = (|| {
         if revision_entries_for_root(root)? != baseline {
             return Err(
-                "The vault changed before its images could be committed. Reload it and try again."
+                "The vault changed before its assets could be committed. Reload it and try again."
                     .to_owned(),
             );
         }
         for target in &manifest.targets {
-            ensure_asset_parent(root, &target.relative_path, "image")?;
+            let label = match target.kind {
+                TransactionTargetKind::Image => "image",
+                TransactionTargetKind::Attachment => "attachment",
+                TransactionTargetKind::Markdown => {
+                    return Err("A Markdown file was included in an asset import.".to_owned())
+                }
+            };
+            ensure_asset_parent(root, &target.relative_path, label)?;
             apply_staged_import_image(root, &transaction_root, target)?;
         }
         let committed_entries = verify_image_import_consistency(root, &baseline, &manifest)?;
         if verify_image_import_consistency(root, &baseline, &manifest)? != committed_entries {
             return Err(
-                "The vault changed while its imported images were being verified. Reload it and try again."
+                "The vault changed while its imported assets were being verified. Reload it and try again."
                     .to_owned(),
             );
         }
@@ -4449,7 +4731,7 @@ fn apply_workspace_image_import(
                 return Err(error);
             }
             return Err(format!(
-                "{error} The interrupted image import could not be fully rolled back. Reopen the vault before editing again."
+                "{error} The interrupted asset import could not be fully rolled back. Reopen the vault before editing again."
             ));
         }
     };
@@ -4463,7 +4745,7 @@ fn pending_workspace_image_import(
 ) -> Result<(PathBuf, TransactionManifest), String> {
     let transaction_root = existing_transaction_root(root, transaction_id)?;
     let manifest = read_transaction_manifest(&transaction_root)?
-        .ok_or_else(|| "The pending image import has no transaction manifest.".to_owned())?;
+        .ok_or_else(|| "The pending asset import has no transaction manifest.".to_owned())?;
     if manifest.id != transaction_id
         || manifest.version > TRANSACTION_VERSION
         || manifest.phase != TransactionPhase::Applying
@@ -4474,21 +4756,21 @@ fn pending_workspace_image_import(
         || manifest
             .targets
             .iter()
-            .any(|target| target.kind != TransactionTargetKind::Image)
+            .any(|target| target.kind == TransactionTargetKind::Markdown)
     {
-        return Err("The pending image import transaction is invalid.".to_owned());
+        return Err("The pending asset import transaction is invalid.".to_owned());
     }
     for target in &manifest.targets {
         if !import_image_was_applied(&transaction_root, target)? {
             return Err(format!(
-                "The pending image import did not create {}.",
+                "The pending asset import did not create {}.",
                 target.relative_path,
             ));
         }
-        let path = resolve_workspace_image_file(root, &target.relative_path, false)?;
+        let path = resolve_transaction_target_file(root, target, false)?;
         if fingerprint_regular_file(&path)? != Some(target.fingerprint.clone()) {
             return Err(format!(
-                "The imported image {} changed before its notes were saved.",
+                "The imported asset {} changed before its notes were saved.",
                 target.relative_path,
             ));
         }
@@ -4528,21 +4810,47 @@ fn staged_import_image_path(
     transaction_root: &Path,
     relative_path: &str,
 ) -> Result<PathBuf, String> {
-    validate_image_relative_path(relative_path)?;
+    staged_import_asset_path(
+        transaction_root,
+        relative_path,
+        &TransactionTargetKind::Image,
+    )
+}
+
+fn staged_import_asset_path(
+    transaction_root: &Path,
+    relative_path: &str,
+    kind: &TransactionTargetKind,
+) -> Result<PathBuf, String> {
+    match kind {
+        TransactionTargetKind::Image => validate_image_relative_path(relative_path)?,
+        TransactionTargetKind::Attachment => validate_attachment_relative_path(relative_path)?,
+        TransactionTargetKind::Markdown => {
+            return Err("Markdown files cannot be staged as imported assets.".to_owned())
+        }
+    }
     let internal_path = checked_internal_transaction_path(
-        &format!("images/{relative_path}"),
+        &format!("assets/{relative_path}"),
         true,
     )?;
     Ok(transaction_root.join(internal_path))
 }
 
-fn import_image_applied_marker_path(
+fn import_asset_applied_marker_path(
     transaction_root: &Path,
-    relative_path: &str,
+    target: &TransactionTarget,
 ) -> Result<PathBuf, String> {
-    validate_image_relative_path(relative_path)?;
+    match target.kind {
+        TransactionTargetKind::Image => validate_image_relative_path(&target.relative_path)?,
+        TransactionTargetKind::Attachment => {
+            validate_attachment_relative_path(&target.relative_path)?
+        }
+        TransactionTargetKind::Markdown => {
+            return Err("Markdown files do not use asset import markers.".to_owned())
+        }
+    }
     let internal_path = checked_internal_transaction_path(
-        &format!("applied/{relative_path}.json"),
+        &format!("applied/{}.json", target.relative_path),
         true,
     )?;
     Ok(transaction_root.join(internal_path))
@@ -4554,19 +4862,19 @@ fn validate_private_import_directory(
 ) -> Result<(), String> {
     let relative = directory
         .strip_prefix(transaction_root)
-        .map_err(|_| "A private image import path escaped its transaction.".to_owned())?;
+        .map_err(|_| "A private asset import path escaped its transaction.".to_owned())?;
     let root_metadata = fs::symlink_metadata(transaction_root)
-        .map_err(|error| format!("Could not inspect the image import transaction: {error}"))?;
+        .map_err(|error| format!("Could not inspect the asset import transaction: {error}"))?;
     if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err("The image import transaction is not a regular folder.".to_owned());
+        return Err("The asset import transaction is not a regular folder.".to_owned());
     }
     let mut current = transaction_root.to_path_buf();
     for component in relative.components() {
         current.push(component.as_os_str());
         let metadata = fs::symlink_metadata(&current)
-            .map_err(|error| format!("Could not inspect a private image import folder: {error}"))?;
+            .map_err(|error| format!("Could not inspect a private asset import folder: {error}"))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err("A private image import path is not a regular folder.".to_owned());
+            return Err("A private asset import path is not a regular folder.".to_owned());
         }
     }
     Ok(())
@@ -4576,21 +4884,18 @@ fn mark_import_image_applied(
     transaction_root: &Path,
     target: &TransactionTarget,
 ) -> Result<(), String> {
-    let marker = import_image_applied_marker_path(
-        transaction_root,
-        &target.relative_path,
-    )?;
+    let marker = import_asset_applied_marker_path(transaction_root, target)?;
     let parent = marker
         .parent()
-        .ok_or_else(|| "The image import marker has no parent folder.".to_owned())?;
+        .ok_or_else(|| "The asset import marker has no parent folder.".to_owned())?;
     ensure_private_directory_tree(transaction_root, parent)
-        .map_err(|error| format!("Could not prepare an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not prepare an asset import marker: {error}"))?;
     let bytes = serde_json::to_vec(&target.fingerprint)
-        .map_err(|error| format!("Could not encode an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not encode an asset import marker: {error}"))?;
     atomic_write(&marker, &bytes)
-        .map_err(|error| format!("Could not save an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not save an asset import marker: {error}"))?;
     if fingerprint_regular_file(&marker)? != Some(fingerprint_bytes(&bytes)) {
-        return Err("An image import marker failed its integrity check.".to_owned());
+        return Err("An asset import marker failed its integrity check.".to_owned());
     }
     Ok(())
 }
@@ -4599,30 +4904,27 @@ fn import_image_was_applied(
     transaction_root: &Path,
     target: &TransactionTarget,
 ) -> Result<bool, String> {
-    let marker = import_image_applied_marker_path(
-        transaction_root,
-        &target.relative_path,
-    )?;
+    let marker = import_asset_applied_marker_path(transaction_root, target)?;
     let metadata = match fs::symlink_metadata(&marker) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
-            return Err(format!("Could not inspect an image import marker: {error}"));
+            return Err(format!("Could not inspect an asset import marker: {error}"));
         }
     };
     let marker_parent = marker
         .parent()
-        .ok_or_else(|| "The image import marker has no parent folder.".to_owned())?;
+        .ok_or_else(|| "The asset import marker has no parent folder.".to_owned())?;
     validate_private_import_directory(transaction_root, marker_parent)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 1024 {
-        return Err("An image import marker is unsafe or unexpectedly large.".to_owned());
+        return Err("An asset import marker is unsafe or unexpectedly large.".to_owned());
     }
     let bytes = fs::read(&marker)
-        .map_err(|error| format!("Could not read an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not read an asset import marker: {error}"))?;
     let fingerprint: FileFingerprint = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("Could not parse an image import marker: {error}"))?;
+        .map_err(|error| format!("Could not parse an asset import marker: {error}"))?;
     if fingerprint != target.fingerprint {
-        return Err("An image import marker does not match its target.".to_owned());
+        return Err("An asset import marker does not match its target.".to_owned());
     }
     Ok(true)
 }
@@ -4632,13 +4934,17 @@ fn apply_staged_import_image(
     transaction_root: &Path,
     target: &TransactionTarget,
 ) -> Result<(), String> {
-    let staged = staged_import_image_path(transaction_root, &target.relative_path)?;
+    let staged = staged_import_asset_path(
+        transaction_root,
+        &target.relative_path,
+        &target.kind,
+    )?;
     let staged_parent = staged
         .parent()
-        .ok_or_else(|| "The staged image has no parent folder.".to_owned())?;
+        .ok_or_else(|| "The staged asset has no parent folder.".to_owned())?;
     validate_private_import_directory(transaction_root, staged_parent)?;
     let metadata = fs::symlink_metadata(&staged)
-        .map_err(|error| format!("Could not inspect staged image {}: {error}", target.relative_path))?;
+        .map_err(|error| format!("Could not inspect staged asset {}: {error}", target.relative_path))?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() != target.fingerprint.length
@@ -4649,15 +4955,15 @@ fn apply_staged_import_image(
         ));
     }
     let source = File::open(&staged)
-        .map_err(|error| format!("Could not open staged image {}: {error}", target.relative_path))?;
+        .map_err(|error| format!("Could not open staged asset {}: {error}", target.relative_path))?;
     let opened_metadata = source
         .metadata()
-        .map_err(|error| format!("Could not inspect staged image {}: {error}", target.relative_path))?;
+        .map_err(|error| format!("Could not inspect staged asset {}: {error}", target.relative_path))?;
     if !opened_metadata.is_file() || opened_metadata.len() != target.fingerprint.length {
         return Err(format!("The staged copy of {} changed.", target.relative_path));
     }
 
-    let destination = resolve_workspace_image_file(root, &target.relative_path, true)?;
+    let destination = resolve_transaction_target_file(root, target, true)?;
     if let Some(parent) = destination.parent() {
         ensure_existing_directory_without_symlink(root, parent)?;
     }
@@ -4679,7 +4985,7 @@ fn apply_staged_import_image(
         if copied != target.fingerprint.length {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "the staged image length changed",
+                "the staged asset length changed",
             ));
         }
         destination_file.flush()?;
@@ -4716,10 +5022,10 @@ fn verify_image_import_consistency(
     manifest: &TransactionManifest,
 ) -> Result<Vec<RevisionEntry>, String> {
     for target in &manifest.targets {
-        let destination = resolve_workspace_image_file(root, &target.relative_path, false)?;
+        let destination = resolve_transaction_target_file(root, target, false)?;
         if fingerprint_regular_file(&destination)? != Some(target.fingerprint.clone()) {
             return Err(format!(
-                "{} changed while its image import was being committed.",
+                "{} changed while its asset import was being committed.",
                 target.relative_path
             ));
         }
@@ -4742,7 +5048,7 @@ fn verify_image_import_consistency(
         .any(|label| !current.iter().any(|entry| &entry.0 == label))
     {
         return Err(
-            "The vault changed while its image folders were being committed. Reload it and try again."
+            "The vault changed while its asset folders were being committed. Reload it and try again."
                 .to_owned(),
         );
     }
@@ -4753,7 +5059,7 @@ fn verify_image_import_consistency(
         .collect::<Vec<_>>();
     if unaffected != baseline {
         return Err(
-            "The vault changed outside Obsidian At Home during the image import. Reload it before editing again."
+            "The vault changed outside Obsidian At Home during the asset import. Reload it before editing again."
                 .to_owned(),
         );
     }
@@ -4824,22 +5130,22 @@ fn ensure_asset_parent(
 
 fn validate_image_import_root(input: &str) -> Result<PathBuf, String> {
     if input.trim().is_empty() {
-        return Err("Choose a vault folder to import images from.".to_owned());
+        return Err("Choose a vault folder to import assets from.".to_owned());
     }
     let path = Path::new(input);
     if !path.is_absolute() {
-        return Err("The image import path must be absolute.".to_owned());
+        return Err("The asset import path must be absolute.".to_owned());
     }
     let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("The image import folder could not be opened: {error}"))?;
+        .map_err(|error| format!("The asset import folder could not be opened: {error}"))?;
     if metadata.file_type().is_symlink() {
-        return Err("The image import folder cannot be a symbolic link.".to_owned());
+        return Err("The asset import folder cannot be a symbolic link.".to_owned());
     }
     if !metadata.is_dir() {
-        return Err("The image import path is not a folder.".to_owned());
+        return Err("The asset import path is not a folder.".to_owned());
     }
     path.canonicalize()
-        .map_err(|error| format!("The image import folder could not be resolved: {error}"))
+        .map_err(|error| format!("The asset import folder could not be resolved: {error}"))
 }
 
 fn resolve_image_import_source(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
@@ -5038,6 +5344,24 @@ fn copy_attachment_file_durable(
         Err(error) => {
             let _ = remove_file_durable(destination);
             Err(error)
+        }
+    }
+}
+
+pub(crate) fn copy_attachment_file_for_transfer(
+    source: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let fingerprint = copy_attachment_file_durable(source, destination)?;
+    match fingerprint_attachment_file(destination) {
+        Ok(copied) if copied == fingerprint => Ok(()),
+        Ok(_) => {
+            let _ = remove_file_durable(destination);
+            Err("The transferred attachment failed its integrity check.".to_owned())
+        }
+        Err(error) => {
+            let _ = remove_file_durable(destination);
+            Err(format!("The transferred attachment could not be verified: {error}"))
         }
     }
 }
@@ -5265,7 +5589,7 @@ fn save_workspace_attachment_copy(
             asset_id,
         )?;
         if !is_archive_attachment_path(&source) {
-            return Err("Only archive attachments use the Save a copy flow.".to_owned());
+            return Err("Only archive attachments use the Save archive as flow.".to_owned());
         }
         let file_name = source
             .file_name()
@@ -5283,7 +5607,11 @@ fn save_workspace_attachment_copy(
         .download_dir()
         .ok()
         .and_then(|directory| safe_external_copy_directory(root, &directory));
-    let mut dialog = app.dialog().file().set_file_name(&source_name);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("Save archive as")
+        .set_file_name(&source_name);
     if let Some(directory) = preferred.or(downloads) {
         dialog = dialog.set_directory(directory);
     }
@@ -8314,6 +8642,9 @@ fn resolve_transaction_target_file(
         TransactionTargetKind::Image => {
             resolve_workspace_image_file(root, &target.relative_path, allow_missing)
         }
+        TransactionTargetKind::Attachment => {
+            resolve_workspace_asset_file(root, &target.relative_path, allow_missing)
+        }
     }
 }
 
@@ -8325,7 +8656,10 @@ fn rollback_transaction(
 ) -> bool {
     let mut recovered = rollback_recovery_targets(root, &manifest.recovery_targets, warnings);
     for target in manifest.targets.iter().rev() {
-        if matches!(target.kind, TransactionTargetKind::Image) {
+        if matches!(
+            target.kind,
+            TransactionTargetKind::Image | TransactionTargetKind::Attachment
+        ) {
             match import_image_was_applied(transaction_root, target) {
                 Ok(true) => {}
                 Ok(false) => continue,
@@ -9061,7 +9395,7 @@ fn existing_transaction_root(root: &Path, transaction_id: &str) -> Result<PathBu
     for (path, label) in [
         (&state_directory, "workspace metadata"),
         (&transactions_directory, "save transactions"),
-        (&transaction_root, "image import transaction"),
+        (&transaction_root, "asset import transaction"),
     ] {
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| format!("Could not inspect the {label} folder: {error}"))?;
@@ -12631,25 +12965,126 @@ mod tests {
     }
 
     #[test]
-    fn failed_note_import_rolls_back_its_copied_images() {
+    fn imports_images_and_streamed_attachments_in_one_transaction() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\ncombined-import-image";
+        const REPORT: &[u8] = b"combined-import-attachment";
+        const EXISTING: &[u8] = b"existing-report";
+        let source = TestWorkspace::new("portable-asset-source");
+        let workspace = TestWorkspace::new("portable-asset-target");
+        fs::create_dir_all(source.root.join("Assets")).unwrap();
+        fs::create_dir_all(workspace.root.join("Assets")).unwrap();
+        fs::write(source.root.join("Assets/Diagram.png"), PNG).unwrap();
+        fs::write(source.root.join("Assets/Report.pdf"), REPORT).unwrap();
+        fs::write(source.root.join("Assets/Empty.bin"), []).unwrap();
+        fs::write(workspace.root.join("Assets/Report.pdf"), EXISTING).unwrap();
+
+        let mut result = begin_workspace_asset_import(
+            &workspace.root,
+            &source.root,
+            &["Assets/Diagram.png".to_owned()],
+            &[
+                "Assets/Report.pdf".to_owned(),
+                "Assets/Empty.bin".to_owned(),
+            ],
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect("images and attachments should share an import transaction");
+
+        assert_eq!(result.image_count, 1);
+        assert_eq!(result.attachment_count, 2);
+        assert_eq!(
+            result.path_mappings.get("Assets/Report.pdf"),
+            Some(&"Assets/Report 2.pdf".to_owned()),
+        );
+        assert_eq!(
+            result.attachment_files,
+            vec![
+                VaultAttachmentFile {
+                    asset_id: None,
+                    relative_path: "Assets/Report 2.pdf".to_owned(),
+                    media_type: "application/pdf".to_owned(),
+                    byte_length: REPORT.len() as u64,
+                    opening_disabled: false,
+                },
+                VaultAttachmentFile {
+                    asset_id: None,
+                    relative_path: "Assets/Empty.bin".to_owned(),
+                    media_type: "application/octet-stream".to_owned(),
+                    byte_length: 0,
+                    opening_disabled: true,
+                },
+            ],
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Assets/Diagram.png")).unwrap(),
+            PNG,
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Assets/Report.pdf")).unwrap(),
+            EXISTING,
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Assets/Report 2.pdf")).unwrap(),
+            REPORT,
+        );
+        assert_eq!(
+            fs::metadata(workspace.root.join("Assets/Empty.bin"))
+                .unwrap()
+                .len(),
+            0,
+        );
+
+        let transaction_id = result
+            .transaction_id
+            .take()
+            .expect("copied assets should retain a transaction");
+        let (_, manifest) = pending_workspace_image_import(&workspace.root, &transaction_id)
+            .expect("both asset kinds should produce a valid pending import");
+        assert!(manifest
+            .targets
+            .iter()
+            .any(|target| target.kind == TransactionTargetKind::Image));
+        assert_eq!(
+            manifest
+                .targets
+                .iter()
+                .filter(|target| target.kind == TransactionTargetKind::Attachment)
+                .count(),
+            2,
+        );
+        finalize_workspace_image_import(
+            &workspace.root,
+            &transaction_id,
+            &mut WarningCollector::default(),
+        )
+        .expect("the combined transaction should finalize");
+    }
+
+    #[test]
+    fn failed_note_import_rolls_back_its_copied_assets() {
         const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrollback-with-notes";
+        const PDF: &[u8] = b"rollback-attachment-with-notes";
         let source = TestWorkspace::new("portable-image-note-rollback-source");
         let workspace = TestWorkspace::new("portable-image-note-rollback-target");
         fs::write(source.root.join("Image.png"), PNG)
             .expect("source image should be written");
+        fs::write(source.root.join("Report.pdf"), PDF)
+            .expect("source attachment should be written");
         let original_revision = revision_for_root(&workspace.root).unwrap();
-        let image_result = begin_workspace_image_import(
+        let image_result = begin_workspace_asset_import(
             &workspace.root,
             &source.root,
             &["Image.png".to_owned()],
+            &["Report.pdf".to_owned()],
             original_revision,
         )
-        .expect("image import should begin");
+        .expect("asset import should begin");
         let transaction_id = image_result
             .transaction_id
             .as_deref()
             .expect("copied images should retain a transaction");
         assert!(workspace.root.join("Image.png").exists());
+        assert!(workspace.root.join("Report.pdf").exists());
 
         let mut invalid_vault = empty_vault("Invalid import");
         invalid_vault.folders.push(Folder {
@@ -12669,6 +13104,7 @@ mod tests {
         assert!(!result.saved);
         assert!(result.error.is_some_and(|error| error.contains("folder")));
         assert!(!workspace.root.join("Image.png").exists());
+        assert!(!workspace.root.join("Report.pdf").exists());
         assert_eq!(result.revision, original_revision);
         assert!(existing_transaction_root(&workspace.root, transaction_id).is_err());
     }

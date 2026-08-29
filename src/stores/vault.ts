@@ -15,6 +15,7 @@ import {
   markdownAttachmentIsExecutable,
   parseMarkdownAttachments,
   relativeAttachmentDestination,
+  type ParsedMarkdownAttachment,
 } from "../lib/markdownAttachments";
 import {
   compareRecentlyDeletedNotes,
@@ -45,7 +46,7 @@ import {
   deleteRecentlyDeletedNotes,
   forgetWorkspace,
   getWorkspaceRevision,
-  importWorkspaceImages,
+  importWorkspaceAssets,
   isTauri,
   openWorkspaceAttachment,
   openWorkspace,
@@ -1587,9 +1588,21 @@ export async function mergeImportedVault(
   result: ImportResult,
   sourcePath: string,
   replace = false,
-): Promise<{ imageCount: number; noteCount: number; saved: boolean; warnings: string[] }> {
+): Promise<{
+  attachmentCount: number;
+  imageCount: number;
+  noteCount: number;
+  saved: boolean;
+  warnings: string[];
+}> {
   return runExclusiveVaultDataOperation(
-    { imageCount: 0, noteCount: result.notes.length, saved: false, warnings: [] },
+    {
+      attachmentCount: 0,
+      imageCount: 0,
+      noteCount: result.notes.length,
+      saved: false,
+      warnings: [],
+    },
     () => mergeImportedVaultExclusive(result, sourcePath, replace),
   );
 }
@@ -1598,15 +1611,28 @@ async function mergeImportedVaultExclusive(
   result: ImportResult,
   sourcePath: string,
   replace: boolean,
-): Promise<{ imageCount: number; noteCount: number; saved: boolean; warnings: string[] }> {
+): Promise<{
+  attachmentCount: number;
+  imageCount: number;
+  noteCount: number;
+  saved: boolean;
+  warnings: string[];
+}> {
   if (!(await flushVault())) {
-    return { imageCount: 0, noteCount: result.notes.length, saved: false, warnings: [] };
+    return {
+      attachmentCount: 0,
+      imageCount: 0,
+      noteCount: result.notes.length,
+      saved: false,
+      warnings: [],
+    };
   }
   clearTimeout(persistTimer);
   const previousSavedVersion = savedVersion;
   const previousActiveNoteId = vaultState.activeNoteId;
   const previousNoteNavigation = snapshotNoteNavigation();
   const previousVault = snapshotVault();
+  let attachmentCount = 0;
   let imageCount = 0;
   let imageImportTransactionId: string | undefined;
   const warnings: string[] = [];
@@ -1616,50 +1642,79 @@ async function mergeImportedVaultExclusive(
       image.relativePath,
     ]),
   );
-  if (result.images.length) {
+  const importedAttachmentPaths = new Map(
+    result.attachments.map((attachment) => [
+      attachment.relativePath.toLowerCase(),
+      attachment.relativePath,
+    ]),
+  );
+  if (result.images.length || result.attachments.length) {
     if (vaultSession.backend !== "native") {
-      warnings.push("The notes were imported, but their image files could not be copied here.");
+      warnings.push("The notes were imported, but their asset files could not be copied here.");
     } else if (!vaultSession.path || !sourcePath) {
-      const warning = "The import stopped because its image source was no longer available.";
+      const warning = "The import stopped because its asset source was no longer available.";
       warnings.push(warning);
       notify(warning, "warning");
 
-      return { imageCount: 0, noteCount: 0, saved: false, warnings };
+      return {
+        attachmentCount: 0,
+        imageCount: 0,
+        noteCount: 0,
+        saved: false,
+        warnings,
+      };
     } else {
       try {
-        const imageResult = await importWorkspaceImages(
+        const assetResult = await importWorkspaceAssets(
           vaultSession.path,
           sourcePath,
           result.images.map((image) => image.relativePath),
+          result.attachments.map((attachment) => attachment.relativePath),
           vaultSession.revision,
         );
         const returnedMappings = new Map(
-          Object.entries(imageResult.pathMappings).map(([source, target]) => [
+          Object.entries(assetResult.pathMappings).map(([source, target]) => [
             source.toLowerCase(),
             target,
           ]),
         );
-        if (result.images.some((image) =>
-          !returnedMappings.has(image.relativePath.toLowerCase())
-        )) {
-          throw new Error("A safe destination could not be reserved for every imported image.");
+        const importedAssetPaths = [
+          ...result.images.map((image) => image.relativePath),
+          ...result.attachments.map((attachment) => attachment.relativePath),
+        ];
+        if (importedAssetPaths.some((path) => !returnedMappings.has(path.toLowerCase()))) {
+          throw new Error("A safe destination could not be reserved for every imported asset.");
         }
         for (const [source, target] of returnedMappings) {
-          importedImagePaths.set(source, target);
+          if (importedImagePaths.has(source)) {
+            importedImagePaths.set(source, target);
+          }
+          if (importedAttachmentPaths.has(source)) {
+            importedAttachmentPaths.set(source, target);
+          }
         }
-        applyWorkspaceSaveResult(imageResult);
-        applyWorkspaceImageFiles(imageResult.imageFiles);
+        applyWorkspaceSaveResult(assetResult);
+        applyWorkspaceImageFiles(assetResult.imageFiles);
+        applyWorkspaceAttachmentFiles(assetResult.attachmentFiles);
         uiState.imageRefreshToken += 1;
-        imageCount = imageResult.imageCount;
-        imageImportTransactionId = imageResult.transactionId;
-        warnings.push(...imageResult.warnings);
+        uiState.attachmentRefreshToken += 1;
+        imageCount = assetResult.imageCount;
+        attachmentCount = assetResult.attachmentCount;
+        imageImportTransactionId = assetResult.transactionId;
+        warnings.push(...assetResult.warnings);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         const warning = `The import stopped before its notes were added: ${detail}`;
         warnings.push(warning);
         notify(warning, "warning");
 
-        return { imageCount: 0, noteCount: 0, saved: false, warnings };
+        return {
+          attachmentCount: 0,
+          imageCount: 0,
+          noteCount: 0,
+          saved: false,
+          warnings,
+        };
       }
     }
   }
@@ -1667,7 +1722,7 @@ async function mergeImportedVaultExclusive(
   if (replace) {
     vaultState.notes.splice(0);
     vaultState.folders.splice(0);
-    rebuildWorkspaceImageFolders();
+    rebuildWorkspaceAssetFolders();
   }
 
   const now = Date.now();
@@ -1679,11 +1734,12 @@ async function mergeImportedVaultExclusive(
     const note: Note = {
       id: createId("note"),
       title,
-      content: rewriteImportedImageReferences(
+      content: rewriteImportedAssetReferences(
         imported.content,
         imported.relativePath,
         relativePath,
         importedImagePaths,
+        importedAttachmentPaths,
       ),
       relativePath,
       folderId,
@@ -1732,6 +1788,7 @@ async function mergeImportedVaultExclusive(
     dirtyVersion = previousSavedVersion;
     savedVersion = previousSavedVersion;
     uiState.imageRefreshToken += 1;
+    uiState.attachmentRefreshToken += 1;
   }
   pruneNoteEditorPositions(currentEditorPositionVaultId(), vaultState.notes);
   pruneNoteEditorHistories(currentEditorPositionVaultId(), vaultState.notes);
@@ -1739,12 +1796,17 @@ async function mergeImportedVaultExclusive(
     saved
       ? `Imported ${result.notes.length} Markdown ${
         result.notes.length === 1 ? "note" : "notes"
-      }${imageCount ? ` and ${imageCount} ${imageCount === 1 ? "image" : "images"}` : ""}`
+      }${imageCount ? ` and ${imageCount} ${imageCount === 1 ? "image" : "images"}` : ""}${
+        attachmentCount
+        ? ` and ${attachmentCount} ${attachmentCount === 1 ? "attachment" : "attachments"}`
+        : ""
+      }`
       : "Import could not be completed",
     saved && !warnings.length ? "success" : "warning",
   );
 
   return {
+    attachmentCount: saved ? attachmentCount : 0,
     imageCount: saved ? imageCount : 0,
     noteCount: saved ? result.notes.length : 0,
     saved,
@@ -1752,11 +1814,12 @@ async function mergeImportedVaultExclusive(
   };
 }
 
-function rewriteImportedImageReferences(
+function rewriteImportedAssetReferences(
   content: string,
   sourceNotePath: string,
   targetNotePath: string,
   imagePaths: ReadonlyMap<string, string>,
+  attachmentPaths: ReadonlyMap<string, string>,
 ): string {
   const replacements: Array<{ from: number; to: number; value: string }> = [];
   for (const image of parseMarkdownImages(content)) {
@@ -1783,15 +1846,39 @@ function rewriteImportedImageReferences(
       }),
     });
   }
+  const isKnownExtensionlessAttachment = (destination: string): boolean => {
+    const sourcePath = resolveMarkdownImagePath(sourceNotePath, destination);
 
-  let rewritten = content;
-  for (const replacement of replacements.reverse()) {
-    rewritten = `${rewritten.slice(0, replacement.from)}${replacement.value}${
-      rewritten.slice(replacement.to)
-    }`;
+    return Boolean(sourcePath && attachmentPaths.has(sourcePath.toLowerCase()));
+  };
+  for (const attachment of parseMarkdownAttachments(content, {
+    acceptExtensionless: isKnownExtensionlessAttachment,
+  })) {
+    const sourceAttachmentPath = resolveMarkdownImagePath(
+      sourceNotePath,
+      attachment.destination,
+    );
+    const targetAttachmentPath = sourceAttachmentPath
+      ? attachmentPaths.get(sourceAttachmentPath.toLowerCase())
+      : undefined;
+    if (!targetAttachmentPath) {
+      continue;
+    }
+    const sourceName = sourceAttachmentPath?.split("/").at(-1) || "Attachment";
+    const targetName = targetAttachmentPath.split("/").at(-1) || "Attachment";
+    replacements.push({
+      from: attachment.start,
+      to: attachment.end + 1,
+      value: formatMarkdownAttachment({
+        label: attachment.label === sourceName ? targetName : attachment.label,
+        destination: relativeAttachmentDestination(targetNotePath, targetAttachmentPath),
+        ...(attachment.title !== undefined ? { title: attachment.title } : {}),
+        inTable: attachment.raw.includes("\\|"),
+      }),
+    });
   }
 
-  return rewritten;
+  return applyMarkdownReplacements(content, replacements);
 }
 
 function importedNoteTargetPath(title: string, folder: string): string {
@@ -2066,8 +2153,9 @@ function mirrorAttachmentsThatFollowNote(note: Note): VaultAttachmentFile[] {
     return [];
   }
   const mirrorFolderKey = mirrorFolder.toLocaleLowerCase();
+  const attachmentPaths = vaultAttachmentPathKeys();
   const referencedPaths = new Set(
-    parseMarkdownAttachments(note.content)
+    parseVaultAttachmentReferences(note.content, note.relativePath, attachmentPaths)
       .map((attachment) => trackedAttachmentPath(attachment.assetId)
         ?? resolveMarkdownImagePath(note.relativePath, attachment.destination))
       .filter((path): path is string => Boolean(path))
@@ -2078,7 +2166,11 @@ function mirrorAttachmentsThatFollowNote(note: Note): VaultAttachmentFile[] {
     if (candidate.id === note.id) {
       continue;
     }
-    for (const reference of parseMarkdownAttachments(candidate.content)) {
+    for (const reference of parseVaultAttachmentReferences(
+      candidate.content,
+      candidate.relativePath,
+      attachmentPaths,
+    )) {
       const path = trackedAttachmentPath(reference.assetId)
         ?? resolveMarkdownImagePath(candidate.relativePath, reference.destination);
       if (path) {
@@ -2498,7 +2590,7 @@ function rewriteAttachmentReferences(
   const replacements: Array<{ from: number; to: number; value: string }> = [];
   const sourceName = sourceRelativePath.split("/").at(-1) || "Attachment";
   const targetName = targetRelativePath.split("/").at(-1) || "Attachment";
-  for (const attachment of parseMarkdownAttachments(content)) {
+  for (const attachment of parseVaultAttachmentReferences(content, noteRelativePath)) {
     const trackedPath = trackedAttachmentPath(attachment.assetId);
     const resolvedPath = resolveMarkdownImagePath(noteRelativePath, attachment.destination);
     const matchesAsset = Boolean(previousAssetId && attachment.assetId === previousAssetId);
@@ -2531,6 +2623,31 @@ function trackedAttachmentPath(assetId: string | undefined): string | undefined 
     ?.relativePath
     ?? vaultState.attachmentFiles.find((attachment) => attachment.assetId === assetId)
       ?.relativePath;
+}
+
+function vaultAttachmentPathKeys(): ReadonlySet<string> {
+  return new Set(
+    vaultState.attachmentFiles.map((attachment) =>
+      attachment.relativePath.toLocaleLowerCase()
+    ),
+  );
+}
+
+function parseVaultAttachmentReferences(
+  content: string,
+  noteRelativePath: string,
+  attachmentPaths = vaultAttachmentPathKeys(),
+): ParsedMarkdownAttachment[] {
+  return parseMarkdownAttachments(content, {
+    acceptExtensionless(destination) {
+      const relativePath = resolveMarkdownImagePath(noteRelativePath, destination);
+
+      return Boolean(
+        relativePath
+        && attachmentPaths.has(relativePath.toLocaleLowerCase()),
+      );
+    },
+  });
 }
 
 const ARCHIVE_COPY_DIRECTORY_KEY = "obsidian-at-home.archive-copy-directory.v1";
@@ -2580,11 +2697,11 @@ export async function activateVaultAttachment(
           // Remembering the folder is helpful but not required for a successful copy.
         }
       }
-      notify("Saved an archive copy outside the vault", "success", {
-        label: "Reveal copy",
+      notify("Saved the archive outside the vault", "success", {
+        label: "Reveal archive",
         run: () => {
           void revealItemInDir(result.path).catch((error) =>
-            notify(errorMessage(error, "The archive copy could not be revealed."), "warning")
+            notify(errorMessage(error, "The saved archive could not be revealed."), "warning")
           );
         },
       });
@@ -2672,7 +2789,7 @@ function rewriteAssetDestinationsForNotePath(
       }),
     });
   }
-  for (const attachment of parseMarkdownAttachments(content)) {
+  for (const attachment of parseVaultAttachmentReferences(content, sourceNotePath)) {
     const trackedPath = attachment.assetId
       ? vaultState.embeddedAttachments.find((asset) => asset.id === attachment.assetId)
           ?.relativePath
@@ -2705,7 +2822,7 @@ function applyMarkdownReplacements(
   replacements: Array<{ from: number; to: number; value: string }>,
 ): string {
   let result = content;
-  for (const replacement of replacements.reverse()) {
+  for (const replacement of [...replacements].sort((left, right) => right.from - left.from)) {
     result = `${result.slice(0, replacement.from)}${replacement.value}${result.slice(replacement.to)}`;
   }
 
@@ -3029,6 +3146,14 @@ function applyWorkspaceImageFiles(images: VaultImageFile[]): void {
   });
 }
 
+function applyWorkspaceAttachmentFiles(attachments: VaultAttachmentFile[]): void {
+  applyVaultMutation(() => {
+    for (const attachment of attachments) {
+      upsertWorkspaceAttachmentFile(attachment);
+    }
+  });
+}
+
 function upsertWorkspaceImageFile(image: VaultImageFile): void {
   const portablePath = image.relativePath.toLocaleLowerCase();
   const index = vaultState.imageFiles.findIndex((candidate) =>
@@ -3078,9 +3203,12 @@ function ensureWorkspaceAssetFolders(relativePath: string): void {
   }
 }
 
-function rebuildWorkspaceImageFolders(): void {
+function rebuildWorkspaceAssetFolders(): void {
   for (const image of vaultState.imageFiles) {
     ensureWorkspaceAssetFolders(image.relativePath);
+  }
+  for (const attachment of vaultState.attachmentFiles) {
+    ensureWorkspaceAssetFolders(attachment.relativePath);
   }
 }
 

@@ -67,6 +67,7 @@ import type {
 } from "./liveMarkdownTable";
 
 export interface LiveMarkdownOptions {
+  readonly acceptExtensionlessAttachment?: (destination: string) => boolean;
   readonly activateAttachment?: MarkdownAttachmentAction;
   readonly documentId: string;
   readonly openLink: (href: string) => void;
@@ -1633,7 +1634,9 @@ function addMarkdownAttachmentDecoration(
   options: LiveMarkdownOptions,
   resolutionVersion: number,
 ): boolean {
-  const attachment = parseMarkdownAttachmentAt(value, node.from);
+  const attachment = parseMarkdownAttachmentAt(value, node.from, {
+    acceptExtensionless: options.acceptExtensionlessAttachment,
+  });
   if (!attachment || attachment.end + 1 !== node.to) {
     return false;
   }

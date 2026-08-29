@@ -1,4 +1,7 @@
-use crate::workspace::{is_supported_image_path, validate_image_bytes, MAX_IMAGE_BYTES};
+use crate::workspace::{
+    copy_attachment_file_for_transfer, is_supported_image_path, validate_image_bytes,
+    MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -12,7 +15,7 @@ use walkdir::{DirEntry, WalkDir};
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_SNIPPET_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TOTAL_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_IMPORTED_IMAGES: usize = 100_000;
+const MAX_IMPORTED_ASSETS: usize = 100_000;
 const MAX_IMPORTED_NOTES: usize = 100_000;
 const MAX_WARNINGS: usize = 200;
 
@@ -34,6 +37,12 @@ pub struct ImportedImage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportedAttachment {
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultSnippet {
     pub name: String,
     pub css: String,
@@ -46,6 +55,7 @@ pub struct VaultSnippet {
 pub struct ImportResult {
     pub vault_name: String,
     pub images: Vec<ImportedImage>,
+    pub attachments: Vec<ImportedAttachment>,
     pub notes: Vec<ImportedNote>,
     pub snippets: Vec<VaultSnippet>,
     pub warnings: Vec<String>,
@@ -76,6 +86,7 @@ pub struct ExportTemplate {
 pub struct ExportResult {
     pub path: String,
     pub image_count: usize,
+    pub attachment_count: usize,
     pub note_count: usize,
     pub template_count: usize,
     pub snippet_count: usize,
@@ -131,7 +142,7 @@ pub async fn pick_attachment_file(app: AppHandle) -> Result<Option<String>, Stri
 
 /// Reads an Obsidian vault without modifying it.
 ///
-/// Markdown is returned byte-for-byte as UTF-8 text, and safe image paths are
+/// Markdown is returned byte-for-byte as UTF-8 text, and safe asset paths are
 /// inventoried for a later confirmed copy. Frontmatter is only inspected to infer a
 /// display title and tags; the caller receives the original content unchanged.
 #[tauri::command]
@@ -145,6 +156,7 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
         .to_owned();
 
     let mut images = Vec::new();
+    let mut attachments = Vec::new();
     let mut notes = Vec::new();
     let mut warnings = WarningCollector::default();
     let mut total_bytes = 0_u64;
@@ -167,10 +179,13 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
         if entry.file_type().is_symlink() || !entry.file_type().is_file() {
             continue;
         }
+        if is_canvas_path(entry.path()) {
+            continue;
+        }
         if is_supported_image_path(entry.path()) {
-            if images.len() >= MAX_IMPORTED_IMAGES {
+            if images.len().saturating_add(attachments.len()) >= MAX_IMPORTED_ASSETS {
                 warnings.push(format!(
-                    "Only the first {MAX_IMPORTED_IMAGES} images can be imported."
+                    "Only the first {MAX_IMPORTED_ASSETS} asset files can be imported."
                 ));
                 continue;
             }
@@ -180,6 +195,17 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
             continue;
         }
         if !is_markdown_path(entry.path()) {
+            if images.len().saturating_add(attachments.len()) >= MAX_IMPORTED_ASSETS {
+                warnings.push(format!(
+                    "Only the first {MAX_IMPORTED_ASSETS} asset files can be imported."
+                ));
+                continue;
+            }
+            if let Some(attachment) =
+                inspect_portable_attachment(&root, &entry, &mut warnings)
+            {
+                attachments.push(attachment);
+            }
             continue;
         }
         if notes.len() >= MAX_IMPORTED_NOTES {
@@ -272,19 +298,21 @@ pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
     }
 
     images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    attachments.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let snippets = import_snippets(&root, &mut warnings);
 
     Ok(ImportResult {
         vault_name,
         images,
+        attachments,
         notes,
         snippets,
         warnings: warnings.finish(),
     })
 }
 
-/// Writes a portable Obsidian vault, including supported image files, into a
+/// Writes a portable Obsidian vault, including supported asset files, into a
 /// newly-created child of `parent_path`. Existing files and directories are
 /// never reused or overwritten.
 #[tauri::command(rename_all = "camelCase")]
@@ -300,7 +328,7 @@ pub fn export_obsidian_vault(
     let source_root = validate_import_root(&source_path)?;
     validate_vault_name(&vault_name)?;
     let mut warnings = WarningCollector::default();
-    let images = collect_portable_images(&source_root, &mut warnings);
+    let (images, attachments) = collect_portable_assets(&source_root, &mut warnings);
 
     let root = create_unique_export_dir(&parent, vault_name.trim()).map_err(|error| {
         format!(
@@ -446,10 +474,13 @@ pub fn export_obsidian_vault(
     }
 
     let image_count = export_portable_images(&source_root, &root, &images, &mut warnings);
+    let attachment_count =
+        export_portable_attachments(&source_root, &root, &attachments, &mut warnings);
 
     Ok(ExportResult {
         path: root.to_string_lossy().into_owned(),
         image_count,
+        attachment_count,
         note_count,
         template_count,
         snippet_count,
@@ -565,11 +596,19 @@ fn is_markdown_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn collect_portable_images(
+fn is_canvas_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("canvas"))
+        .unwrap_or(false)
+}
+
+fn collect_portable_assets(
     root: &Path,
     warnings: &mut WarningCollector,
-) -> Vec<ImportedImage> {
+) -> (Vec<ImportedImage>, Vec<ImportedAttachment>) {
     let mut images = Vec::new();
+    let mut attachments = Vec::new();
     for entry in WalkDir::new(root)
         .follow_links(false)
         .max_depth(128)
@@ -583,24 +622,31 @@ fn collect_portable_images(
                 continue;
             }
         };
-        if entry.file_type().is_symlink()
-            || !entry.file_type().is_file()
-            || !is_supported_image_path(entry.path())
-        {
+        if entry.file_type().is_symlink() || !entry.file_type().is_file() {
             continue;
         }
-        if images.len() >= MAX_IMPORTED_IMAGES {
+        if is_markdown_path(entry.path()) || is_canvas_path(entry.path()) {
+            continue;
+        }
+        if images.len().saturating_add(attachments.len()) >= MAX_IMPORTED_ASSETS {
             warnings.push(format!(
-                "Only the first {MAX_IMPORTED_IMAGES} images can be transferred."
+                "Only the first {MAX_IMPORTED_ASSETS} asset files can be transferred."
             ));
             continue;
         }
-        if let Some(image) = inspect_portable_image(root, &entry, warnings) {
-            images.push(image);
+        if is_supported_image_path(entry.path()) {
+            if let Some(image) = inspect_portable_image(root, &entry, warnings) {
+                images.push(image);
+            }
+        } else if let Some(attachment) =
+            inspect_portable_attachment(root, &entry, warnings)
+        {
+            attachments.push(attachment);
         }
     }
     images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    images
+    attachments.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    (images, attachments)
 }
 
 fn inspect_portable_image(
@@ -647,6 +693,50 @@ fn inspect_portable_image(
     Some(ImportedImage { relative_path })
 }
 
+fn inspect_portable_attachment(
+    root: &Path,
+    entry: &DirEntry,
+    warnings: &mut WarningCollector,
+) -> Option<ImportedAttachment> {
+    let metadata = match entry.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            warnings.push(format!(
+                "Skipped {} because its metadata could not be read: {error}",
+                display_relative(root, entry.path())
+            ));
+            return None;
+        }
+    };
+    if metadata.len() > MAX_ATTACHMENT_BYTES {
+        warnings.push(format!(
+            "Skipped {} because attachments must be no larger than {} GiB.",
+            display_relative(root, entry.path()),
+            MAX_ATTACHMENT_BYTES / 1024 / 1024 / 1024
+        ));
+        return None;
+    }
+    let Some(relative_path) = entry
+        .path()
+        .strip_prefix(root)
+        .ok()
+        .and_then(path_to_slash_string)
+    else {
+        warnings.push(format!(
+            "Skipped an attachment whose path is not valid Unicode: {}",
+            entry.path().display()
+        ));
+        return None;
+    };
+    if let Err(reason) = checked_relative_attachment_path(&relative_path) {
+        warnings.push(format!(
+            "Skipped {relative_path} because its attachment path is unsafe: {reason}"
+        ));
+        return None;
+    }
+    Some(ImportedAttachment { relative_path })
+}
+
 fn export_portable_images(
     source_root: &Path,
     export_root: &Path,
@@ -665,7 +755,7 @@ fn export_portable_images(
                 continue;
             }
         };
-        let source = match resolve_portable_source_image(source_root, &relative) {
+        let source = match resolve_portable_source_file(source_root, &relative, "image") {
             Ok(source) => source,
             Err(error) => {
                 warnings.push(format!("Skipped {}: {error}", image.relative_path));
@@ -712,20 +802,74 @@ fn export_portable_images(
     copied
 }
 
-fn resolve_portable_source_image(root: &Path, relative: &Path) -> Result<PathBuf, String> {
+fn export_portable_attachments(
+    source_root: &Path,
+    export_root: &Path,
+    attachments: &[ImportedAttachment],
+    warnings: &mut WarningCollector,
+) -> usize {
+    let mut copied = 0;
+    for attachment in attachments {
+        let relative = match checked_relative_attachment_path(&attachment.relative_path) {
+            Ok(relative) => relative,
+            Err(reason) => {
+                warnings.push(format!(
+                    "Skipped {} because its attachment path is unsafe: {reason}",
+                    attachment.relative_path
+                ));
+                continue;
+            }
+        };
+        let source = match resolve_portable_source_file(source_root, &relative, "attachment") {
+            Ok(source) => source,
+            Err(error) => {
+                warnings.push(format!("Skipped {}: {error}", attachment.relative_path));
+                continue;
+            }
+        };
+        let target = export_root.join(&relative);
+        if let Some(parent) = target.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
+                warnings.push(format!(
+                    "Could not create the folder for {}: {error}",
+                    attachment.relative_path
+                ));
+                continue;
+            }
+        }
+        match copy_portable_attachment(&source, &target) {
+            Ok(()) => copied += 1,
+            Err(error) => warnings.push(format!(
+                "Could not export {}: {error}",
+                attachment.relative_path
+            )),
+        }
+    }
+    copied
+}
+
+fn copy_portable_attachment(source: &Path, target: &Path) -> Result<(), String> {
+    copy_attachment_file_for_transfer(source, target)
+}
+
+fn resolve_portable_source_file(
+    root: &Path,
+    relative: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
     let mut current = root.to_path_buf();
     for component in relative.components() {
         current.push(component.as_os_str());
         let metadata = fs::symlink_metadata(&current)
-            .map_err(|error| format!("the source image could not be inspected: {error}"))?;
+            .map_err(|error| format!("the source {label} could not be inspected: {error}"))?;
         if metadata.file_type().is_symlink() {
             return Err("symbolic links are not followed".to_owned());
         }
     }
     let metadata = fs::symlink_metadata(&current)
-        .map_err(|error| format!("the source image could not be inspected: {error}"))?;
+        .map_err(|error| format!("the source {label} could not be inspected: {error}"))?;
     if !metadata.is_file() {
-        return Err("the source image is not a regular file".to_owned());
+        return Err(format!("the source {label} is not a regular file"));
     }
     Ok(current)
 }
@@ -1112,6 +1256,46 @@ fn checked_relative_image_path(path: &str) -> Result<PathBuf, String> {
     Ok(relative)
 }
 
+fn checked_relative_attachment_path(path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() || path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
+        return Err("absolute paths and backslashes are not allowed".to_owned());
+    }
+    let candidate = Path::new(path);
+    if is_markdown_path(candidate) {
+        return Err("Markdown files are notes, not attachments".to_owned());
+    }
+    if is_canvas_path(candidate) {
+        return Err("Canvas files are not attachments".to_owned());
+    }
+    if is_supported_image_path(candidate) {
+        return Err("supported image files must be transferred as images".to_owned());
+    }
+    let file_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .ok_or_else(|| "the attachment file name is invalid".to_owned())?;
+    if file_name.len() > 255
+        || file_name.ends_with('.')
+        || file_name.ends_with(' ')
+        || file_name.chars().any(|character| {
+            character.is_control()
+                || matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+        || is_windows_reserved_name(file_name)
+    {
+        return Err("the attachment file name is not portable".to_owned());
+    }
+    let folder = candidate
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(path_to_slash_string)
+        .unwrap_or_default();
+    let mut relative = checked_relative_folder(&folder)?;
+    relative.push(file_name);
+    Ok(relative)
+}
+
 fn safe_file_stem(input: &str, fallback: &str) -> String {
     let input = strip_extension_case_insensitive(input.trim(), "md");
     let mut result = String::with_capacity(input.len().min(120));
@@ -1409,6 +1593,8 @@ mod tests {
         assert!(checked_relative_folder("C:/Users/person").is_err());
         assert!(checked_relative_folder(".obsidian-at-home/recently-deleted").is_err());
         assert!(checked_relative_folder("Projects/Ideas").is_ok());
+        assert!(checked_relative_attachment_path("Board.canvas").is_err());
+        assert!(checked_relative_attachment_path("Projects/Board.CANVAS").is_err());
         assert!(validate_vault_name("../vault").is_err());
         assert!(validate_vault_name("Obsidian At Home export").is_ok());
     }
@@ -1449,6 +1635,17 @@ mod tests {
             b"\x89PNG\r\n\x1a\nportable-image",
         )
         .unwrap();
+        fs::write(vault.path().join("Assets/report.pdf"), b"portable-report").unwrap();
+        fs::write(
+            vault.path().join("Projects/Alpha/Board.canvas"),
+            r#"{"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            vault.path().join("Assets/Sketch.CANVAS"),
+            r#"{"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
         fs::write(vault.path().join(".trash/Deleted.md"), "deleted").unwrap();
         fs::write(
             vault.path().join(".git/private.png"),
@@ -1485,6 +1682,12 @@ mod tests {
                 relative_path: "Assets/diagram.png".into(),
             }]
         );
+        assert_eq!(
+            result.attachments,
+            vec![ImportedAttachment {
+                relative_path: "Assets/report.pdf".into(),
+            }]
+        );
         assert_eq!(result.snippets.len(), 1);
         assert!(result.snippets[0].enabled);
     }
@@ -1494,9 +1697,25 @@ mod tests {
         let parent = TempDirectory::new("export");
         let source = TempDirectory::new("export-source");
         fs::create_dir_all(source.path().join("Assets")).unwrap();
+        fs::create_dir_all(source.path().join("Projects/Nested")).unwrap();
         fs::write(
             source.path().join("Assets/diagram.png"),
             b"\x89PNG\r\n\x1a\nportable-image",
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("Assets/report.pdf"),
+            b"portable-report",
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("Projects/Board.canvas"),
+            r#"{"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            source.path().join("Projects/Nested/Sketch.CANVAS"),
+            r#"{"nodes":[],"edges":[]}"#,
         )
         .unwrap();
         let result = export_obsidian_vault(
@@ -1532,6 +1751,7 @@ mod tests {
         let root = PathBuf::from(&result.path);
         assert_eq!(result.note_count, 2);
         assert_eq!(result.image_count, 1);
+        assert_eq!(result.attachment_count, 1);
         assert_eq!(result.template_count, 1);
         assert_eq!(result.snippet_count, 1);
         assert!(root.join("Projects/Alpha/First note.md").is_file());
@@ -1545,6 +1765,12 @@ mod tests {
             fs::read(root.join("Assets/diagram.png")).unwrap(),
             b"\x89PNG\r\n\x1a\nportable-image"
         );
+        assert_eq!(
+            fs::read(root.join("Assets/report.pdf")).unwrap(),
+            b"portable-report"
+        );
+        assert!(!root.join("Projects/Board.canvas").exists());
+        assert!(!root.join("Projects/Nested/Sketch.CANVAS").exists());
         let appearance = fs::read_to_string(root.join(".obsidian/appearance.json")).unwrap();
         assert!(appearance.contains("focus"));
     }
@@ -1562,10 +1788,12 @@ mod tests {
             b"\x89PNG\r\n\x1a\nprivate-image",
         )
         .unwrap();
+        fs::write(outside.path().join("Private.pdf"), b"private-attachment").unwrap();
         symlink(outside.path(), vault.path().join("linked")).unwrap();
 
         let result = import_obsidian_vault(vault.path().to_string_lossy().into_owned()).unwrap();
         assert!(result.notes.is_empty());
         assert!(result.images.is_empty());
+        assert!(result.attachments.is_empty());
     }
 }

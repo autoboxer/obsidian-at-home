@@ -253,6 +253,10 @@ export interface ImportedImage {
   relativePath: string;
 }
 
+export interface ImportedAttachment {
+  relativePath: string;
+}
+
 export interface ImportedSnippet {
   name: string;
   css: string;
@@ -262,6 +266,7 @@ export interface ImportedSnippet {
 export interface ImportResult {
   vaultName: string;
   images: ImportedImage[];
+  attachments: ImportedAttachment[];
   notes: ImportedNote[];
   snippets: ImportedSnippet[];
   warnings: string[];
@@ -288,15 +293,18 @@ export interface ExportSnippet {
 export interface ExportResult {
   path: string;
   imageCount: number;
+  attachmentCount: number;
   noteCount: number;
   templateCount: number;
   snippetCount: number;
   warnings: string[];
 }
 
-export interface WorkspaceImportImagesResult extends WorkspaceSaveResult {
+export interface WorkspaceImportAssetsResult extends WorkspaceSaveResult {
   imageCount: number;
   imageFiles: VaultImageFile[];
+  attachmentCount: number;
+  attachmentFiles: VaultAttachmentFile[];
   pathMappings: Record<string, string>;
   transactionId?: string;
 }

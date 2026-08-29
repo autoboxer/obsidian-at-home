@@ -38,6 +38,7 @@ pub fn run() {
             workspace::workspace_embed_vault_attachment,
             workspace::workspace_read_image,
             workspace::workspace_import_images,
+            workspace::workspace_import_assets,
         ])
         .run(tauri::generate_context!())
         .expect("Obsidian At Home failed to start");

@@ -49,7 +49,7 @@ const actionLabel = computed(() => {
     return "Opening unavailable";
   }
 
-  return archive.value ? "Save a copy…" : "Open file";
+  return archive.value ? "Save archive as…" : "Open file";
 });
 const rowTitle = computed(() => mirrorManaged.value
   ? `${props.attachment.relativePath} · Press Enter to embed · Mirrored attachments follow their note folders`

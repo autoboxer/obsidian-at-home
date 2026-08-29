@@ -104,6 +104,8 @@ const importPreviewOverflow = computed(() =>
 );
 
 const exportPayload = computed(() => ({
+  attachments: vaultState.attachmentFiles.length,
+  images: vaultState.imageFiles.length,
   notes: vaultState.notes.length,
   templates: vaultState.templates.length,
   snippets: vaultState.snippets.length,
@@ -287,6 +289,8 @@ async function chooseVaultToImport(): Promise<void> {
         result.notes.length === 1 ? "note" : "notes"
       } and ${formatCount(result.images.length)} ${
         result.images.length === 1 ? "image" : "images"
+      } and ${formatCount(result.attachments.length)} ${
+        result.attachments.length === 1 ? "attachment" : "attachments"
       }. Choose how to bring them in.`,
     };
   } catch (error) {
@@ -323,6 +327,7 @@ async function applyImport(replace: boolean): Promise<void> {
   activeTask.value = "import";
   try {
     const {
+      attachmentCount,
       imageCount,
       noteCount,
       saved,
@@ -345,6 +350,12 @@ async function applyImport(replace: boolean): Promise<void> {
         ? `${formatCount(noteCount)} Markdown ${noteCount === 1 ? "note was" : "notes were"}${
           imageCount
             ? ` and ${formatCount(imageCount)} ${imageCount === 1 ? "image was" : "images were"}`
+            : ""
+        }${
+          attachmentCount
+            ? ` and ${formatCount(attachmentCount)} ${
+              attachmentCount === 1 ? "attachment was" : "attachments were"
+            }`
             : ""
         } copied from ${result.vaultName || "the selected vault"}.`
         : "The current vault was restored because the imported notes could not be saved. Resolve the vault message, then try the import again.",
@@ -398,6 +409,8 @@ async function exportVault(): Promise<void> {
         result.noteCount === 1 ? "note" : "notes"
       } and ${formatCount(result.imageCount)} ${
         result.imageCount === 1 ? "image" : "images"
+      } and ${formatCount(result.attachmentCount)} ${
+        result.attachmentCount === 1 ? "attachment" : "attachments"
       } to a new folder.`,
       warnings: result.warnings,
     };
@@ -917,7 +930,7 @@ async function forgetVault(): Promise<void> {
             <div>
               <h3 class="settings-transfer-card__title">Import from Obsidian</h3>
               <p class="settings-transfer-card__description">
-                Copy Markdown notes, folders, embedded images, frontmatter tags, and CSS snippets into this vault.
+                Copy Markdown notes, folders, embedded files, frontmatter tags, and CSS snippets into this vault.
               </p>
             </div>
           </div>
@@ -926,6 +939,7 @@ async function forgetVault(): Promise<void> {
             <li><AppIcon name="check" :size="14" /> Original Markdown content</li>
             <li><AppIcon name="check" :size="14" /> Nested note folders</li>
             <li><AppIcon name="check" :size="14" /> Embedded image files</li>
+            <li><AppIcon name="check" :size="14" /> Linked attachment files</li>
             <li><AppIcon name="check" :size="14" /> Enabled CSS snippet state</li>
           </ul>
 
@@ -956,6 +970,8 @@ async function forgetVault(): Promise<void> {
 
           <div class="settings-export-summary" aria-label="Items ready to export">
             <span><strong>{{ formatCount(exportPayload.notes) }}</strong> notes</span>
+            <span><strong>{{ formatCount(exportPayload.images) }}</strong> images</span>
+            <span><strong>{{ formatCount(exportPayload.attachments) }}</strong> attachments</span>
             <span><strong>{{ formatCount(exportPayload.templates) }}</strong> templates</span>
             <span><strong>{{ formatCount(exportPayload.snippets) }}</strong> snippets</span>
           </div>
@@ -980,7 +996,8 @@ async function forgetVault(): Promise<void> {
                 <code class="settings-export-receipt__path">{{ exportResult.path }}</code>
                 <span class="settings-export-receipt__counts">
                   {{ exportResult.noteCount }} notes · {{ exportResult.templateCount }} templates ·
-                  {{ exportResult.snippetCount }} snippets · {{ exportResult.imageCount }} images
+                  {{ exportResult.snippetCount }} snippets · {{ exportResult.imageCount }} images ·
+                  {{ exportResult.attachmentCount }} attachments
                 </span>
               </div>
             </div>
@@ -1031,6 +1048,10 @@ async function forgetVault(): Promise<void> {
             <span>Images</span>
           </div>
           <div class="settings-import-review__stat">
+            <strong>{{ formatCount(importReview.attachments.length) }}</strong>
+            <span>Attachments</span>
+          </div>
+          <div class="settings-import-review__stat">
             <strong>{{ formatCount(importReview.snippets.length) }}</strong>
             <span>CSS snippets</span>
           </div>
@@ -1051,7 +1072,8 @@ async function forgetVault(): Promise<void> {
 
         <div v-else class="settings-import-empty" role="note">
           <AppIcon name="info" :size="17" />
-          No Markdown notes were found. You can still import discovered images and CSS snippets.
+          No Markdown notes were found. You can still import discovered images, attachments,
+          and CSS snippets.
         </div>
 
         <details v-if="importReview.warnings.length" class="settings-warning-details settings-warning-details--review">

@@ -5943,7 +5943,7 @@ pre {
 
 .settings-import-review__stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-top: 17px;
   overflow: hidden;
   border: 1px solid var(--border-faint);
@@ -6684,11 +6684,11 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .settings-import-review__stat:nth-child(-n + 2) {
+  .settings-import-review__stat:nth-child(-n + 4) {
     border-bottom: 1px solid var(--border-faint);
   }
 
-  .settings-import-review__stat:nth-child(2) {
+  .settings-import-review__stat:nth-child(even) {
     border-right: 0;
   }
 }

@@ -336,10 +336,10 @@ export class MarkdownAttachmentWidget extends WidgetType {
     action.disabled = executable;
     action.textContent = executable
       ? "Unavailable"
-      : archive ? "Save a copy…" : "Open";
+      : archive ? "Save archive as…" : "Open";
     action.title = executable
       ? "Opening executable or installer attachments is not supported"
-      : archive ? "Save a copy outside the vault" : "Open with the default application";
+      : archive ? "Save the archive outside the vault" : "Open with the default application";
     action.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();

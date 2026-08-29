@@ -17,6 +17,8 @@ import {
 import { parseWikiLinkAt } from "./wikiLinks";
 
 export interface MarkdownRenderOptions {
+  /** Recognize an extensionless attachment only when its vault inventory contains the file. */
+  acceptExtensionlessAttachment?: (destination: string) => boolean;
   /** Used only to decorate resolvable/unresolvable wiki links. */
   resolveWikiLink?: (
     target: string,
@@ -420,7 +422,9 @@ function renderInline(source: string, context: RenderContext, depth = 0): string
       }
 
       if (character === "[") {
-        const attachment = parseMarkdownAttachmentAt(source, index);
+        const attachment = parseMarkdownAttachmentAt(source, index, {
+          acceptExtensionless: context.options.acceptExtensionlessAttachment,
+        });
         if (attachment) {
           html += renderMarkdownAttachment(attachment, context);
           index = attachment.end;

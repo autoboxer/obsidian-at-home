@@ -940,6 +940,7 @@ onMounted(() => {
     literalApostropheExtension,
     tableDelimiterHyphenExtension,
     liveMarkdownExtension({
+      acceptExtensionlessAttachment: isKnownExtensionlessAttachment,
       activateAttachment: activateLiveMarkdownAttachment,
       documentId: `${props.vaultId}\u0000${props.noteId}`,
       openLink: openLiveMarkdownLink,
@@ -1300,6 +1301,19 @@ function openLiveMarkdownLink(href: string): void {
 
 function openLiveMarkdownWikiLink(target: string, heading?: string): void {
   emit("openWiki", target, heading);
+}
+
+const attachmentPathKeys = computed(() => new Set(
+  props.attachmentFiles.map((attachment) => attachment.relativePath.toLocaleLowerCase()),
+));
+
+function isKnownExtensionlessAttachment(destination: string): boolean {
+  const relativePath = resolveMarkdownImagePath(props.noteRelativePath, destination);
+
+  return Boolean(
+    relativePath
+    && attachmentPathKeys.value.has(relativePath.toLocaleLowerCase()),
+  );
 }
 
 function resolveLiveMarkdownAttachmentMetadata(

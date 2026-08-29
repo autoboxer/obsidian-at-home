@@ -19,7 +19,7 @@ import type {
   WorkspaceEmbedImageResult,
   WorkspaceEmbedAttachmentResult,
   WorkspaceImageNoteUpdate,
-  WorkspaceImportImagesResult,
+  WorkspaceImportAssetsResult,
   WorkspaceImportSaveResult,
   WorkspaceLoad,
   WorkspaceRelocateImageResult,
@@ -417,16 +417,18 @@ export async function importObsidianVault(path: string): Promise<ImportResult> {
   return invoke<ImportResult>("import_obsidian_vault", { path });
 }
 
-export async function importWorkspaceImages(
+export async function importWorkspaceAssets(
   path: string,
   sourcePath: string,
   imagePaths: string[],
+  attachmentPaths: string[],
   expectedRevision: number,
-): Promise<WorkspaceImportImagesResult> {
-  return invoke<WorkspaceImportImagesResult>("workspace_import_images", {
+): Promise<WorkspaceImportAssetsResult> {
+  return invoke<WorkspaceImportAssetsResult>("workspace_import_assets", {
     path,
     sourcePath,
     imagePaths,
+    attachmentPaths,
     expectedRevision,
   });
 }
