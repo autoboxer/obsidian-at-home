@@ -346,6 +346,16 @@ pub enum ExternalFileUploadKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkspaceExternalAssetDiscardResult {
+    pub discarded: bool,
+    pub note_paths: BTreeMap<String, String>,
+    pub revision: u64,
+    pub saved_at: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceImageNoteUpdate {
     pub note_id: String,
     pub relative_path: String,
@@ -482,7 +492,7 @@ struct StoredRecentlyDeletedNote {
     fingerprint: FileFingerprint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 enum VaultAssetKind {
     Image,
@@ -1371,6 +1381,26 @@ pub fn workspace_finish_external_attachment_upload(
         settings,
         &source,
         None,
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_discard_external_asset(
+    app: AppHandle,
+    path: String,
+    asset_id: String,
+    relative_path: String,
+    expected_revision: u64,
+) -> Result<WorkspaceExternalAssetDiscardResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    discard_workspace_external_asset(
+        &root,
+        &asset_id,
+        &relative_path,
         expected_revision,
     )
 }
@@ -3547,6 +3577,159 @@ fn embed_workspace_attachment(
         saved_at: now_millis(),
         warnings: warnings.finish(),
     })
+}
+
+fn discard_workspace_external_asset(
+    root: &Path,
+    asset_id: &str,
+    relative_path: &str,
+    expected_revision: u64,
+) -> Result<WorkspaceExternalAssetDiscardResult, String> {
+    if !is_valid_asset_id(asset_id) {
+        return Err("The dropped file has an invalid stable ID.".to_owned());
+    }
+
+    let mut warnings = WarningCollector::default();
+    let (stored_state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    if stored_state.is_none() && state_file_was_present {
+        return Err(
+            "The dropped file cannot be cleaned up while workspace metadata is unreadable or newer than this app."
+                .to_owned(),
+        );
+    }
+    let old_state = stored_state.unwrap_or_default();
+    recover_workspace_transactions(root, Some(&old_state), &mut warnings)?;
+    if revision_for_root(root)? != expected_revision {
+        warnings.push(
+            "The vault changed before the unused dropped file could be removed; the file was retained."
+                .to_owned(),
+        );
+
+        return retained_external_asset_result(root, &old_state, warnings);
+    }
+
+    let Some(stored) = old_state.assets.get(asset_id) else {
+        return Err("The dropped file's stable record is no longer available.".to_owned());
+    };
+    if stored.relative_path != relative_path {
+        warnings.push(
+            "The dropped file moved before cleanup, so it was retained at its current location."
+                .to_owned(),
+        );
+
+        return retained_external_asset_result(root, &old_state, warnings);
+    }
+    let source = match stored.kind {
+        VaultAssetKind::Image => {
+            validate_image_relative_path(relative_path)?;
+            resolve_workspace_image_file(root, relative_path, false)?
+        }
+        VaultAssetKind::Attachment => {
+            validate_attachment_relative_path(relative_path)?;
+            resolve_workspace_asset_file(root, relative_path, false)?
+        }
+    };
+    if workspace_asset_is_referenced(root, &old_state, stored.kind, asset_id)? {
+        warnings.push(
+            "The dropped file is already referenced by a saved note, so it was retained."
+                .to_owned(),
+        );
+
+        return retained_external_asset_result(root, &old_state, warnings);
+    }
+    if !workspace_asset_matches_stored(&source, stored)? {
+        warnings.push(
+            "The dropped file changed before cleanup, so the modified file was retained."
+                .to_owned(),
+        );
+
+        return retained_external_asset_result(root, &old_state, warnings);
+    }
+
+    let mut next_state = old_state.clone();
+    next_state.version = STATE_VERSION;
+    next_state.assets.remove(asset_id);
+    write_workspace_state(root, &next_state)?;
+
+    let cleanup_result = (|| {
+        if !workspace_asset_matches_stored(&source, stored)? {
+            return Err("The dropped file changed while cleanup was being committed.".to_owned());
+        }
+        remove_file_durable(&source)
+            .map_err(|error| format!("Could not remove the unused dropped file: {error}"))
+    })();
+    if let Err(error) = cleanup_result {
+        write_workspace_state(root, &old_state).map_err(|rollback_error| {
+            format!(
+                "{error} Its stable record could not be restored: {rollback_error}. Reopen the vault before editing again."
+            )
+        })?;
+        warnings.push(format!("{error} The file was retained."));
+
+        return retained_external_asset_result(root, &old_state, warnings);
+    }
+
+    Ok(WorkspaceExternalAssetDiscardResult {
+        discarded: true,
+        note_paths: next_state.note_paths,
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+fn retained_external_asset_result(
+    root: &Path,
+    state: &WorkspaceState,
+    warnings: WarningCollector,
+) -> Result<WorkspaceExternalAssetDiscardResult, String> {
+    Ok(WorkspaceExternalAssetDiscardResult {
+        discarded: false,
+        note_paths: state.note_paths.clone(),
+        revision: revision_for_root(root)?,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+fn workspace_asset_matches_stored(
+    path: &Path,
+    stored: &StoredVaultAsset,
+) -> Result<bool, String> {
+    let fingerprint = match stored.kind {
+        VaultAssetKind::Image => fingerprint_bytes(&read_image_file(path)?),
+        VaultAssetKind::Attachment => fingerprint_attachment_file(path)?,
+    };
+    Ok(
+        fingerprint == stored.fingerprint
+            && file_modified_nanos_for_path(path)? == stored.modified_nanos,
+    )
+}
+
+fn workspace_asset_is_referenced(
+    root: &Path,
+    state: &WorkspaceState,
+    kind: VaultAssetKind,
+    asset_id: &str,
+) -> Result<bool, String> {
+    let fragment = match kind {
+        VaultAssetKind::Image => format!("#oah-image={asset_id}"),
+        VaultAssetKind::Attachment => format!("#oah-asset={asset_id}"),
+    };
+    for relative_path in state.note_paths.values() {
+        validate_markdown_relative_path(relative_path)?;
+        let path = resolve_workspace_file(root, relative_path, false)?;
+        let content = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "Could not check {} for dropped-file references: {error}",
+                path.display(),
+            )
+        })?;
+        if content.contains(&fragment) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[derive(Debug)]
@@ -14513,6 +14696,152 @@ mod tests {
             fs::read(vault.root.join("Dragged report.pdf")).unwrap(),
             b"report",
         );
+    }
+
+    #[test]
+    fn unused_completed_external_assets_are_discarded_with_their_stable_records() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nunused-external-image";
+        let source = TestWorkspace::new("discarded-external-asset-source");
+        let vault = TestWorkspace::new("discarded-external-asset-vault");
+        fs::write(vault.root.join("Note.md"), "# Note")
+            .expect("saved note should be written");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("note-1".to_owned(), "Note.md".to_owned());
+        write_workspace_state(&vault.root, &state)
+            .expect("workspace state should be written");
+
+        let image = embed_workspace_image(
+            &vault.root,
+            "Note.md",
+            ImageEmbedSettings::default(),
+            "Unused.png",
+            PNG,
+            None,
+            revision_for_root(&vault.root).unwrap(),
+        )
+        .expect("external image should embed");
+        let discarded_image = discard_workspace_external_asset(
+            &vault.root,
+            &image.image.id,
+            &image.image.relative_path,
+            image.revision,
+        )
+        .expect("unused external image should be discarded");
+        assert!(discarded_image.discarded);
+        assert!(!vault.root.join("Unused.png").exists());
+
+        let attachment_source = source.root.join("Unused.pdf");
+        fs::write(&attachment_source, b"unused attachment")
+            .expect("attachment source should be written");
+        let attachment = embed_workspace_attachment(
+            &vault.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &attachment_source,
+            None,
+            discarded_image.revision,
+        )
+        .expect("external attachment should embed");
+        let discarded_attachment = discard_workspace_external_asset(
+            &vault.root,
+            &attachment.attachment.id,
+            &attachment.attachment.relative_path,
+            attachment.revision,
+        )
+        .expect("unused external attachment should be discarded");
+        assert!(discarded_attachment.discarded);
+        assert!(!vault.root.join("Unused.pdf").exists());
+
+        let (stored, _) = read_workspace_state(
+            &vault.root,
+            &mut WarningCollector::default(),
+        );
+        assert!(stored.unwrap().assets.is_empty());
+    }
+
+    #[test]
+    fn external_asset_cleanup_retains_referenced_changed_and_stale_files() {
+        let source = TestWorkspace::new("retained-external-asset-source");
+        let vault = TestWorkspace::new("retained-external-asset-vault");
+        fs::write(vault.root.join("Note.md"), "# Note")
+            .expect("saved note should be written");
+        let mut state = WorkspaceState::default();
+        state
+            .note_paths
+            .insert("note-1".to_owned(), "Note.md".to_owned());
+        write_workspace_state(&vault.root, &state)
+            .expect("workspace state should be written");
+        let source_path = source.root.join("Retained.pdf");
+        fs::write(&source_path, b"original")
+            .expect("attachment source should be written");
+
+        let referenced = embed_workspace_attachment(
+            &vault.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &source_path,
+            None,
+            revision_for_root(&vault.root).unwrap(),
+        )
+        .expect("referenced attachment should embed");
+        fs::write(
+            vault.root.join("Note.md"),
+            format!(
+                "[Retained](Retained.pdf#oah-asset={})",
+                referenced.attachment.id,
+            ),
+        )
+        .expect("saved reference should be written");
+        let referenced_cleanup = discard_workspace_external_asset(
+            &vault.root,
+            &referenced.attachment.id,
+            &referenced.attachment.relative_path,
+            revision_for_root(&vault.root).unwrap(),
+        )
+        .expect("a saved reference should safely retain the attachment");
+        assert!(!referenced_cleanup.discarded);
+        assert!(referenced_cleanup
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("already referenced")));
+
+        fs::write(vault.root.join("Note.md"), "# Note")
+            .expect("saved reference should be removed");
+        fs::write(vault.root.join("Retained.pdf"), b"externally modified")
+            .expect("embedded attachment should be modified externally");
+        let changed_cleanup = discard_workspace_external_asset(
+            &vault.root,
+            &referenced.attachment.id,
+            &referenced.attachment.relative_path,
+            revision_for_root(&vault.root).unwrap(),
+        )
+        .expect("a changed attachment should safely be retained");
+        assert!(!changed_cleanup.discarded);
+        assert!(changed_cleanup
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("changed before cleanup")));
+        assert_eq!(
+            fs::read(vault.root.join("Retained.pdf")).unwrap(),
+            b"externally modified",
+        );
+
+        fs::write(vault.root.join("Unrelated.txt"), b"revision change")
+            .expect("unrelated external change should be written");
+        let stale_cleanup = discard_workspace_external_asset(
+            &vault.root,
+            &referenced.attachment.id,
+            &referenced.attachment.relative_path,
+            changed_cleanup.revision,
+        )
+        .expect("a stale cleanup request should retain the attachment");
+        assert!(!stale_cleanup.discarded);
+        assert!(stale_cleanup
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("vault changed")));
     }
 
     #[test]

@@ -23,6 +23,7 @@ import {
 } from "../lib/markdownAttachments";
 import { resolveWikiLink } from "../lib/wikiLinks";
 import {
+  discardWorkspaceExternalAsset,
   embedWorkspaceAttachmentFile,
   embedWorkspaceExternalAttachment,
   embedWorkspaceExternalImage,
@@ -45,6 +46,7 @@ import {
   activateVaultAttachment,
   applyEmbeddedAttachmentResult,
   applyEmbeddedImageResult,
+  applyExternalAssetDiscardResult,
   backNavigationNote,
   canNavigateBack,
   canNavigateForward,
@@ -76,6 +78,7 @@ import type {
   NoteEditorPosition,
   WorkspaceEmbedAttachmentResult,
   WorkspaceEmbedImageResult,
+  WorkspaceExternalAssetDiscardResult,
 } from "../types";
 import AppIcon from "./AppIcon.vue";
 import SourceEditor from "./SourceEditor.vue";
@@ -252,7 +255,27 @@ interface AssetEmbedContext {
 
 interface StoreAndInsertOptions {
   announce?: boolean;
+  cleanupFailedInsertion?: (
+    context: AssetEmbedContext,
+    assetId: string,
+    relativePath: string,
+    expectedRevision: number,
+  ) => Promise<WorkspaceExternalAssetDiscardResult>;
   markdownPrefix?: string;
+}
+
+async function cleanupFailedExternalInsertion(
+  context: AssetEmbedContext,
+  assetId: string,
+  relativePath: string,
+  expectedRevision: number,
+): Promise<WorkspaceExternalAssetDiscardResult> {
+  return discardWorkspaceExternalAsset(
+    context.vaultPath,
+    assetId,
+    relativePath,
+    expectedRevision,
+  );
 }
 
 async function prepareExternalFileFinish(
@@ -333,9 +356,9 @@ async function storeAndInsertImage(
     vaultSession.path !== context.vaultPath
     || activeNote.value?.id !== context.note.id
   ) {
+    await retainOrDiscardFailedImage(context, result, options);
     throw new Error("The note or vault changed before the image could be inserted.");
   }
-  applyEmbeddedImageResult(result);
   const selectedAlt = capture.selectedText.trim();
   const alt = selectedAlt && !/[\r\n]/.test(selectedAlt) && selectedAlt.length <= 240
     ? selectedAlt
@@ -351,10 +374,17 @@ async function storeAndInsertImage(
   })}`;
   const inserted = sourceEditor.value?.insertEmbeddedImage(capture, markdownImage) ?? false;
   if (!inserted) {
-    notify("The image was saved, but its Markdown reference could not be inserted.", "warning");
+    const discarded = await retainOrDiscardFailedImage(context, result, options);
+    notify(
+      discarded
+        ? "The image reference could not be inserted, so its unused stored copy was removed."
+        : "The image was saved, but its Markdown reference could not be inserted.",
+      "warning",
+    );
 
     return false;
   }
+  applyEmbeddedImageResult(result);
 
   if (result.warnings.length) {
     notify(result.warnings[0]!, "warning");
@@ -363,6 +393,48 @@ async function storeAndInsertImage(
   }
 
   return true;
+}
+
+async function retainOrDiscardFailedImage(
+  context: AssetEmbedContext,
+  result: WorkspaceEmbedImageResult,
+  options: StoreAndInsertOptions,
+): Promise<boolean> {
+  if (!options.cleanupFailedInsertion) {
+    if (vaultSession.path === context.vaultPath) {
+      applyEmbeddedImageResult(result);
+    }
+
+    return false;
+  }
+  try {
+    const cleanup = await options.cleanupFailedInsertion(
+      context,
+      result.image.id,
+      result.image.relativePath,
+      result.revision,
+    );
+    if (vaultSession.path === context.vaultPath) {
+      if (cleanup.discarded) {
+        applyExternalAssetDiscardResult(cleanup);
+      } else {
+        applyEmbeddedImageResult({
+          ...result,
+          revision: cleanup.revision,
+          savedAt: cleanup.savedAt,
+          warnings: cleanup.warnings,
+        });
+      }
+    }
+
+    return cleanup.discarded;
+  } catch {
+    if (vaultSession.path === context.vaultPath) {
+      applyEmbeddedImageResult(result);
+    }
+
+    return false;
+  }
 }
 
 async function embedImageFromFile(capture: ImageInsertionCapture): Promise<void> {
@@ -509,9 +581,9 @@ async function storeAndInsertAttachment(
     vaultSession.path !== context.vaultPath
     || activeNote.value?.id !== context.note.id
   ) {
+    await retainOrDiscardFailedAttachment(context, result, options);
     throw new Error("The note or vault changed before the file could be inserted.");
   }
-  applyEmbeddedAttachmentResult(result);
   const selectedLabel = capture.selectedText.trim();
   const label = selectedLabel && !/[\r\n]/.test(selectedLabel) && selectedLabel.length <= 240
     ? selectedLabel
@@ -530,10 +602,17 @@ async function storeAndInsertAttachment(
     markdownAttachment,
   ) ?? false;
   if (!inserted) {
-    notify("The file was saved, but its Markdown reference could not be inserted.", "warning");
+    const discarded = await retainOrDiscardFailedAttachment(context, result, options);
+    notify(
+      discarded
+        ? "The file reference could not be inserted, so its unused stored copy was removed."
+        : "The file was saved, but its Markdown reference could not be inserted.",
+      "warning",
+    );
 
     return false;
   }
+  applyEmbeddedAttachmentResult(result);
 
   if (result.warnings.length) {
     notify(result.warnings[0]!, "warning");
@@ -542,6 +621,48 @@ async function storeAndInsertAttachment(
   }
 
   return true;
+}
+
+async function retainOrDiscardFailedAttachment(
+  context: AssetEmbedContext,
+  result: WorkspaceEmbedAttachmentResult,
+  options: StoreAndInsertOptions,
+): Promise<boolean> {
+  if (!options.cleanupFailedInsertion) {
+    if (vaultSession.path === context.vaultPath) {
+      applyEmbeddedAttachmentResult(result);
+    }
+
+    return false;
+  }
+  try {
+    const cleanup = await options.cleanupFailedInsertion(
+      context,
+      result.attachment.id,
+      result.attachment.relativePath,
+      result.revision,
+    );
+    if (vaultSession.path === context.vaultPath) {
+      if (cleanup.discarded) {
+        applyExternalAssetDiscardResult(cleanup);
+      } else {
+        applyEmbeddedAttachmentResult({
+          ...result,
+          revision: cleanup.revision,
+          savedAt: cleanup.savedAt,
+          warnings: cleanup.warnings,
+        });
+      }
+    }
+
+    return cleanup.discarded;
+  } catch {
+    if (vaultSession.path === context.vaultPath) {
+      applyEmbeddedAttachmentResult(result);
+    }
+
+    return false;
+  }
 }
 
 async function embedAttachmentFromFile(
@@ -663,6 +784,7 @@ async function embedExternalFiles(
       const file = files[index]!;
       const options: StoreAndInsertOptions = {
         announce: false,
+        cleanupFailedInsertion: cleanupFailedExternalInsertion,
         ...(embeddedCount ? { markdownPrefix: " " } : {}),
       };
       try {

@@ -148,6 +148,7 @@ const emit = defineEmits<{
 const editorHost = ref<HTMLElement>();
 const editorView = shallowRef<EditorView>();
 const editorRenderReady = ref(false);
+const externalFileDragActive = ref(false);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const externalUpdate = Annotation.define<boolean>();
@@ -157,6 +158,7 @@ const INDENT = "  ";
 const VIEWPORT_ANCHOR_MARGIN = 8;
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 const MAX_EXTERNAL_DROP_FILES = 100;
+let externalFileDragDepth = 0;
 let outputLineEnding = preferredLineEnding(props.modelValue);
 let frontmatterHistoryChanged = false;
 let frontmatterLineOffset = 0;
@@ -2204,15 +2206,43 @@ function handleSourceEditorPaste(event: ClipboardEvent): void {
   emit("pasteImage", capture, imageItem?.getAsFile() ?? undefined);
 }
 
+function isExternalFileDrag(event: DragEvent): boolean {
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  return types.includes("Files")
+    && !types.includes(NOTE_IMAGE_DRAG_MIME)
+    && !types.includes(VAULT_IMAGE_DRAG_MIME)
+    && !types.includes(VAULT_ATTACHMENT_DRAG_MIME);
+}
+
+function clearExternalFileDrag(): void {
+  externalFileDragDepth = 0;
+  externalFileDragActive.value = false;
+}
+
+function handleSourceEditorDragEnter(event: DragEvent): void {
+  if (!editorRenderReady.value || !isExternalFileDrag(event)) {
+    return;
+  }
+  externalFileDragDepth += 1;
+  externalFileDragActive.value = true;
+}
+
+function handleSourceEditorDragLeave(): void {
+  if (!externalFileDragActive.value) {
+    return;
+  }
+  externalFileDragDepth = Math.max(0, externalFileDragDepth - 1);
+  if (!externalFileDragDepth) {
+    externalFileDragActive.value = false;
+  }
+}
+
 function handleSourceEditorDragOver(event: DragEvent): void {
   const types = Array.from(event.dataTransfer?.types ?? []);
   const movingWithinNote = types.includes(NOTE_IMAGE_DRAG_MIME);
   const vaultImage = types.includes(VAULT_IMAGE_DRAG_MIME);
   const vaultAttachment = types.includes(VAULT_ATTACHMENT_DRAG_MIME);
-  const externalFiles = !movingWithinNote
-    && !vaultImage
-    && !vaultAttachment
-    && types.includes("Files");
+  const externalFiles = isExternalFileDrag(event);
   if (
     !movingWithinNote
     && !vaultImage
@@ -2223,12 +2253,16 @@ function handleSourceEditorDragOver(event: DragEvent): void {
   }
   event.preventDefault();
   event.stopImmediatePropagation();
+  if (externalFiles && editorRenderReady.value) {
+    externalFileDragActive.value = true;
+  }
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = movingWithinNote ? "move" : "copy";
   }
 }
 
 function handleSourceEditorDrop(event: DragEvent): void {
+  clearExternalFileDrag();
   const transfer = event.dataTransfer;
   const internalImage = parseInternalImageDrag(transfer?.getData(NOTE_IMAGE_DRAG_MIME));
   const relativePath = transfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
@@ -2415,6 +2449,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
   <div
     class="source-editor"
     :class="{
+      'is-external-file-dragging': externalFileDragActive,
       'is-render-pending': !editorRenderReady,
       'is-searching': documentSearchOpen,
     }"
@@ -2423,7 +2458,10 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
     @compositionstart.capture="blockPendingEditorInteraction"
     @keydown.capture="handleSourceEditorKeydown"
     @paste.capture="handleSourceEditorPaste"
+    @dragenter.capture="handleSourceEditorDragEnter"
+    @dragleave.capture="handleSourceEditorDragLeave"
     @dragover.capture="handleSourceEditorDragOver"
+    @dragend.capture="clearExternalFileDrag"
     @drop.capture="handleSourceEditorDrop"
   >
     <div ref="editorHost" class="code-mirror-host" />

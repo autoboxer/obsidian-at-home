@@ -2276,6 +2276,23 @@ pre {
   background: #0d0c11;
 }
 
+.source-editor.is-external-file-dragging::after {
+  content: "Drop files to embed";
+  position: absolute;
+  z-index: 12;
+  inset: 12px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed color-mix(in srgb, var(--violet) 75%, white);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-shell) 82%, transparent);
+  color: color-mix(in srgb, var(--violet) 45%, white);
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
 .code-mirror-host,
 .source-editor .cm-editor,
 .source-editor .cm-scroller {

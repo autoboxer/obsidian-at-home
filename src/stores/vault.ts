@@ -78,6 +78,7 @@ import type {
   VaultImageFile,
   VaultSessionState,
   WorkspaceEmbedAttachmentResult,
+  WorkspaceExternalAssetDiscardResult,
   WorkspaceEmbedImageResult,
   WorkspaceAttachmentNoteUpdate,
   WorkspaceImageNoteUpdate,
@@ -3136,6 +3137,12 @@ export function applyEmbeddedAttachmentResult(
   });
   applyWorkspaceSaveResult(result);
   uiState.attachmentRefreshToken += 1;
+}
+
+export function applyExternalAssetDiscardResult(
+  result: WorkspaceExternalAssetDiscardResult,
+): void {
+  applyWorkspaceSaveResult(result);
 }
 
 function applyWorkspaceImageFiles(images: VaultImageFile[]): void {

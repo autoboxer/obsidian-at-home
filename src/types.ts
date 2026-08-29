@@ -188,6 +188,10 @@ export interface WorkspaceExternalFileUpload {
   chunkBytes: number;
 }
 
+export interface WorkspaceExternalAssetDiscardResult extends WorkspaceSaveResult {
+  discarded: boolean;
+}
+
 export interface WorkspaceImageNoteUpdate {
   noteId: string;
   relativePath: string;

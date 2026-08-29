@@ -41,6 +41,7 @@ pub fn run() {
             workspace::workspace_cancel_external_file_upload,
             workspace::workspace_finish_external_image_upload,
             workspace::workspace_finish_external_attachment_upload,
+            workspace::workspace_discard_external_asset,
             workspace::workspace_read_image,
             workspace::workspace_import_images,
             workspace::workspace_import_assets,

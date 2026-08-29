@@ -18,6 +18,7 @@ import type {
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
   WorkspaceEmbedAttachmentResult,
+  WorkspaceExternalAssetDiscardResult,
   WorkspaceExternalFileUpload,
   WorkspaceImageNoteUpdate,
   WorkspaceImportAssetsResult,
@@ -139,6 +140,20 @@ export async function bootstrapWorkspace(defaults: VaultData): Promise<Workspace
 
 export async function openWorkspace(path: string, defaults: VaultData): Promise<WorkspaceLoad> {
   return invoke<WorkspaceLoad>("workspace_open", { path, defaults });
+}
+
+export async function discardWorkspaceExternalAsset(
+  path: string,
+  assetId: string,
+  relativePath: string,
+  expectedRevision: number,
+): Promise<WorkspaceExternalAssetDiscardResult> {
+  return invoke<WorkspaceExternalAssetDiscardResult>("workspace_discard_external_asset", {
+    path,
+    assetId,
+    relativePath,
+    expectedRevision,
+  });
 }
 
 export async function createWorkspace(
