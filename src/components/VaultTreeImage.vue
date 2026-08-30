@@ -2,7 +2,6 @@
 import { computed, nextTick, ref } from "vue";
 import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
 import {
-  isMirrorManagedImage,
   renameVaultImage,
   requestInsertVaultImage,
   treeDragState,
@@ -24,10 +23,9 @@ const menu = ref<HTMLElement>();
 const menuButton = ref<HTMLButtonElement>();
 
 const fileName = computed(() => props.image.relativePath.split("/").at(-1) || "Image");
-const mirrorManaged = computed(() => isMirrorManagedImage(props.image.relativePath));
-const rowTitle = computed(() => mirrorManaged.value
-  ? `${props.image.relativePath} · Press Enter to embed · Mirrored images follow their note folders`
-  : `${props.image.relativePath} · Press Enter to embed or drag onto a note or folder`);
+const rowTitle = computed(() =>
+  `${props.image.relativePath} · Press Enter to embed or drag onto a note or folder`
+);
 
 function startDrag(event: DragEvent): void {
   if (!event.dataTransfer) {
@@ -58,9 +56,6 @@ function insertIntoActiveNote(): void {
 }
 
 function beginRename(): void {
-  if (mirrorManaged.value) {
-    return;
-  }
   closeMenu();
   editValue.value = fileName.value;
   editing.value = true;
@@ -128,7 +123,7 @@ function handleMenuFocusOut(event: FocusEvent): void {
 <template>
   <div
     class="vault-tree-image"
-    :class="{ 'is-dragging': dragging, 'is-mirror-managed': mirrorManaged }"
+    :class="{ 'is-dragging': dragging }"
     :style="{ '--tree-depth': depth }"
     :title="rowTitle"
     @contextmenu.prevent.stop="openContextMenu"
@@ -145,7 +140,6 @@ function handleMenuFocusOut(event: FocusEvent): void {
       >
         <AppIcon class="vault-tree-image-icon" name="image" :size="14" />
         <span class="vault-tree-image-title">{{ fileName }}</span>
-        <AppIcon v-if="mirrorManaged" class="vault-tree-image-lock" name="lock" :size="11" />
       </button>
       <div class="vault-tree-image-menu-anchor" @focusout="handleMenuFocusOut">
         <button
@@ -174,9 +168,9 @@ function handleMenuFocusOut(event: FocusEvent): void {
               <AppIcon name="image" :size="14" />
               Insert into active note
             </button>
-            <button type="button" role="menuitem" :disabled="mirrorManaged" @click="beginRename">
-              <AppIcon :name="mirrorManaged ? 'lock' : 'edit'" :size="14" />
-              {{ mirrorManaged ? "Managed by mirror setting" : "Rename" }}
+            <button type="button" role="menuitem" @click="beginRename">
+              <AppIcon name="edit" :size="14" />
+              Rename
             </button>
           </div>
         </Transition>

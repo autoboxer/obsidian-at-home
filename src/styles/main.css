@@ -1684,12 +1684,6 @@ pre {
   color: var(--text-faint);
 }
 
-.vault-tree-image-lock,
-.vault-tree-attachment-lock {
-  flex: none;
-  color: var(--text-faint);
-}
-
 .vault-tree-image-title,
 .vault-tree-attachment-title {
   min-width: 0;

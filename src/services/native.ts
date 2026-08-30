@@ -476,7 +476,6 @@ export async function relocateWorkspaceImage(
   assetId: string,
   noteUpdates: WorkspaceImageNoteUpdate[],
   expectedRevision: number,
-  managedByNoteMove = false,
 ): Promise<WorkspaceRelocateImageResult> {
   return invoke<WorkspaceRelocateImageResult>("workspace_relocate_image", {
     path,
@@ -485,7 +484,6 @@ export async function relocateWorkspaceImage(
     assetId,
     noteUpdates,
     expectedRevision,
-    managedByNoteMove,
   });
 }
 
@@ -496,7 +494,6 @@ export async function relocateWorkspaceAttachment(
   assetId: string,
   noteUpdates: WorkspaceAttachmentNoteUpdate[],
   expectedRevision: number,
-  managedByNoteMove = false,
 ): Promise<WorkspaceRelocateAttachmentResult> {
   return invoke<WorkspaceRelocateAttachmentResult>("workspace_relocate_attachment", {
     path,
@@ -505,7 +502,6 @@ export async function relocateWorkspaceAttachment(
     assetId,
     noteUpdates,
     expectedRevision,
-    managedByNoteMove,
   });
 }
 

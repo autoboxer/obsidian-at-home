@@ -65,8 +65,7 @@ export interface CssSnippet {
 export type AssetEmbedLocation =
   | "vault-root"
   | "note-folder"
-  | "specified-folder"
-  | "specified-folder-mirrored";
+  | "specified-folder";
 
 export interface AssetEmbedSettings {
   location: AssetEmbedLocation;

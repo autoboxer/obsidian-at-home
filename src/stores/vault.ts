@@ -997,107 +997,12 @@ export async function moveNoteToFolder(noteId: string, folderId: string | null):
     }
   }
 
-  const mirrorImages = note.relativePath
-    ? mirrorImagesThatFollowNote(note)
-    : [];
-  const mirrorAttachments = note.relativePath
-    ? mirrorAttachmentsThatFollowNote(note)
-    : [];
-  const projectedPath = note.relativePath
-    ? projectedNoteRelativePath({ ...note, folderId }, vaultState.folders, note.relativePath)
-    : "";
-  const projectedMirrorFolder = projectedPath
-    ? mirroredImageFolderForNotePath(projectedPath)
-    : undefined;
-  if (projectedMirrorFolder !== undefined) {
-    const movingPaths = new Set(
-      mirrorImages.map((image) => image.relativePath.toLocaleLowerCase()),
-    );
-    const targetPaths = new Set<string>();
-    for (const image of mirrorImages) {
-      const fileName = image.relativePath.split("/").at(-1) || "Image.png";
-      const targetPath = `${projectedMirrorFolder}/${fileName}`.toLocaleLowerCase();
-      if (
-        targetPaths.has(targetPath)
-        || vaultState.imageFiles.some((candidate) =>
-          candidate.relativePath.toLocaleLowerCase() === targetPath
-          && !movingPaths.has(targetPath)
-        )
-      ) {
-        notify("A mirrored image already uses the note's destination folder", "warning");
-
-        return false;
-      }
-      targetPaths.add(targetPath);
-    }
-  }
-  const projectedAttachmentMirrorFolder = projectedPath
-    ? mirroredAttachmentFolderForNotePath(projectedPath)
-    : undefined;
-  if (projectedAttachmentMirrorFolder !== undefined) {
-    const movingPaths = new Set(
-      mirrorAttachments.map((attachment) => attachment.relativePath.toLocaleLowerCase()),
-    );
-    const targetPaths = new Set<string>();
-    for (const attachment of mirrorAttachments) {
-      const fileName = attachment.relativePath.split("/").at(-1) || "Attachment";
-      const targetPath = `${projectedAttachmentMirrorFolder}/${fileName}`.toLocaleLowerCase();
-      if (
-        targetPaths.has(targetPath)
-        || vaultState.attachmentFiles.some((candidate) =>
-          candidate.relativePath.toLocaleLowerCase() === targetPath
-          && !movingPaths.has(targetPath)
-        )
-      ) {
-        notify("A mirrored attachment already uses the note's destination folder", "warning");
-
-        return false;
-      }
-      targetPaths.add(targetPath);
-    }
-  }
-
   updateNote(noteId, { folderId });
   if (vaultSession.backend === "native" && !(await flushVault())) {
     return false;
   }
 
-  let mirrorMoveFailed = false;
-  const movedNote = vaultState.notes.find((candidate) => candidate.id === noteId);
-  const mirrorFolder = movedNote?.relativePath
-    ? mirroredImageFolderForNotePath(movedNote.relativePath)
-    : undefined;
-  if (mirrorFolder !== undefined) {
-    for (const image of mirrorImages) {
-      const fileName = image.relativePath.split("/").at(-1) || "Image.png";
-      if (!(await relocateVaultImage(image, mirrorFolder, fileName, {
-        managedByNoteMove: true,
-        announce: false,
-      }))) {
-        mirrorMoveFailed = true;
-      }
-    }
-  }
-  const attachmentMirrorFolder = movedNote?.relativePath
-    ? mirroredAttachmentFolderForNotePath(movedNote.relativePath)
-    : undefined;
-  if (attachmentMirrorFolder !== undefined) {
-    for (const attachment of mirrorAttachments) {
-      const fileName = attachment.relativePath.split("/").at(-1) || "Attachment";
-      if (!(await relocateVaultAttachment(attachment, attachmentMirrorFolder, fileName, {
-        managedByNoteMove: true,
-        announce: false,
-      }))) {
-        mirrorMoveFailed = true;
-      }
-    }
-  }
-  notify(
-    mirrorMoveFailed
-      ? `Moved to ${folder?.name ?? "Vault root"}, but a mirrored asset stayed in its previous folder`
-      : `Moved to ${folder?.name ?? "Vault root"}`,
-    mirrorMoveFailed ? "warning" : "success",
-  );
+  notify(`Moved to ${folder?.name ?? "Vault root"}`, "success");
 
   return true;
 }
@@ -1385,7 +1290,7 @@ export function renameFolder(id: string, name: string): void {
 
   if (folderContainsAssets(id)) {
     notify(
-      "Move contained assets or change mirrored storage before renaming this folder",
+      "Move contained assets before renaming this folder",
       "warning",
     );
 
@@ -1443,7 +1348,7 @@ export function moveFolder(folderId: string, parentId: string | null): boolean {
 
   if (folderContainsAssets(folderId)) {
     notify(
-      "Move contained assets or change mirrored storage before moving this folder",
+      "Move contained assets before moving this folder",
       "warning",
     );
 
@@ -1468,7 +1373,7 @@ export function deleteFolder(id: string): void {
   }
   if (folderContainsAssets(id)) {
     notify(
-      "Move contained assets or change mirrored storage before removing this folder",
+      "Move contained assets before removing this folder",
       "warning",
     );
 
@@ -2028,179 +1933,19 @@ function folderContainsAssets(folderId: string): boolean {
   if (!path) {
     return false;
   }
-  const imageFolders = new Set([path.toLocaleLowerCase()]);
-  if (vaultState.imageEmbedSettings.location === "specified-folder-mirrored") {
-    const mirrorRoot = vaultState.imageEmbedSettings.folderPath
-      .trim()
-      .replace(/^\/+|\/+$/g, "");
-    if (mirrorRoot) {
-      imageFolders.add(`${mirrorRoot}/${path}`.toLocaleLowerCase());
-    }
-  }
+  const folderKey = path.toLocaleLowerCase();
 
   const containsImage = vaultState.imageFiles.some((image) => {
     const imagePath = image.relativePath.toLocaleLowerCase();
 
-    return [...imageFolders].some((folder) => imagePath.startsWith(`${folder}/`));
+    return imagePath.startsWith(`${folderKey}/`);
   });
-  const attachmentFolders = new Set([path.toLocaleLowerCase()]);
-  if (vaultState.attachmentEmbedSettings.location === "specified-folder-mirrored") {
-    const mirrorRoot = vaultState.attachmentEmbedSettings.folderPath
-      .trim()
-      .replace(/^\/+|\/+$/g, "");
-    if (mirrorRoot) {
-      attachmentFolders.add(`${mirrorRoot}/${path}`.toLocaleLowerCase());
-    }
-  }
 
   return containsImage || vaultState.attachmentFiles.some((attachment) => {
     const attachmentPath = attachment.relativePath.toLocaleLowerCase();
 
-    return [...attachmentFolders].some((folder) =>
-      attachmentPath.startsWith(`${folder}/`)
-    );
+    return attachmentPath.startsWith(`${folderKey}/`);
   });
-}
-
-export function isMirrorManagedImage(relativePath: string): boolean {
-  if (vaultState.imageEmbedSettings.location !== "specified-folder-mirrored") {
-    return false;
-  }
-  const folder = vaultState.imageEmbedSettings.folderPath
-    .trim()
-    .replace(/^\/+|\/+$/g, "")
-    .toLocaleLowerCase();
-  const path = relativePath.toLocaleLowerCase();
-
-  return Boolean(folder) && path.startsWith(`${folder}/`);
-}
-
-function mirroredImageFolderForNotePath(noteRelativePath: string): string | undefined {
-  if (vaultState.imageEmbedSettings.location !== "specified-folder-mirrored") {
-    return undefined;
-  }
-  const mirrorRoot = vaultState.imageEmbedSettings.folderPath
-    .trim()
-    .replace(/^\/+|\/+$/g, "");
-  if (!mirrorRoot) {
-    return undefined;
-  }
-  const noteFolder = noteRelativePath.split("/").slice(0, -1).join("/");
-
-  return noteFolder ? `${mirrorRoot}/${noteFolder}` : mirrorRoot;
-}
-
-function mirrorImagesThatFollowNote(note: Note): VaultImageFile[] {
-  const mirrorFolder = mirroredImageFolderForNotePath(note.relativePath);
-  if (mirrorFolder === undefined) {
-    return [];
-  }
-  const mirrorFolderKey = mirrorFolder.toLocaleLowerCase();
-  const referencedPaths = new Set(
-    parseMarkdownImages(note.content)
-      .map((image) => imageReferencePath(note.relativePath, image.assetId, image.destination))
-      .filter((path): path is string => Boolean(path))
-      .map((path) => path.toLocaleLowerCase()),
-  );
-  const pathsReferencedByOtherNotes = new Set<string>();
-  for (const candidate of vaultState.notes) {
-    if (candidate.id === note.id) {
-      continue;
-    }
-    for (const reference of parseMarkdownImages(candidate.content)) {
-      const path = imageReferencePath(
-        candidate.relativePath,
-        reference.assetId,
-        reference.destination,
-      );
-      if (path) {
-        pathsReferencedByOtherNotes.add(path.toLocaleLowerCase());
-      }
-    }
-  }
-
-  return vaultState.imageFiles.filter((image) => {
-    const imagePathKey = image.relativePath.toLocaleLowerCase();
-    const parentKey = image.relativePath
-      .split("/")
-      .slice(0, -1)
-      .join("/")
-      .toLocaleLowerCase();
-
-    return parentKey === mirrorFolderKey
-      && referencedPaths.has(imagePathKey)
-      && !pathsReferencedByOtherNotes.has(imagePathKey);
-  });
-}
-
-function mirroredAttachmentFolderForNotePath(noteRelativePath: string): string | undefined {
-  if (vaultState.attachmentEmbedSettings.location !== "specified-folder-mirrored") {
-    return undefined;
-  }
-  const mirrorRoot = vaultState.attachmentEmbedSettings.folderPath
-    .trim()
-    .replace(/^\/+|\/+$/g, "");
-  if (!mirrorRoot) {
-    return undefined;
-  }
-  const noteFolder = noteRelativePath.split("/").slice(0, -1).join("/");
-
-  return noteFolder ? `${mirrorRoot}/${noteFolder}` : mirrorRoot;
-}
-
-function mirrorAttachmentsThatFollowNote(note: Note): VaultAttachmentFile[] {
-  const mirrorFolder = mirroredAttachmentFolderForNotePath(note.relativePath);
-  if (mirrorFolder === undefined) {
-    return [];
-  }
-  const mirrorFolderKey = mirrorFolder.toLocaleLowerCase();
-  const attachmentPaths = vaultAttachmentPathKeys();
-  const referencedPaths = new Set(
-    parseVaultAttachmentReferences(note.content, note.relativePath, attachmentPaths)
-      .map((attachment) => trackedAttachmentPath(attachment.assetId)
-        ?? resolveMarkdownImagePath(note.relativePath, attachment.destination))
-      .filter((path): path is string => Boolean(path))
-      .map((path) => path.toLocaleLowerCase()),
-  );
-  const pathsReferencedByOtherNotes = new Set<string>();
-  for (const candidate of vaultState.notes) {
-    if (candidate.id === note.id) {
-      continue;
-    }
-    for (const reference of parseVaultAttachmentReferences(
-      candidate.content,
-      candidate.relativePath,
-      attachmentPaths,
-    )) {
-      const path = trackedAttachmentPath(reference.assetId)
-        ?? resolveMarkdownImagePath(candidate.relativePath, reference.destination);
-      if (path) {
-        pathsReferencedByOtherNotes.add(path.toLocaleLowerCase());
-      }
-    }
-  }
-
-  return vaultState.attachmentFiles.filter((attachment) => {
-    const attachmentPathKey = attachment.relativePath.toLocaleLowerCase();
-    const parentKey = attachment.relativePath
-      .split("/")
-      .slice(0, -1)
-      .join("/")
-      .toLocaleLowerCase();
-
-    return parentKey === mirrorFolderKey
-      && referencedPaths.has(attachmentPathKey)
-      && !pathsReferencedByOtherNotes.has(attachmentPathKey);
-  });
-}
-
-function imageReferencePath(
-  noteRelativePath: string,
-  assetId: string | undefined,
-  destination: string,
-): string | undefined {
-  return trackedImagePath(assetId)
-    ?? resolveMarkdownImagePath(noteRelativePath, destination);
 }
 
 function trackedImagePath(assetId: string | undefined): string | undefined {
@@ -2244,14 +1989,7 @@ async function relocateVaultImage(
   image: VaultImageFile,
   targetFolderPath: string,
   requestedFileName: string,
-  options: { announce?: boolean; managedByNoteMove?: boolean } = {},
 ): Promise<boolean> {
-  const managedByNoteMove = Boolean(options.managedByNoteMove);
-  if (isMirrorManagedImage(image.relativePath) && !managedByNoteMove) {
-    notify("Mirrored images follow their note folders and cannot be renamed or moved", "warning");
-
-    return false;
-  }
   const fileName = requestedFileName.trim();
   if (!isSafeImageFileName(fileName)) {
     notify("Enter a safe image file name with a supported extension", "warning");
@@ -2287,10 +2025,7 @@ async function relocateVaultImage(
       (image.assetId && candidate.assetId === image.assetId)
       || candidate.relativePath.toLocaleLowerCase() === image.relativePath.toLocaleLowerCase()
     );
-    if (
-      !currentImage
-      || (isMirrorManagedImage(currentImage.relativePath) && !managedByNoteMove)
-    ) {
+    if (!currentImage) {
       notify("That image can no longer be moved", "warning");
 
       return false;
@@ -2323,18 +2058,15 @@ async function relocateVaultImage(
         assetId,
         noteUpdates,
         vaultSession.revision,
-        managedByNoteMove,
       );
       applyRelocatedImageResult(result, noteUpdates);
       uiState.imageRefreshToken += 1;
-      if (options.announce !== false) {
-        notify(
-          targetFolderPath
-            ? `Moved image to ${targetFolderPath}`
-            : "Moved image to Vault root",
-          "success",
-        );
-      }
+      notify(
+        targetFolderPath
+          ? `Moved image to ${targetFolderPath}`
+          : "Moved image to Vault root",
+        "success",
+      );
 
       return true;
     } catch (error) {
@@ -2386,19 +2118,6 @@ function applyRelocatedImageResult(
   applyWorkspaceSaveResult(result);
 }
 
-export function isMirrorManagedAttachment(relativePath: string): boolean {
-  if (vaultState.attachmentEmbedSettings.location !== "specified-folder-mirrored") {
-    return false;
-  }
-  const folder = vaultState.attachmentEmbedSettings.folderPath
-    .trim()
-    .replace(/^\/+|\/+$/g, "")
-    .toLocaleLowerCase();
-  const path = relativePath.toLocaleLowerCase();
-
-  return Boolean(folder) && path.startsWith(`${folder}/`);
-}
-
 export function requestInsertVaultAttachment(attachment: VaultAttachmentFile): void {
   if (vaultSession.backend !== "native" || !vaultSession.path || !activeNote.value) {
     notify("Open a note in a desktop vault before inserting a file", "warning");
@@ -2431,17 +2150,7 @@ async function relocateVaultAttachment(
   attachment: VaultAttachmentFile,
   targetFolderPath: string,
   requestedFileName: string,
-  options: { announce?: boolean; managedByNoteMove?: boolean } = {},
 ): Promise<boolean> {
-  const managedByNoteMove = Boolean(options.managedByNoteMove);
-  if (isMirrorManagedAttachment(attachment.relativePath) && !managedByNoteMove) {
-    notify(
-      "Mirrored attachments follow their note folders and cannot be renamed or moved",
-      "warning",
-    );
-
-    return false;
-  }
   const fileName = requestedFileName.trim();
   if (!isSafeAttachmentFileName(fileName)) {
     notify("Enter a safe non-Markdown, non-image file name", "warning");
@@ -2479,10 +2188,7 @@ async function relocateVaultAttachment(
       || candidate.relativePath.toLocaleLowerCase()
         === attachment.relativePath.toLocaleLowerCase()
     );
-    if (
-      !currentAttachment
-      || (isMirrorManagedAttachment(currentAttachment.relativePath) && !managedByNoteMove)
-    ) {
+    if (!currentAttachment) {
       notify("That attachment can no longer be moved", "warning");
 
       return false;
@@ -2515,18 +2221,15 @@ async function relocateVaultAttachment(
         assetId,
         noteUpdates,
         vaultSession.revision,
-        managedByNoteMove,
       );
       applyRelocatedAttachmentResult(result, noteUpdates);
       uiState.attachmentRefreshToken += 1;
-      if (options.announce !== false) {
-        notify(
-          targetFolderPath
-            ? `Moved attachment to ${targetFolderPath}`
-            : "Moved attachment to Vault root",
-          "success",
-        );
-      }
+      notify(
+        targetFolderPath
+          ? `Moved attachment to ${targetFolderPath}`
+          : "Moved attachment to Vault root",
+        "success",
+      );
 
       return true;
     } catch (error) {
@@ -3955,10 +3658,16 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
 function normalizeImageEmbedSettings(
   value: VaultData["imageEmbedSettings"] | undefined,
 ): VaultData["imageEmbedSettings"] {
-  if (value?.location === "specified-folder-mirrored") {
+  const legacySettings = value as {
+    folderPath?: unknown;
+    location?: string;
+  } | undefined;
+  if (legacySettings?.location === "specified-folder-mirrored") {
     return {
       location: "specified-folder",
-      folderPath: typeof value.folderPath === "string" ? value.folderPath : "",
+      folderPath: typeof legacySettings.folderPath === "string"
+        ? legacySettings.folderPath
+        : "",
     };
   }
   if (

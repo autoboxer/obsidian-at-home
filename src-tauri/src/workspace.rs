@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, FileTimes, OpenOptions};
@@ -115,13 +115,35 @@ pub struct CssSnippet {
     pub built_in: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ImageEmbedLocation {
     VaultRoot,
     NoteFolder,
     SpecifiedFolder,
-    SpecifiedFolderMirrored,
+}
+
+impl<'de> Deserialize<'de> for ImageEmbedLocation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "vault-root" => Ok(Self::VaultRoot),
+            "note-folder" => Ok(Self::NoteFolder),
+            "specified-folder" | "specified-folder-mirrored" => Ok(Self::SpecifiedFolder),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &[
+                    "vault-root",
+                    "note-folder",
+                    "specified-folder",
+                    "specified-folder-mirrored",
+                ],
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1444,7 +1466,6 @@ pub fn workspace_relocate_image(
     asset_id: String,
     note_updates: Vec<WorkspaceImageNoteUpdate>,
     expected_revision: u64,
-    managed_by_note_move: bool,
 ) -> Result<WorkspaceRelocateImageResult, String> {
     let _guard = lock_workspace_io()?;
     let root = validate_workspace_root(&path)?;
@@ -1457,7 +1478,6 @@ pub fn workspace_relocate_image(
         &asset_id,
         &note_updates,
         expected_revision,
-        managed_by_note_move,
     )
 }
 
@@ -1470,7 +1490,6 @@ pub fn workspace_relocate_attachment(
     asset_id: String,
     note_updates: Vec<WorkspaceImageNoteUpdate>,
     expected_revision: u64,
-    managed_by_note_move: bool,
 ) -> Result<WorkspaceRelocateAttachmentResult, String> {
     let _guard = lock_workspace_io()?;
     let root = validate_workspace_root(&path)?;
@@ -1483,7 +1502,6 @@ pub fn workspace_relocate_attachment(
         &asset_id,
         &note_updates,
         expected_revision,
-        managed_by_note_move,
     )
 }
 
@@ -1856,9 +1874,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             opening_disabled: attachment.opening_disabled,
         })
         .collect();
-    let image_embed_settings = match migrate_legacy_image_embed_settings(
-        &state.image_embed_settings,
-    ) {
+    let image_embed_settings = match normalize_image_embed_settings(&state.image_embed_settings) {
         Ok(settings) => settings,
         Err(error) => {
             warnings.push(format!("Reset invalid image embed settings: {error}"));
@@ -1866,7 +1882,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         }
     };
     let attachment_embed_settings =
-        match migrate_legacy_attachment_embed_settings(&state.attachment_embed_settings) {
+        match normalize_attachment_embed_settings(&state.attachment_embed_settings) {
             Ok(settings) => settings,
             Err(error) => {
                 warnings.push(format!("Reset invalid attachment embed settings: {error}"));
@@ -2308,8 +2324,8 @@ fn save_workspace_files_with_recovery(
         recent_note_ids,
         recently_deleted_notes,
         assets: old_state.assets.clone(),
-        image_embed_settings: migrate_legacy_image_embed_settings(&vault.image_embed_settings)?,
-        attachment_embed_settings: migrate_legacy_attachment_embed_settings(
+        image_embed_settings: normalize_image_embed_settings(&vault.image_embed_settings)?,
+        attachment_embed_settings: normalize_attachment_embed_settings(
             &vault.attachment_embed_settings,
         )?,
         selected_folder_id: vault.selected_folder_id.clone(),
@@ -3188,28 +3204,7 @@ fn normalize_image_embed_settings(
                 folder_path,
             })
         }
-        ImageEmbedLocation::SpecifiedFolderMirrored => {
-            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
-            if folder_path.is_empty() {
-                return Err("Choose a vault-relative folder for embedded images.".to_owned());
-            }
-            validate_relative_path(&folder_path, false)?;
-            Ok(ImageEmbedSettings {
-                location: ImageEmbedLocation::SpecifiedFolderMirrored,
-                folder_path,
-            })
-        }
     }
-}
-
-fn migrate_legacy_image_embed_settings(
-    settings: &ImageEmbedSettings,
-) -> Result<ImageEmbedSettings, String> {
-    let mut normalized = normalize_image_embed_settings(settings)?;
-    if normalized.location == ImageEmbedLocation::SpecifiedFolderMirrored {
-        normalized.location = ImageEmbedLocation::SpecifiedFolder;
-    }
-    Ok(normalized)
 }
 
 fn image_destination_folder(
@@ -3226,18 +3221,6 @@ fn image_destination_folder(
             .and_then(path_to_slash_string)
             .unwrap_or_default()),
         ImageEmbedLocation::SpecifiedFolder => Ok(settings.folder_path),
-        ImageEmbedLocation::SpecifiedFolderMirrored => {
-            let note_folder = Path::new(note_relative_path)
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .and_then(path_to_slash_string)
-                .unwrap_or_default();
-            Ok(if note_folder.is_empty() {
-                settings.folder_path
-            } else {
-                format!("{}/{note_folder}", settings.folder_path)
-            })
-        }
     }
 }
 
@@ -3261,28 +3244,7 @@ fn normalize_attachment_embed_settings(
                 folder_path,
             })
         }
-        ImageEmbedLocation::SpecifiedFolderMirrored => {
-            let folder_path = settings.folder_path.trim().trim_matches('/').to_owned();
-            if folder_path.is_empty() {
-                return Err("Choose a vault-relative folder for embedded files.".to_owned());
-            }
-            validate_relative_path(&folder_path, false)?;
-            Ok(AttachmentEmbedSettings {
-                location: ImageEmbedLocation::SpecifiedFolderMirrored,
-                folder_path,
-            })
-        }
     }
-}
-
-fn migrate_legacy_attachment_embed_settings(
-    settings: &AttachmentEmbedSettings,
-) -> Result<AttachmentEmbedSettings, String> {
-    let mut normalized = normalize_attachment_embed_settings(settings)?;
-    if normalized.location == ImageEmbedLocation::SpecifiedFolderMirrored {
-        normalized.location = ImageEmbedLocation::SpecifiedFolder;
-    }
-    Ok(normalized)
 }
 
 fn attachment_destination_folder(
@@ -3299,18 +3261,6 @@ fn attachment_destination_folder(
             .and_then(path_to_slash_string)
             .unwrap_or_default()),
         ImageEmbedLocation::SpecifiedFolder => Ok(settings.folder_path),
-        ImageEmbedLocation::SpecifiedFolderMirrored => {
-            let note_folder = Path::new(note_relative_path)
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .and_then(path_to_slash_string)
-                .unwrap_or_default();
-            Ok(if note_folder.is_empty() {
-                settings.folder_path
-            } else {
-                format!("{}/{note_folder}", settings.folder_path)
-            })
-        }
     }
 }
 
@@ -3768,7 +3718,6 @@ fn relocate_workspace_image(
     asset_id: &str,
     note_updates: &[WorkspaceImageNoteUpdate],
     expected_revision: u64,
-    managed_by_note_move: bool,
 ) -> Result<WorkspaceRelocateImageResult, String> {
     validate_image_relative_path(image_relative_path)?;
     validate_image_relative_path(target_relative_path)?;
@@ -3795,31 +3744,6 @@ fn relocate_workspace_image(
                 .to_owned(),
         );
     }
-    let source_is_mirror_managed =
-        image_path_is_mirror_managed(image_relative_path, &old_state.image_embed_settings)?;
-    if source_is_mirror_managed && !managed_by_note_move {
-        return Err(
-            "Images in the mirrored image folder are managed by note location and cannot be renamed or moved."
-                .to_owned(),
-        );
-    }
-    if managed_by_note_move {
-        let target_is_mirror_managed =
-            image_path_is_mirror_managed(target_relative_path, &old_state.image_embed_settings)?;
-        let source_name = Path::new(image_relative_path).file_name();
-        let target_name = Path::new(target_relative_path).file_name();
-        if !source_is_mirror_managed
-            || !target_is_mirror_managed
-            || source_name.is_none()
-            || source_name != target_name
-        {
-            return Err(
-                "A note move can only carry a mirrored image, without renaming it."
-                    .to_owned(),
-            );
-        }
-    }
-
     let source = resolve_workspace_image_file(root, image_relative_path, false)?;
     let bytes = read_image_file(&source)?;
     let (media_type, _) = validate_image_bytes(&bytes, Some(target_relative_path))?;
@@ -3832,8 +3756,6 @@ fn relocate_workspace_image(
             return Err("The image destination is not a regular vault folder.".to_owned());
         }
         Ok(_) => {}
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound && managed_by_note_move => {}
         Err(error) => {
             return Err(format!(
                 "Could not inspect the image destination folder: {error}"
@@ -3885,10 +3807,6 @@ fn relocate_workspace_image(
                     .to_owned(),
             );
         }
-    }
-
-    if managed_by_note_move {
-        ensure_asset_parent(root, target_relative_path, "image")?;
     }
 
     relocate_asset_file_durable(&source, &target).map_err(|error| {
@@ -4004,7 +3922,6 @@ fn relocate_workspace_attachment(
     asset_id: &str,
     note_updates: &[WorkspaceImageNoteUpdate],
     expected_revision: u64,
-    managed_by_note_move: bool,
 ) -> Result<WorkspaceRelocateAttachmentResult, String> {
     validate_attachment_relative_path(attachment_relative_path)?;
     validate_attachment_relative_path(target_relative_path)?;
@@ -4031,35 +3948,6 @@ fn relocate_workspace_attachment(
                 .to_owned(),
         );
     }
-    let source_is_mirror_managed = attachment_path_is_mirror_managed(
-        attachment_relative_path,
-        &old_state.attachment_embed_settings,
-    )?;
-    if source_is_mirror_managed && !managed_by_note_move {
-        return Err(
-            "Attachments in the mirrored attachment folder are managed by note location and cannot be renamed or moved."
-                .to_owned(),
-        );
-    }
-    if managed_by_note_move {
-        let target_is_mirror_managed = attachment_path_is_mirror_managed(
-            target_relative_path,
-            &old_state.attachment_embed_settings,
-        )?;
-        let source_name = Path::new(attachment_relative_path).file_name();
-        let target_name = Path::new(target_relative_path).file_name();
-        if !source_is_mirror_managed
-            || !target_is_mirror_managed
-            || source_name.is_none()
-            || source_name != target_name
-        {
-            return Err(
-                "A note move can only carry a mirrored attachment, without renaming it."
-                    .to_owned(),
-            );
-        }
-    }
-
     let source = resolve_workspace_asset_file(root, attachment_relative_path, false)?;
     let fingerprint = fingerprint_attachment_file(&source)?;
     let media_type = attachment_media_type_for_path(Path::new(target_relative_path));
@@ -4072,8 +3960,6 @@ fn relocate_workspace_attachment(
             return Err("The attachment destination is not a regular vault folder.".to_owned());
         }
         Ok(_) => {}
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound && managed_by_note_move => {}
         Err(error) => {
             return Err(format!(
                 "Could not inspect the attachment destination folder: {error}"
@@ -4133,9 +4019,6 @@ fn relocate_workspace_attachment(
         }
     }
 
-    if managed_by_note_move {
-        ensure_asset_parent(root, target_relative_path, "attachment")?;
-    }
     relocate_asset_file_durable(&source, &target).map_err(|error| {
         format!("Could not move the attachment to {target_relative_path}: {error}")
     })?;
@@ -4342,32 +4225,6 @@ fn prepare_asset_note_updates(
         });
     }
     Ok(prepared)
-}
-
-fn image_path_is_mirror_managed(
-    image_relative_path: &str,
-    settings: &ImageEmbedSettings,
-) -> Result<bool, String> {
-    let normalized = normalize_image_embed_settings(settings)?;
-    if normalized.location != ImageEmbedLocation::SpecifiedFolderMirrored {
-        return Ok(false);
-    }
-    let image_key = portable_path_key(image_relative_path);
-    let folder_key = portable_path_key(&normalized.folder_path);
-    Ok(image_key.starts_with(&format!("{folder_key}/")))
-}
-
-fn attachment_path_is_mirror_managed(
-    attachment_relative_path: &str,
-    settings: &AttachmentEmbedSettings,
-) -> Result<bool, String> {
-    let normalized = normalize_attachment_embed_settings(settings)?;
-    if normalized.location != ImageEmbedLocation::SpecifiedFolderMirrored {
-        return Ok(false);
-    }
-    let attachment_key = portable_path_key(attachment_relative_path);
-    let folder_key = portable_path_key(&normalized.folder_path);
-    Ok(attachment_key.starts_with(&format!("{folder_key}/")))
 }
 
 fn relocate_asset_file_durable(source: &Path, target: &Path) -> io::Result<()> {
@@ -10991,6 +10848,19 @@ mod tests {
         }
     }
 
+    fn write_legacy_mirrored_workspace_state(root: &Path, state: &WorkspaceState) {
+        write_workspace_state(root, state).expect("current workspace state should be written");
+        let state_path = workspace_state_path(root);
+        let current_state = fs::read_to_string(&state_path)
+            .expect("current workspace state should be readable");
+        let legacy_state = current_state.replace(
+            "\"specified-folder\"",
+            "\"specified-folder-mirrored\"",
+        );
+        assert_ne!(legacy_state, current_state);
+        fs::write(state_path, legacy_state).expect("legacy workspace state should be written");
+    }
+
     #[test]
     fn workspace_asset_limit_counts_images_and_attachments_together() {
         assert!(!workspace_asset_limit_reached(1, 1, 3));
@@ -12548,15 +12418,22 @@ mod tests {
 
         let mut state = WorkspaceState::default();
         state.image_embed_settings = ImageEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            location: ImageEmbedLocation::SpecifiedFolder,
             folder_path: "Images".to_owned(),
         };
         state.attachment_embed_settings = AttachmentEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            location: ImageEmbedLocation::SpecifiedFolder,
             folder_path: "Files".to_owned(),
         };
-        write_workspace_state(&workspace.root, &state)
-            .expect("legacy workspace state should be written");
+        write_legacy_mirrored_workspace_state(&workspace.root, &state);
+        let state_path = workspace_state_path(&workspace.root);
+        assert_eq!(
+            fs::read_to_string(&state_path)
+                .expect("legacy workspace state should be readable")
+                .matches("specified-folder-mirrored")
+                .count(),
+            2,
+        );
 
         let loaded = load_workspace(&workspace.root, &empty_vault("Legacy settings"))
             .expect("legacy workspace should load");
@@ -12595,6 +12472,9 @@ mod tests {
             persisted.attachment_embed_settings,
             loaded.vault.attachment_embed_settings,
         );
+        assert!(!fs::read_to_string(&state_path)
+            .expect("migrated workspace state should be readable")
+            .contains("specified-folder-mirrored"));
 
         let reopened = load_workspace(&workspace.root, &empty_vault("Legacy settings"))
             .expect("migrated workspace should reopen");
@@ -12608,10 +12488,10 @@ mod tests {
     }
 
     #[test]
-    fn mirrored_image_storage_follows_each_notes_folder() {
-        const FIRST: &[u8] = b"\x89PNG\r\n\x1a\nfirst-mirrored-image";
-        const SECOND: &[u8] = b"\x89PNG\r\n\x1a\nsecond-mirrored-image";
-        let workspace = TestWorkspace::new("mirrored-image-locations");
+    fn specified_image_storage_is_shared_across_note_folders() {
+        const FIRST: &[u8] = b"\x89PNG\r\n\x1a\nfirst-shared-image";
+        const SECOND: &[u8] = b"\x89PNG\r\n\x1a\nsecond-shared-image";
+        let workspace = TestWorkspace::new("shared-image-location");
         fs::create_dir(workspace.root.join("test1")).expect("test1 should be created");
         fs::create_dir(workspace.root.join("test2")).expect("test2 should be created");
         fs::write(workspace.root.join("test1/doc1.md"), "# Doc 1")
@@ -12621,7 +12501,7 @@ mod tests {
         write_workspace_state(&workspace.root, &WorkspaceState::default())
             .expect("workspace state should be written");
         let settings = ImageEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            location: ImageEmbedLocation::SpecifiedFolder,
             folder_path: "Images".to_owned(),
         };
 
@@ -12634,7 +12514,7 @@ mod tests {
             None,
             revision_for_root(&workspace.root).expect("revision should be available"),
         )
-        .expect("first mirrored image should be embedded");
+        .expect("first shared image should be embedded");
         let second = embed_workspace_image(
             &workspace.root,
             "test2/doc2.md",
@@ -12644,10 +12524,10 @@ mod tests {
             None,
             first.revision,
         )
-        .expect("second mirrored image should be embedded");
+        .expect("second shared image should be embedded");
 
-        assert_eq!(first.image.relative_path, "Images/test1/First.png");
-        assert_eq!(second.image.relative_path, "Images/test2/Second.png");
+        assert_eq!(first.image.relative_path, "Images/First.png");
+        assert_eq!(second.image.relative_path, "Images/Second.png");
         assert_eq!(
             fs::read(workspace.root.join(&first.image.relative_path)).unwrap(),
             FIRST,
@@ -12709,7 +12589,6 @@ mod tests {
                 content: moved_content.clone(),
             }],
             revision_for_root(&workspace.root).expect("revision should be available"),
-            false,
         )
         .expect("image should move into its subfolder");
 
@@ -12734,7 +12613,6 @@ mod tests {
                 content: renamed_content.clone(),
             }],
             moved.revision,
-            false,
         )
         .expect("image should move to a sibling folder and be renamed");
 
@@ -12779,7 +12657,6 @@ mod tests {
             "image-loose",
             &[],
             revision,
-            false,
         )
         .expect_err("an existing image should block the move");
         assert!(error.contains("already exists"));
@@ -12798,7 +12675,6 @@ mod tests {
                 content: updated.to_owned(),
             }],
             revision,
-            false,
         )
         .expect("the untracked image should be registered while moving");
         let mut warnings = WarningCollector::default();
@@ -12811,18 +12687,67 @@ mod tests {
     }
 
     #[test]
-    fn mirrored_images_cannot_be_reorganized() {
-        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nmanaged-mirror-image";
-        let workspace = TestWorkspace::new("managed-mirror-image");
+    fn former_mirrored_images_can_be_reorganized_after_migration() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nformer-mirrored-image";
+        let workspace = TestWorkspace::new("former-mirrored-image");
         fs::create_dir_all(workspace.root.join("Images/Notes"))
-            .expect("mirrored image folder should be created");
+            .expect("legacy image folder should be created");
         fs::create_dir(workspace.root.join("Elsewhere"))
             .expect("destination should be created");
         fs::write(workspace.root.join("Images/Notes/Photo.png"), PNG)
-            .expect("managed image should be written");
+            .expect("legacy image should be written");
         let mut state = WorkspaceState::default();
         state.image_embed_settings = ImageEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            location: ImageEmbedLocation::SpecifiedFolder,
+            folder_path: "Images".to_owned(),
+        };
+        state.assets.insert(
+            "image-managed".to_owned(),
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
+                relative_path: "Images/Notes/Photo.png".to_owned(),
+                media_type: "image/png".to_owned(),
+                fingerprint: fingerprint_bytes(PNG),
+                modified_nanos: image_modified_nanos_for_path(
+                    &workspace.root,
+                    "Images/Notes/Photo.png",
+                )
+                .unwrap(),
+            },
+        );
+        write_legacy_mirrored_workspace_state(&workspace.root, &state);
+        let loaded = load_workspace(&workspace.root, &empty_vault("Former mirror"))
+            .expect("legacy workspace should migrate");
+
+        let moved = relocate_workspace_image(
+            &workspace.root,
+            "Images/Notes/Photo.png",
+            "Elsewhere/Photo.png",
+            "image-managed",
+            &[],
+            loaded.revision,
+        )
+        .expect("a former mirrored image should move normally");
+
+        assert_eq!(moved.image.relative_path, "Elsewhere/Photo.png");
+        assert!(!workspace.root.join("Images/Notes/Photo.png").exists());
+        assert_eq!(
+            fs::read(workspace.root.join("Elsewhere/Photo.png")).unwrap(),
+            PNG,
+        );
+    }
+
+    #[test]
+    fn image_relocation_requires_an_existing_destination_folder() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nmissing-destination-image";
+        let workspace = TestWorkspace::new("missing-image-destination");
+        fs::create_dir_all(workspace.root.join("Images/Notes"))
+            .expect("source image folder should be created");
+        fs::write(workspace.root.join("Images/Notes/Photo.png"), PNG)
+            .expect("source image should be written");
+        let mut state = WorkspaceState::default();
+        state.image_embed_settings = ImageEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolder,
             folder_path: "Images".to_owned(),
         };
         state.assets.insert(
@@ -12845,78 +12770,16 @@ mod tests {
         let error = relocate_workspace_image(
             &workspace.root,
             "Images/Notes/Photo.png",
-            "Elsewhere/Photo.png",
-            "image-managed",
-            &[],
-            revision_for_root(&workspace.root).expect("revision should be available"),
-            false,
-        )
-        .expect_err("mirrored images should be managed by note location");
-
-        assert!(error.contains("mirrored image folder"));
-        assert!(workspace.root.join("Images/Notes/Photo.png").exists());
-        assert!(!workspace.root.join("Elsewhere/Photo.png").exists());
-    }
-
-    #[test]
-    fn note_moves_carry_mirrored_images_without_allowing_renames() {
-        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nmanaged-note-move-image";
-        let workspace = TestWorkspace::new("managed-note-move-image");
-        fs::create_dir_all(workspace.root.join("Images/Notes"))
-            .expect("source mirror folder should be created");
-        fs::write(workspace.root.join("Images/Notes/Photo.png"), PNG)
-            .expect("managed image should be written");
-        let mut state = WorkspaceState::default();
-        state.image_embed_settings = ImageEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
-            folder_path: "Images".to_owned(),
-        };
-        state.assets.insert(
-            "image-managed".to_owned(),
-            StoredVaultAsset {
-                kind: VaultAssetKind::Image,
-                relative_path: "Images/Notes/Photo.png".to_owned(),
-                media_type: "image/png".to_owned(),
-                fingerprint: fingerprint_bytes(PNG),
-                modified_nanos: image_modified_nanos_for_path(
-                    &workspace.root,
-                    "Images/Notes/Photo.png",
-                )
-                .unwrap(),
-            },
-        );
-        write_workspace_state(&workspace.root, &state)
-            .expect("workspace state should be written");
-
-        let renamed_error = relocate_workspace_image(
-            &workspace.root,
-            "Images/Notes/Photo.png",
             "Images/Archive/Renamed.png",
             "image-managed",
             &[],
             revision_for_root(&workspace.root).expect("revision should be available"),
-            true,
         )
-        .expect_err("a managed note move must not rename its image");
-        assert!(renamed_error.contains("without renaming"));
+        .expect_err("an image move should not create an arbitrary destination folder");
 
-        let moved = relocate_workspace_image(
-            &workspace.root,
-            "Images/Notes/Photo.png",
-            "Images/Archive/Photo.png",
-            "image-managed",
-            &[],
-            revision_for_root(&workspace.root).expect("revision should be available"),
-            true,
-        )
-        .expect("a note move should carry its managed image");
-
-        assert_eq!(moved.image.relative_path, "Images/Archive/Photo.png");
-        assert!(!workspace.root.join("Images/Notes/Photo.png").exists());
-        assert_eq!(
-            fs::read(workspace.root.join("Images/Archive/Photo.png")).unwrap(),
-            PNG,
-        );
+        assert!(error.contains("destination folder"));
+        assert!(workspace.root.join("Images/Notes/Photo.png").exists());
+        assert!(!workspace.root.join("Images/Archive").exists());
     }
 
     #[test]
@@ -13186,9 +13049,9 @@ mod tests {
     }
 
     #[test]
-    fn attachment_storage_honors_mirrored_locations_and_empty_files() {
-        let source = TestWorkspace::new("mirrored-attachment-source");
-        let workspace = TestWorkspace::new("mirrored-attachment-target");
+    fn attachment_storage_honors_shared_locations_and_empty_files() {
+        let source = TestWorkspace::new("shared-attachment-source");
+        let workspace = TestWorkspace::new("shared-attachment-target");
         let first_source = source.root.join("First.zip");
         let empty_source = source.root.join("Empty export");
         fs::write(&first_source, b"first archive").expect("first source should be written");
@@ -13202,7 +13065,7 @@ mod tests {
         write_workspace_state(&workspace.root, &WorkspaceState::default())
             .expect("workspace state should be written");
         let settings = AttachmentEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            location: ImageEmbedLocation::SpecifiedFolder,
             folder_path: "Files".to_owned(),
         };
 
@@ -13214,7 +13077,7 @@ mod tests {
             None,
             revision_for_root(&workspace.root).unwrap(),
         )
-        .expect("first mirrored attachment should be embedded");
+        .expect("first shared attachment should be embedded");
         let second = embed_workspace_attachment(
             &workspace.root,
             "test2/doc2.md",
@@ -13225,20 +13088,14 @@ mod tests {
         )
         .expect("empty extensionless attachment should be embedded");
 
-        assert_eq!(first.attachment.relative_path, "Files/test1/First.zip");
-        assert_eq!(second.attachment.relative_path, "Files/test2/Empty export");
+        assert_eq!(first.attachment.relative_path, "Files/First.zip");
+        assert_eq!(second.attachment.relative_path, "Files/Empty export");
         assert_eq!(second.attachment.byte_length, 0);
         assert_eq!(second.attachment.media_type, "application/octet-stream");
         assert_eq!(fs::read(workspace.root.join(&second.attachment.relative_path)).unwrap(), b"");
         let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
-            .expect("mirrored attachments should reload");
-        assert_eq!(
-            loaded.vault.attachment_embed_settings,
-            AttachmentEmbedSettings {
-                location: ImageEmbedLocation::SpecifiedFolder,
-                folder_path: settings.folder_path,
-            },
-        );
+            .expect("shared attachments should reload");
+        assert_eq!(loaded.vault.attachment_embed_settings, settings);
         assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test1"));
         assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test2"));
     }
@@ -13295,7 +13152,6 @@ mod tests {
                 content: updated.clone(),
             }],
             revision_for_root(&workspace.root).unwrap(),
-            false,
         )
         .expect("attachment should move and be renamed");
 
@@ -13315,18 +13171,18 @@ mod tests {
     }
 
     #[test]
-    fn mirrored_attachments_only_move_with_their_note() {
-        let workspace = TestWorkspace::new("managed-note-move-attachment");
-        let bytes = b"managed attachment";
+    fn former_mirrored_attachments_can_be_reorganized_after_migration() {
+        let workspace = TestWorkspace::new("former-mirrored-attachment");
+        let bytes = b"former mirrored attachment";
         fs::create_dir_all(workspace.root.join("Files/Notes"))
-            .expect("source mirror folder should be created");
+            .expect("legacy attachment folder should be created");
         fs::create_dir(workspace.root.join("Elsewhere"))
             .expect("ordinary destination should be created");
         fs::write(workspace.root.join("Files/Notes/Report.pdf"), bytes)
-            .expect("managed attachment should be written");
+            .expect("legacy attachment should be written");
         let mut state = WorkspaceState::default();
         state.attachment_embed_settings = AttachmentEmbedSettings {
-            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            location: ImageEmbedLocation::SpecifiedFolder,
             folder_path: "Files".to_owned(),
         };
         state.assets.insert(
@@ -13342,45 +13198,21 @@ mod tests {
                 .unwrap(),
             },
         );
-        write_workspace_state(&workspace.root, &state)
-            .expect("workspace state should be written");
+        write_legacy_mirrored_workspace_state(&workspace.root, &state);
+        let loaded = load_workspace(&workspace.root, &empty_vault("Former mirror"))
+            .expect("legacy workspace should migrate");
 
-        let manual_error = relocate_workspace_attachment(
+        let moved = relocate_workspace_attachment(
             &workspace.root,
             "Files/Notes/Report.pdf",
             "Elsewhere/Report.pdf",
             "attachment-managed",
             &[],
-            revision_for_root(&workspace.root).unwrap(),
-            false,
+            loaded.revision,
         )
-        .expect_err("mirrored attachments should reject manual moves");
-        assert!(manual_error.contains("mirrored attachment folder"));
-
-        let rename_error = relocate_workspace_attachment(
-            &workspace.root,
-            "Files/Notes/Report.pdf",
-            "Files/Archive/Renamed.pdf",
-            "attachment-managed",
-            &[],
-            revision_for_root(&workspace.root).unwrap(),
-            true,
-        )
-        .expect_err("managed note moves must preserve the attachment name");
-        assert!(rename_error.contains("without renaming"));
-
-        let moved = relocate_workspace_attachment(
-            &workspace.root,
-            "Files/Notes/Report.pdf",
-            "Files/Archive/Report.pdf",
-            "attachment-managed",
-            &[],
-            revision_for_root(&workspace.root).unwrap(),
-            true,
-        )
-        .expect("a note move should carry its managed attachment");
-        assert_eq!(moved.attachment.relative_path, "Files/Archive/Report.pdf");
-        assert_eq!(fs::read(workspace.root.join("Files/Archive/Report.pdf")).unwrap(), bytes);
+        .expect("a former mirrored attachment should move normally");
+        assert_eq!(moved.attachment.relative_path, "Elsewhere/Report.pdf");
+        assert_eq!(fs::read(workspace.root.join("Elsewhere/Report.pdf")).unwrap(), bytes);
         assert!(!workspace.root.join("Files/Notes/Report.pdf").exists());
     }
 

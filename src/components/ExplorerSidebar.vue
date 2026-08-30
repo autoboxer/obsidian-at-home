@@ -7,8 +7,6 @@ import {
   createFolder,
   createNote,
   FOLDER_DRAG_MIME,
-  isMirrorManagedAttachment,
-  isMirrorManagedImage,
   moveFolder,
   moveVaultAttachmentToFolder,
   moveVaultImageToFolder,
@@ -309,8 +307,7 @@ function isInvalidRootFolderDrop(): boolean {
       candidate.relativePath === treeDragState.attachmentPath
     );
     if (attachment) {
-      return isMirrorManagedAttachment(attachment.relativePath)
-        || !attachment.relativePath.includes("/");
+      return !attachment.relativePath.includes("/");
     }
   }
   if (treeDragState.imagePath) {
@@ -318,7 +315,7 @@ function isInvalidRootFolderDrop(): boolean {
       candidate.relativePath === treeDragState.imagePath
     );
     if (image) {
-      return isMirrorManagedImage(image.relativePath) || !image.relativePath.includes("/");
+      return !image.relativePath.includes("/");
     }
   }
   if (!treeDragState.folderId) {

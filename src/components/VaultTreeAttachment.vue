@@ -7,7 +7,6 @@ import {
 } from "../lib/markdownAttachments";
 import {
   activateVaultAttachment,
-  isMirrorManagedAttachment,
   renameVaultAttachment,
   requestInsertVaultAttachment,
   treeDragState,
@@ -31,9 +30,6 @@ const menuButton = ref<HTMLButtonElement>();
 const fileName = computed(() =>
   props.attachment.relativePath.split("/").at(-1) || "Attachment"
 );
-const mirrorManaged = computed(() =>
-  isMirrorManagedAttachment(props.attachment.relativePath)
-);
 const archive = computed(() => markdownAttachmentIsArchive(
   props.attachment.relativePath,
   props.attachment.mediaType,
@@ -51,9 +47,9 @@ const actionLabel = computed(() => {
 
   return archive.value ? "Save archive as…" : "Open file";
 });
-const rowTitle = computed(() => mirrorManaged.value
-  ? `${props.attachment.relativePath} · Press Enter to embed · Mirrored attachments follow their note folders`
-  : `${props.attachment.relativePath} · Press Enter to embed or drag into the editor or onto a folder`);
+const rowTitle = computed(() =>
+  `${props.attachment.relativePath} · Press Enter to embed or drag into the editor or onto a folder`
+);
 
 function startDrag(event: DragEvent): void {
   if (!event.dataTransfer) {
@@ -89,9 +85,6 @@ function activateAttachment(): void {
 }
 
 function beginRename(): void {
-  if (mirrorManaged.value) {
-    return;
-  }
   closeMenu();
   editValue.value = fileName.value;
   editing.value = true;
@@ -163,7 +156,7 @@ function handleMenuFocusOut(event: FocusEvent): void {
 <template>
   <div
     class="vault-tree-attachment"
-    :class="{ 'is-dragging': dragging, 'is-mirror-managed': mirrorManaged }"
+    :class="{ 'is-dragging': dragging }"
     :style="{ '--tree-depth': depth }"
     :title="rowTitle"
     @contextmenu.prevent.stop="openContextMenu"
@@ -180,7 +173,6 @@ function handleMenuFocusOut(event: FocusEvent): void {
       >
         <AppIcon class="vault-tree-attachment-icon" name="paperclip" :size="14" />
         <span class="vault-tree-attachment-title">{{ fileName }}</span>
-        <AppIcon v-if="mirrorManaged" class="vault-tree-attachment-lock" name="lock" :size="11" />
       </button>
       <div class="vault-tree-attachment-menu-anchor" @focusout="handleMenuFocusOut">
         <button
@@ -218,9 +210,9 @@ function handleMenuFocusOut(event: FocusEvent): void {
               <AppIcon :name="archive ? 'export' : 'arrow'" :size="14" />
               {{ actionLabel }}
             </button>
-            <button type="button" role="menuitem" :disabled="mirrorManaged" @click="beginRename">
-              <AppIcon :name="mirrorManaged ? 'lock' : 'edit'" :size="14" />
-              {{ mirrorManaged ? "Managed by mirror setting" : "Rename" }}
+            <button type="button" role="menuitem" @click="beginRename">
+              <AppIcon name="edit" :size="14" />
+              Rename
             </button>
           </div>
         </Transition>
