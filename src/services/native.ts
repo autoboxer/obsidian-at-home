@@ -18,6 +18,8 @@ import type {
   WorkspaceBootstrap,
   WorkspaceEmbedImageResult,
   WorkspaceEmbedAttachmentResult,
+  WorkspaceExternalAssetDiscardResult,
+  WorkspaceExternalFileUpload,
   WorkspaceImageNoteUpdate,
   WorkspaceImportAssetsResult,
   WorkspaceImportSaveResult,
@@ -138,6 +140,20 @@ export async function bootstrapWorkspace(defaults: VaultData): Promise<Workspace
 
 export async function openWorkspace(path: string, defaults: VaultData): Promise<WorkspaceLoad> {
   return invoke<WorkspaceLoad>("workspace_open", { path, defaults });
+}
+
+export async function discardWorkspaceExternalAsset(
+  path: string,
+  assetId: string,
+  relativePath: string,
+  expectedRevision: number,
+): Promise<WorkspaceExternalAssetDiscardResult> {
+  return invoke<WorkspaceExternalAssetDiscardResult>("workspace_discard_external_asset", {
+    path,
+    assetId,
+    relativePath,
+    expectedRevision,
+  });
 }
 
 export async function createWorkspace(
@@ -306,6 +322,151 @@ export async function embedWorkspaceVaultAttachment(
     settings,
     expectedRevision,
   });
+}
+
+async function beginWorkspaceExternalFileUpload(
+  path: string,
+  file: File,
+  kind: "image" | "attachment",
+  noteRelativePath: string,
+  expectedRevision: number,
+): Promise<WorkspaceExternalFileUpload> {
+  return invoke<WorkspaceExternalFileUpload>("workspace_begin_external_file_upload", {
+    path,
+    fileName: file.name,
+    byteLength: file.size,
+    kind,
+    noteRelativePath,
+    expectedRevision,
+  });
+}
+
+async function appendWorkspaceExternalFileUpload(
+  uploadId: string,
+  offset: number,
+  bytes: Uint8Array,
+): Promise<number> {
+  const metadata = encodeURIComponent(JSON.stringify({ uploadId, offset }));
+  return invoke<number>(
+    "workspace_append_external_file_upload",
+    bytes,
+    { headers: { "x-oah-external-file-upload": metadata } },
+  );
+}
+
+async function cancelWorkspaceExternalFileUpload(uploadId: string): Promise<void> {
+  await invoke<boolean>("workspace_cancel_external_file_upload", { uploadId });
+}
+
+function throwIfExternalFileUploadAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("The dropped-file transfer was cancelled.", "AbortError");
+  }
+}
+
+async function streamWorkspaceExternalFile<T>(
+  path: string,
+  file: File,
+  kind: "image" | "attachment",
+  noteRelativePath: string,
+  expectedRevision: number,
+  finish: (uploadId: string, expectedRevision: number) => Promise<T>,
+  signal?: AbortSignal,
+  prepareFinish?: () => Promise<number>,
+): Promise<T> {
+  throwIfExternalFileUploadAborted(signal);
+  if (!Number.isSafeInteger(file.size) || file.size < 0) {
+    throw new Error("The dropped file has an invalid size.");
+  }
+  const upload = await beginWorkspaceExternalFileUpload(
+    path,
+    file,
+    kind,
+    noteRelativePath,
+    expectedRevision,
+  );
+  try {
+    if (
+      !Number.isSafeInteger(upload.chunkBytes)
+      || upload.chunkBytes < 1
+      || upload.chunkBytes > 4 * 1024 * 1024
+    ) {
+      throw new Error("Native dropped-file storage returned an invalid chunk size.");
+    }
+    let offset = 0;
+    while (offset < file.size) {
+      throwIfExternalFileUploadAborted(signal);
+      const end = Math.min(offset + upload.chunkBytes, file.size);
+      const bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+      throwIfExternalFileUploadAborted(signal);
+      if (bytes.byteLength !== end - offset) {
+        throw new Error("The dropped file changed while it was being transferred.");
+      }
+      const received = await appendWorkspaceExternalFileUpload(upload.id, offset, bytes);
+      if (received !== end) {
+        throw new Error("Native dropped-file storage reported an unexpected transfer offset.");
+      }
+      offset = end;
+    }
+    throwIfExternalFileUploadAborted(signal);
+    const finishRevision = prepareFinish
+      ? await prepareFinish()
+      : expectedRevision;
+    throwIfExternalFileUploadAborted(signal);
+
+    return await finish(upload.id, finishRevision);
+  } catch (error) {
+    await cancelWorkspaceExternalFileUpload(upload.id).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function embedWorkspaceExternalImage(
+  path: string,
+  file: File,
+  noteRelativePath: string,
+  settings: ImageEmbedSettings,
+  expectedRevision: number,
+  signal?: AbortSignal,
+  prepareFinish?: () => Promise<number>,
+): Promise<WorkspaceEmbedImageResult> {
+  return streamWorkspaceExternalFile(
+    path,
+    file,
+    "image",
+    noteRelativePath,
+    expectedRevision,
+    (uploadId, finishRevision) => invoke<WorkspaceEmbedImageResult>(
+      "workspace_finish_external_image_upload",
+      { uploadId, settings, expectedRevision: finishRevision },
+    ),
+    signal,
+    prepareFinish,
+  );
+}
+
+export async function embedWorkspaceExternalAttachment(
+  path: string,
+  file: File,
+  noteRelativePath: string,
+  settings: AttachmentEmbedSettings,
+  expectedRevision: number,
+  signal?: AbortSignal,
+  prepareFinish?: () => Promise<number>,
+): Promise<WorkspaceEmbedAttachmentResult> {
+  return streamWorkspaceExternalFile(
+    path,
+    file,
+    "attachment",
+    noteRelativePath,
+    expectedRevision,
+    (uploadId, finishRevision) => invoke<WorkspaceEmbedAttachmentResult>(
+      "workspace_finish_external_attachment_upload",
+      { uploadId, settings, expectedRevision: finishRevision },
+    ),
+    signal,
+    prepareFinish,
+  );
 }
 
 export async function relocateWorkspaceImage(

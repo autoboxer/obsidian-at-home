@@ -113,6 +113,13 @@ export function imageAltFromPath(relativePath: string): string {
   return stem || "Image";
 }
 
+export function isSupportedImageFileName(fileName: string): boolean {
+  const dot = fileName.lastIndexOf(".");
+  const extension = dot > 0 ? fileName.slice(dot + 1).toLowerCase() : "";
+
+  return ["avif", "bmp", "gif", "jpeg", "jpg", "png", "webp"].includes(extension);
+}
+
 export function imageMediaTypeForPath(path: string): string {
   const extension = path.split(/[?#]/, 1)[0]?.split(".").at(-1)?.toLocaleLowerCase();
   switch (extension) {

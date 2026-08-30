@@ -60,6 +60,8 @@ Supported image files appear in the left file tree. Drag an image from the tree 
 
 Use the file button or press `Ctrl/Cmd` + `Shift` + `A` to copy a non-image file into the vault. Attachments use ordinary Markdown links such as `[Report.pdf](Attachments/Report.pdf)`, so other Markdown readers retain a usable path. App-created links also include an `#oah-asset=...` fragment that lets Obsidian At Home recover a uniquely identifiable attachment after it is renamed or moved.
 
+You can also drag up to 100 files at a time from Finder, File Explorer, or a Linux file manager directly to their intended position in a note. Supported images use the image pipeline; other regular files use the attachment pipeline. Folders and unavailable items are skipped, and multiple files retain their drop order.
+
 Attachment cards work on their own and inside lists, tasks, blockquotes, and tables. Ordinary documents open in their operating-system default app only after an explicit click. Archives use **Save archive as…** instead of opening or extracting inside the vault; the destination must be outside the active vault. Executables and installers cannot be opened from the app.
 
 Settings provide the same root, beside-note, chosen-folder, and mirrored-folder storage options used by images. Attachments appear in the left file tree and can be dragged into notes or organized between ordinary folders while their references update. Mirrored attachment folders are app-managed. Removing the final reference does not delete the attachment.

@@ -130,6 +130,11 @@ const emit = defineEmits<{
     openingDisabled: boolean | undefined,
   ];
   editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
+  externalFileDrop: [
+    capture: AttachmentInsertionCapture,
+    files: File[],
+    rejectedCount: number,
+  ];
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
   pasteImage: [capture: ImageInsertionCapture, file?: File];
@@ -143,6 +148,7 @@ const emit = defineEmits<{
 const editorHost = ref<HTMLElement>();
 const editorView = shallowRef<EditorView>();
 const editorRenderReady = ref(false);
+const externalFileDragActive = ref(false);
 const suggestionIndex = ref(0);
 const suggestionQuery = ref<string | null>(null);
 const externalUpdate = Annotation.define<boolean>();
@@ -151,6 +157,8 @@ const lineNumbersCompartment = new Compartment();
 const INDENT = "  ";
 const VIEWPORT_ANCHOR_MARGIN = 8;
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
+const MAX_EXTERNAL_DROP_FILES = 100;
+let externalFileDragDepth = 0;
 let outputLineEnding = preferredLineEnding(props.modelValue);
 let frontmatterHistoryChanged = false;
 let frontmatterLineOffset = 0;
@@ -2198,41 +2206,88 @@ function handleSourceEditorPaste(event: ClipboardEvent): void {
   emit("pasteImage", capture, imageItem?.getAsFile() ?? undefined);
 }
 
+function isExternalFileDrag(event: DragEvent): boolean {
+  const types = Array.from(event.dataTransfer?.types ?? []);
+  return types.includes("Files")
+    && !types.includes(NOTE_IMAGE_DRAG_MIME)
+    && !types.includes(VAULT_IMAGE_DRAG_MIME)
+    && !types.includes(VAULT_ATTACHMENT_DRAG_MIME);
+}
+
+function clearExternalFileDrag(): void {
+  externalFileDragDepth = 0;
+  externalFileDragActive.value = false;
+}
+
+function handleSourceEditorDragEnter(event: DragEvent): void {
+  if (!editorRenderReady.value || !isExternalFileDrag(event)) {
+    return;
+  }
+  externalFileDragDepth += 1;
+  externalFileDragActive.value = true;
+}
+
+function handleSourceEditorDragLeave(): void {
+  if (!externalFileDragActive.value) {
+    return;
+  }
+  externalFileDragDepth = Math.max(0, externalFileDragDepth - 1);
+  if (!externalFileDragDepth) {
+    externalFileDragActive.value = false;
+  }
+}
+
 function handleSourceEditorDragOver(event: DragEvent): void {
   const types = Array.from(event.dataTransfer?.types ?? []);
   const movingWithinNote = types.includes(NOTE_IMAGE_DRAG_MIME);
+  const vaultImage = types.includes(VAULT_IMAGE_DRAG_MIME);
+  const vaultAttachment = types.includes(VAULT_ATTACHMENT_DRAG_MIME);
+  const externalFiles = isExternalFileDrag(event);
   if (
     !movingWithinNote
-    && !types.includes(VAULT_IMAGE_DRAG_MIME)
-    && !types.includes(VAULT_ATTACHMENT_DRAG_MIME)
+    && !vaultImage
+    && !vaultAttachment
+    && !externalFiles
   ) {
     return;
   }
   event.preventDefault();
   event.stopImmediatePropagation();
+  if (externalFiles && editorRenderReady.value) {
+    externalFileDragActive.value = true;
+  }
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = movingWithinNote ? "move" : "copy";
   }
 }
 
 function handleSourceEditorDrop(event: DragEvent): void {
-  const internalImage = parseInternalImageDrag(
-    event.dataTransfer?.getData(NOTE_IMAGE_DRAG_MIME),
-  );
-  const relativePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
-  const attachmentRelativePath = event.dataTransfer
+  clearExternalFileDrag();
+  const transfer = event.dataTransfer;
+  const internalImage = parseInternalImageDrag(transfer?.getData(NOTE_IMAGE_DRAG_MIME));
+  const relativePath = transfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
+  const attachmentRelativePath = transfer
     ?.getData(VAULT_ATTACHMENT_DRAG_MIME)
     .trim() ?? "";
+  const types = Array.from(transfer?.types ?? []);
+  const externalFiles = !internalImage
+    && !relativePath
+    && !attachmentRelativePath
+    && types.includes("Files");
   const view = editorView.value;
   if (
-    (!internalImage && !relativePath && !attachmentRelativePath)
-    || !view
-    || !editorRenderReady.value
+    !internalImage
+    && !relativePath
+    && !attachmentRelativePath
+    && !externalFiles
   ) {
     return;
   }
   event.preventDefault();
   event.stopImmediatePropagation();
+  if (!view || !editorRenderReady.value) {
+    return;
+  }
   const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
     ?? view.state.selection.main.head;
   if (internalImage) {
@@ -2245,6 +2300,15 @@ function handleSourceEditorDrop(event: DragEvent): void {
     scrollIntoView: true,
     userEvent: "select.pointer",
   });
+  if (externalFiles && transfer) {
+    const dropped = collectExternalDroppedFiles(transfer);
+    const capture = captureAttachmentInsertion(view);
+    if (capture) {
+      emit("externalFileDrop", capture, dropped.files, dropped.rejectedCount);
+    }
+
+    return;
+  }
   if (attachmentRelativePath) {
     const capture = captureAttachmentInsertion(view);
     if (capture) {
@@ -2257,6 +2321,58 @@ function handleSourceEditorDrop(event: DragEvent): void {
     }
     emit("vaultImageDrop", capture, relativePath);
   }
+}
+
+interface ExternalFileSystemEntry {
+  isDirectory: boolean;
+  isFile: boolean;
+}
+
+function isAmbiguousExternalDroppedFile(file: File): boolean {
+  // Without entry metadata, WebKit can represent an unavailable folder this way.
+  return file.size === 0 && !file.type.trim();
+}
+
+function collectExternalDroppedFiles(
+  transfer: DataTransfer,
+): { files: File[]; rejectedCount: number } {
+  const items = Array.from(transfer.items).filter((item) => item.kind === "file");
+  const files: File[] = [];
+  let rejectedCount = 0;
+  if (items.length) {
+    for (const item of items) {
+      const entry = (item as DataTransferItem & {
+        webkitGetAsEntry?: () => ExternalFileSystemEntry | null;
+      }).webkitGetAsEntry?.();
+      const file = entry?.isDirectory || (entry && !entry.isFile)
+        ? null
+        : item.getAsFile();
+      if (
+        !file
+        || (!entry && isAmbiguousExternalDroppedFile(file))
+        || files.length >= MAX_EXTERNAL_DROP_FILES
+      ) {
+        rejectedCount += 1;
+      } else {
+        files.push(file);
+      }
+    }
+
+    return { files, rejectedCount };
+  }
+
+  for (const file of Array.from(transfer.files)) {
+    if (
+      isAmbiguousExternalDroppedFile(file)
+      || files.length >= MAX_EXTERNAL_DROP_FILES
+    ) {
+      rejectedCount += 1;
+    } else {
+      files.push(file);
+    }
+  }
+
+  return { files, rejectedCount };
 }
 
 function parseInternalImageDrag(
@@ -2333,6 +2449,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
   <div
     class="source-editor"
     :class="{
+      'is-external-file-dragging': externalFileDragActive,
       'is-render-pending': !editorRenderReady,
       'is-searching': documentSearchOpen,
     }"
@@ -2341,7 +2458,10 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
     @compositionstart.capture="blockPendingEditorInteraction"
     @keydown.capture="handleSourceEditorKeydown"
     @paste.capture="handleSourceEditorPaste"
+    @dragenter.capture="handleSourceEditorDragEnter"
+    @dragleave.capture="handleSourceEditorDragLeave"
     @dragover.capture="handleSourceEditorDragOver"
+    @dragend.capture="clearExternalFileDrag"
     @drop.capture="handleSourceEditorDrop"
   >
     <div ref="editorHost" class="code-mirror-host" />

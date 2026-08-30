@@ -92,7 +92,7 @@ Images work on their own and inside lists, tasks, blockquotes, and tables. The a
 
 ### 6. Files
 
-In the desktop app, use the file button or press **⌘/Ctrl Shift A** to copy a non-image file into the vault. The app inserts an ordinary Markdown link such as \`[Report.pdf](Attachments/Report.pdf)\`, with an \`#oah-asset=...\` fragment that lets it recover a uniquely identifiable file after a rename or move. Choose root, beside-note, specific-folder, or mirrored-folder storage under **Settings → Current vault**.
+In the desktop app, use the file button or press **⌘/Ctrl Shift A** to copy a non-image file into the vault. You can also drag up to 100 files from Finder, File Explorer, or a Linux file manager to an exact position in the note; images use the image pipeline, other regular files use the attachment pipeline, and folders are skipped. The app inserts an ordinary Markdown link such as \`[Report.pdf](Attachments/Report.pdf)\`, with an \`#oah-asset=...\` fragment that lets it recover a uniquely identifiable file after a rename or move. Choose root, beside-note, specific-folder, or mirrored-folder storage under **Settings → Current vault**.
 
 File cards work on their own and inside lists, tasks, blockquotes, and tables. Click an ordinary document to open it in the system's default app. Archives use **Save archive as…** to a location outside the vault and are never extracted in place. Executables and installers cannot be opened from the app. Attachment files remain in the left file tree after their final reference is removed, where ordinary attachments can be dragged into notes, renamed, or moved between folders. Mirrored attachment folders are app-managed.
 
