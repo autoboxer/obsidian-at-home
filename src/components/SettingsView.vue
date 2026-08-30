@@ -160,7 +160,7 @@ function updateNoteFontSize(event: Event): void {
 function updateImageEmbedLocation(event: Event): void {
   const location = (event.currentTarget as HTMLSelectElement).value as ImageEmbedLocation;
   imageFolderError.value = "";
-  if (location === "specified-folder" || location === "specified-folder-mirrored") {
+  if (location === "specified-folder") {
     const validated = validateAssetFolderPath(imageFolderDraft.value || "Attachments");
     imageFolderDraft.value = validated.error ? "Attachments" : validated.value;
     vaultState.imageEmbedSettings = {
@@ -186,16 +186,14 @@ function saveImageFolderPath(): void {
   imageFolderError.value = "";
   vaultState.imageEmbedSettings = {
     folderPath: validated.value,
-    location: vaultState.imageEmbedSettings.location === "specified-folder-mirrored"
-      ? "specified-folder-mirrored"
-      : "specified-folder",
+    location: "specified-folder",
   };
 }
 
 function updateAttachmentEmbedLocation(event: Event): void {
   const location = (event.currentTarget as HTMLSelectElement).value as AttachmentEmbedLocation;
   attachmentFolderError.value = "";
-  if (location === "specified-folder" || location === "specified-folder-mirrored") {
+  if (location === "specified-folder") {
     const validated = validateAssetFolderPath(
       attachmentFolderDraft.value || "Attachments",
     );
@@ -223,9 +221,7 @@ function saveAttachmentFolderPath(): void {
   attachmentFolderError.value = "";
   vaultState.attachmentEmbedSettings = {
     folderPath: validated.value,
-    location: vaultState.attachmentEmbedSettings.location === "specified-folder-mirrored"
-      ? "specified-folder-mirrored"
-      : "specified-folder",
+    location: "specified-folder",
   };
 }
 
@@ -743,11 +739,9 @@ async function forgetVault(): Promise<void> {
             <option value="vault-root">Vault root</option>
             <option value="note-folder">Same folder as the note</option>
             <option value="specified-folder">A specific vault folder</option>
-            <option value="specified-folder-mirrored">A specific folder, mirroring note folders</option>
           </select>
           <label
-            v-if="vaultState.imageEmbedSettings.location === 'specified-folder'
-              || vaultState.imageEmbedSettings.location === 'specified-folder-mirrored'"
+            v-if="vaultState.imageEmbedSettings.location === 'specified-folder'"
             class="settings-image-folder-field"
           >
             <span>Vault-relative folder</span>
@@ -765,9 +759,6 @@ async function forgetVault(): Promise<void> {
             />
             <small v-if="imageFolderError" id="settings-image-folder-error" role="alert">
               {{ imageFolderError }}
-            </small>
-            <small v-else-if="vaultState.imageEmbedSettings.location === 'specified-folder-mirrored'">
-              Note folders are recreated below this folder, such as Images/Projects.
             </small>
           </label>
         </div>
@@ -794,11 +785,9 @@ async function forgetVault(): Promise<void> {
             <option value="vault-root">Vault root</option>
             <option value="note-folder">Same folder as the note</option>
             <option value="specified-folder">A specific vault folder</option>
-            <option value="specified-folder-mirrored">A specific folder, mirroring note folders</option>
           </select>
           <label
-            v-if="vaultState.attachmentEmbedSettings.location === 'specified-folder'
-              || vaultState.attachmentEmbedSettings.location === 'specified-folder-mirrored'"
+            v-if="vaultState.attachmentEmbedSettings.location === 'specified-folder'"
             class="settings-image-folder-field"
           >
             <span>Vault-relative folder</span>
@@ -822,12 +811,6 @@ async function forgetVault(): Promise<void> {
               role="alert"
             >
               {{ attachmentFolderError }}
-            </small>
-            <small
-              v-else-if="vaultState.attachmentEmbedSettings.location
-                === 'specified-folder-mirrored'"
-            >
-              Note folders are recreated below this folder, such as Files/Projects.
             </small>
           </label>
         </div>

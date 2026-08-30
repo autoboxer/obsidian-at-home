@@ -80,7 +80,7 @@ Inside a table, press Tab or Shift+Tab to move between cells. Enter inserts a ro
 
 ### 5. Images
 
-In the desktop app, use the image button in the note toolbar, press **⌘/Ctrl Shift I**, or paste an image from the clipboard. The image file is copied into the vault and inserted using standard Markdown such as \`![Diagram](Assets/Diagram.png)\`. Choose whether new images go at the vault root, beside the current note, in a specific vault folder, or in a specific folder that mirrors the note's folder path under **Settings → Current vault**.
+In the desktop app, use the image button in the note toolbar, press **⌘/Ctrl Shift I**, or paste an image from the clipboard. The image file is copied into the vault and inserted using standard Markdown such as \`![Diagram](Assets/Diagram.png)\`. Choose whether new images go at the vault root, beside the current note, or in a specific vault folder under **Settings → Current vault**.
 
 Add an Obsidian-compatible suffix to the alt text to control its displayed size:
 
@@ -88,13 +88,13 @@ Add an Obsidian-compatible suffix to the alt text to control its displayed size:
 - \`![Diagram|300x200](Assets/Diagram.png)\` — 300 pixels wide and 200 pixels high
 - \`![Diagram|x200](Assets/Diagram.png)\` — 200 pixels high
 
-Images work on their own and inside lists, tasks, blockquotes, and tables. The app escapes the sizing separator when it inserts an image into a table. App-created references also contain an \`#oah-image=...\` fragment; leave it in place so the app can recover a uniquely identifiable image if its file is renamed or moved. Image files remain in the left file tree after their final reference is removed; drag one from the tree into a note to use it again, or drag a rendered image within its note to move the reference. Images in ordinary storage folders can be renamed or dragged between folders. Mirrored image folders are app-managed, so their images cannot be manually renamed or moved.
+Images work on their own and inside lists, tasks, blockquotes, and tables. The app escapes the sizing separator when it inserts an image into a table. App-created references also contain an \`#oah-image=...\` fragment; leave it in place so the app can recover a uniquely identifiable image if its file is renamed or moved. Image files remain in the left file tree after their final reference is removed; drag one from the tree into a note to use it again, or drag a rendered image within its note to move the reference. Images can be renamed or dragged between folders.
 
 ### 6. Files
 
-In the desktop app, use the file button or press **⌘/Ctrl Shift A** to copy a non-image file into the vault. You can also drag up to 100 files from Finder, File Explorer, or a Linux file manager to an exact position in the note; images use the image pipeline, other regular files use the attachment pipeline, and folders are skipped. The app inserts an ordinary Markdown link such as \`[Report.pdf](Attachments/Report.pdf)\`, with an \`#oah-asset=...\` fragment that lets it recover a uniquely identifiable file after a rename or move. Choose root, beside-note, specific-folder, or mirrored-folder storage under **Settings → Current vault**.
+In the desktop app, use the file button or press **⌘/Ctrl Shift A** to copy a non-image file into the vault. You can also drag up to 100 files from Finder, File Explorer, or a Linux file manager to an exact position in the note; images use the image pipeline, other regular files use the attachment pipeline, and folders are skipped. The app inserts an ordinary Markdown link such as \`[Report.pdf](Attachments/Report.pdf)\`, with an \`#oah-asset=...\` fragment that lets it recover a uniquely identifiable file after a rename or move. Choose root, beside-note, or specific-folder storage under **Settings → Current vault**.
 
-File cards work on their own and inside lists, tasks, blockquotes, and tables. Click an ordinary document to open it in the system's default app. Archives use **Save archive as…** to a location outside the vault and are never extracted in place. Executables and installers cannot be opened from the app. Attachment files remain in the left file tree after their final reference is removed, where ordinary attachments can be dragged into notes, renamed, or moved between folders. Mirrored attachment folders are app-managed.
+File cards work on their own and inside lists, tasks, blockquotes, and tables. Click an ordinary document to open it in the system's default app. Archives use **Save archive as…** to a location outside the vault and are never extracted in place. Executables and installers cannot be opened from the app. Attachment files remain in the left file tree after their final reference is removed, where they can be dragged into notes, renamed, or moved between folders.
 
 ### 7. Quotes and code blocks
 

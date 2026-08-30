@@ -7,8 +7,6 @@ import {
   FOLDER_DRAG_MIME,
   folderChildren,
   folderPath,
-  isMirrorManagedAttachment,
-  isMirrorManagedImage,
   moveFolder,
   moveVaultAttachmentToFolder,
   moveVaultImageToFolder,
@@ -251,7 +249,7 @@ function isInvalidImageTarget(): boolean {
   }
   const currentParent = image.relativePath.split("/").slice(0, -1).join("/");
 
-  return isMirrorManagedImage(image.relativePath) || currentParent === currentFolderPath.value;
+  return currentParent === currentFolderPath.value;
 }
 
 function draggedAttachment(): VaultAttachmentFile | undefined {
@@ -272,8 +270,7 @@ function isInvalidAttachmentTarget(): boolean {
   }
   const currentParent = attachment.relativePath.split("/").slice(0, -1).join("/");
 
-  return isMirrorManagedAttachment(attachment.relativePath)
-    || currentParent === currentFolderPath.value;
+  return currentParent === currentFolderPath.value;
 }
 
 function isInvalidDropTarget(): boolean {
