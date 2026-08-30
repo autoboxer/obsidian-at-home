@@ -2692,6 +2692,10 @@ pre {
   background: color-mix(in srgb, var(--violet-wash) 45%, var(--surface-code));
 }
 
+.live-attachment-card.is-renaming {
+  cursor: default;
+}
+
 .attachment-card__icon {
   box-sizing: border-box;
   display: inline-grid;
@@ -2724,6 +2728,13 @@ pre {
   white-space: nowrap;
 }
 
+.attachment-card__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.34em;
+}
+
 .attachment-card__action {
   flex: none;
   padding: 0.34em 0.52em;
@@ -2745,6 +2756,34 @@ pre {
 .attachment-card__action:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.attachment-card__rename-form {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 0.34em;
+}
+
+.attachment-card__rename-input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 8em;
+  min-width: 4em;
+  padding: 0.34em 0.46em;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  outline: none;
+  background: var(--surface-control);
+  color: var(--text);
+  font: inherit;
+  user-select: text;
+}
+
+.attachment-card__rename-input:focus {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--violet) 22%, transparent);
 }
 
 .attachment-card__name {

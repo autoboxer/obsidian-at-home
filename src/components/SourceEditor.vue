@@ -85,6 +85,7 @@ import {
 import { sanitizeImageUrl } from "../lib/markdown";
 import type {
   MarkdownAttachmentMetadata,
+  MarkdownAttachmentRenameTarget,
   ParsedMarkdownAttachment,
 } from "../lib/markdownAttachments";
 import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
@@ -117,6 +118,10 @@ const props = defineProps<{
   noteId: string;
   noteRelativePath: string;
   noteTitles: string[];
+  renameAttachment: (
+    target: MarkdownAttachmentRenameTarget,
+    fileName: string,
+  ) => Promise<boolean>;
   showFrontmatter: boolean;
   vaultId: string;
   vaultPath: string | null;
@@ -953,6 +958,7 @@ onMounted(() => {
       documentId: `${props.vaultId}\u0000${props.noteId}`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
+      renameAttachment: props.renameAttachment,
       resolveAttachmentMetadata: resolveLiveMarkdownAttachmentMetadata,
       resolveImageSource: resolveLiveMarkdownImageSource,
       wikiLinkIsResolved: inlineWikiLinkIsResolved,
@@ -1336,15 +1342,26 @@ function resolveLiveMarkdownAttachmentMetadata(
     return undefined;
   }
   const portablePath = relativePath.toLocaleLowerCase();
-  const file = props.attachmentFiles.find((candidate) =>
-    (attachment.assetId && candidate.assetId === attachment.assetId)
-    || candidate.relativePath.toLocaleLowerCase() === portablePath
-  );
+  const matches = attachment.assetId
+    ? props.attachmentFiles.filter((candidate) =>
+      candidate.assetId === attachment.assetId
+    )
+    : props.attachmentFiles.filter((candidate) =>
+      candidate.relativePath.toLocaleLowerCase() === portablePath
+    );
+  const file = matches.length === 1 ? matches[0] : undefined;
+  const renameTarget = file && props.vaultPath && isTauri()
+    ? {
+        ...(file.assetId ? { assetId: file.assetId } : {}),
+        relativePath: file.relativePath,
+      }
+    : undefined;
 
   return {
     byteLength: tracked?.byteLength ?? file?.byteLength,
     mediaType: tracked?.mediaType ?? file?.mediaType,
     openingDisabled: tracked?.openingDisabled ?? file?.openingDisabled,
+    ...(renameTarget ? { renameTarget } : {}),
     relativePath: tracked?.relativePath ?? file?.relativePath ?? relativePath,
   };
 }

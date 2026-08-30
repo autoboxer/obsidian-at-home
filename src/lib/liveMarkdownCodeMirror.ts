@@ -59,6 +59,7 @@ import type { LiveMarkdownBlock, LiveMarkdownRange } from "./liveMarkdown";
 import type { MarkdownImageSourceResolver } from "./liveMarkdownCodeMirrorWidgets";
 import type { MarkdownAttachmentMetadataResolver } from "./liveMarkdownCodeMirrorWidgets";
 import type { MarkdownAttachmentAction } from "./liveMarkdownCodeMirrorWidgets";
+import type { MarkdownAttachmentRenameAction } from "./liveMarkdownCodeMirrorWidgets";
 import type { LiveMarkdownCodeFence } from "./liveMarkdownCode";
 import type {
   LiveMarkdownTable,
@@ -72,6 +73,7 @@ export interface LiveMarkdownOptions {
   readonly documentId: string;
   readonly openLink: (href: string) => void;
   readonly openWiki: (target: string, heading?: string) => void;
+  readonly renameAttachment?: MarkdownAttachmentRenameAction;
   readonly resolveAttachmentMetadata?: MarkdownAttachmentMetadataResolver;
   readonly resolveImageSource?: MarkdownImageSourceResolver;
   readonly wikiLinkIsResolved: (target: string) => boolean;
@@ -1652,6 +1654,7 @@ function addMarkdownAttachmentDecoration(
       range.to,
       resolutionVersion,
       options.activateAttachment,
+      options.renameAttachment,
     ),
   }], [], {
     atomicRanges: [range],

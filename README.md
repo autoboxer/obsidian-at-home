@@ -62,7 +62,7 @@ Use the file button or press `Ctrl/Cmd` + `Shift` + `A` to copy a non-image file
 
 You can also drag up to 100 files at a time from Finder, File Explorer, or a Linux file manager directly to their intended position in a note. Supported images use the image pipeline; other regular files use the attachment pipeline. Folders and unavailable items are skipped, and multiple files retain their drop order.
 
-Attachment cards work on their own and inside lists, tasks, blockquotes, and tables. Ordinary documents open in their operating-system default app only after an explicit click. Archives use **Save archive as…** instead of opening or extracting inside the vault; the destination must be outside the active vault. Executables and installers cannot be opened from the app.
+Attachment cards work on their own and inside lists, tasks, blockquotes, and tables. Use **Rename** on a rendered card or in the file tree to rename the stored file and update its references throughout the vault. Editing a Markdown link label changes only its displayed text. Ordinary documents open in their operating-system default app only after an explicit click. Archives use **Save archive as…** instead of opening or extracting inside the vault; the destination must be outside the active vault. Executables and installers cannot be opened from the app.
 
 Settings provide the same root, beside-note, and chosen-folder storage options used by images. Attachments appear in the left file tree and can be dragged into notes or organized between folders while their references update. Removing the final reference does not delete the attachment.
 
