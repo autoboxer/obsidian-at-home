@@ -983,6 +983,7 @@ function parseLiveMarkdownModel(
       model,
       block,
       value,
+      options,
       quoteDepth,
       renderedQuotePrefix?.depth === quoteDepth
         ? renderedQuotePrefix.source
@@ -1037,6 +1038,7 @@ function addBlockDecorations(
   model: LiveMarkdownModel,
   block: LiveMarkdownBlock,
   value: string,
+  options: LiveMarkdownOptions,
   quoteDepth = block.quote?.depth ?? 0,
   quotePrefix?: string,
 ): void {
@@ -1049,6 +1051,9 @@ function addBlockDecorations(
   }
   if (block.list) {
     classes.push(`list-depth-${block.list.depth % 3}`);
+    if (listContentIsAttachmentCard(block, value, options)) {
+      classes.push("is-attachment-card-only");
+    }
   }
   if (quoteDepth) {
     classes.push(`quote-depth-${Math.min(quoteDepth, 3)}`);
@@ -1808,6 +1813,27 @@ function addConstruct(
     to,
     syntax: nonemptySyntax,
   });
+}
+
+function listContentIsAttachmentCard(
+  block: LiveMarkdownBlock,
+  value: string,
+  options: LiveMarkdownOptions,
+): boolean {
+  const content = value.slice(block.content.from, block.content.to);
+  const leadingWhitespace = content.match(/^[\t ]*/)?.[0].length ?? 0;
+  const trailingWhitespace = content.match(/[\t ]*$/)?.[0].length ?? 0;
+  const from = block.content.from + leadingWhitespace;
+  const to = block.content.to - trailingWhitespace;
+  if (from >= to) {
+    return false;
+  }
+
+  const attachment = parseMarkdownAttachmentAt(value, from, {
+    acceptExtensionless: options.acceptExtensionlessAttachment,
+  });
+
+  return attachment?.end === to - 1;
 }
 
 function addLineDecoration(
