@@ -2901,6 +2901,13 @@ pre {
   text-align: right;
 }
 
+.source-editor
+  .cm-line.is-attachment-card-only:has(.live-attachment-card)
+  :is(.live-list-marker, .live-task-checkbox) {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .live-horizontal-rule {
   display: block;
   width: 100%;
