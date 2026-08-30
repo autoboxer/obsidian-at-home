@@ -2129,47 +2129,39 @@ export function requestInsertVaultAttachment(attachment: VaultAttachmentFile): v
 }
 
 export async function renameVaultAttachment(
-  attachment: VaultAttachmentFile,
+  attachment: Pick<VaultAttachmentFile, "assetId" | "relativePath">,
   fileName: string,
 ): Promise<boolean> {
-  const parent = attachment.relativePath.split("/").slice(0, -1).join("/");
-
-  return relocateVaultAttachment(attachment, parent, fileName);
+  return relocateVaultAttachment(attachment, {
+    fileName: fileName.trim(),
+    kind: "rename",
+  });
 }
 
 export async function moveVaultAttachmentToFolder(
-  attachment: VaultAttachmentFile,
+  attachment: Pick<VaultAttachmentFile, "assetId" | "relativePath">,
   folderId: string | null,
 ): Promise<boolean> {
-  const fileName = attachment.relativePath.split("/").at(-1) || "Attachment";
-
-  return relocateVaultAttachment(attachment, folderPath(folderId), fileName);
+  return relocateVaultAttachment(attachment, {
+    kind: "move",
+    targetFolderId: folderId,
+  });
 }
 
-async function relocateVaultAttachment(
-  attachment: VaultAttachmentFile,
-  targetFolderPath: string,
-  requestedFileName: string,
-): Promise<boolean> {
-  const fileName = requestedFileName.trim();
-  if (!isSafeAttachmentFileName(fileName)) {
-    notify("Enter a safe non-Markdown, non-image file name", "warning");
+type VaultAttachmentRelocation = {
+  fileName: string;
+  kind: "rename";
+} | {
+  kind: "move";
+  targetFolderId: string | null;
+};
 
-    return false;
-  }
-  const targetRelativePath = targetFolderPath
-    ? `${targetFolderPath}/${fileName}`
-    : fileName;
-  if (targetRelativePath === attachment.relativePath) {
-    return false;
-  }
-  const targetKey = targetRelativePath.toLocaleLowerCase();
-  if (vaultState.attachmentFiles.some((candidate) =>
-    candidate.relativePath.toLocaleLowerCase() === targetKey
-    && candidate.relativePath.toLocaleLowerCase()
-      !== attachment.relativePath.toLocaleLowerCase()
-  )) {
-    notify("A file with that name already exists there", "warning");
+async function relocateVaultAttachment(
+  attachment: Pick<VaultAttachmentFile, "assetId" | "relativePath">,
+  relocation: VaultAttachmentRelocation,
+): Promise<boolean> {
+  if (relocation.kind === "rename" && !isSafeAttachmentFileName(relocation.fileName)) {
+    notify("Enter a safe non-Markdown, non-image file name", "warning");
 
     return false;
   }
@@ -2183,13 +2175,41 @@ async function relocateVaultAttachment(
     if (!(await flushVault())) {
       return false;
     }
-    const currentAttachment = vaultState.attachmentFiles.find((candidate) =>
-      (attachment.assetId && candidate.assetId === attachment.assetId)
-      || candidate.relativePath.toLocaleLowerCase()
-        === attachment.relativePath.toLocaleLowerCase()
-    );
+    const currentAttachment = resolveCurrentVaultAttachment(attachment);
     if (!currentAttachment) {
-      notify("That attachment can no longer be moved", "warning");
+      notify("That attachment could not be uniquely found in the vault", "warning");
+
+      return false;
+    }
+    const currentFileName = currentAttachment.relativePath.split("/").at(-1)
+      || "Attachment";
+    const fileName = relocation.kind === "rename"
+      ? relocation.fileName
+      : currentFileName;
+    const targetFolder = relocation.kind === "move" && relocation.targetFolderId
+      ? vaultState.folders.find((folder) => folder.id === relocation.targetFolderId)
+      : null;
+    if (relocation.kind === "move" && relocation.targetFolderId && !targetFolder) {
+      notify("That destination folder could not be found", "warning");
+
+      return false;
+    }
+    const targetFolderPath = relocation.kind === "rename"
+      ? currentAttachment.relativePath.split("/").slice(0, -1).join("/")
+      : folderPath(targetFolder?.id ?? null);
+    const targetRelativePath = targetFolderPath
+      ? `${targetFolderPath}/${fileName}`
+      : fileName;
+    if (targetRelativePath === currentAttachment.relativePath) {
+      return false;
+    }
+    const targetKey = targetRelativePath.toLocaleLowerCase();
+    if (vaultState.attachmentFiles.some((candidate) =>
+      candidate.relativePath.toLocaleLowerCase() === targetKey
+      && candidate.relativePath.toLocaleLowerCase()
+        !== currentAttachment.relativePath.toLocaleLowerCase()
+    )) {
+      notify("A file with that name already exists there", "warning");
 
       return false;
     }
@@ -2225,15 +2245,17 @@ async function relocateVaultAttachment(
       applyRelocatedAttachmentResult(result, noteUpdates);
       uiState.attachmentRefreshToken += 1;
       notify(
-        targetFolderPath
-          ? `Moved attachment to ${targetFolderPath}`
-          : "Moved attachment to Vault root",
+        relocation.kind === "rename"
+          ? `Renamed attachment to ${fileName}`
+          : targetFolderPath
+            ? `Moved attachment to ${targetFolderPath}`
+            : "Moved attachment to Vault root",
         "success",
       );
 
       return true;
     } catch (error) {
-      const message = errorMessage(error, "The attachment could not be moved.");
+      const message = errorMessage(error, "The attachment could not be renamed or moved.");
       vaultSession.error = message;
       vaultSession.conflict = isRevisionConflict(message);
       notify(message, "warning");
@@ -2241,6 +2263,21 @@ async function relocateVaultAttachment(
       return false;
     }
   });
+}
+
+function resolveCurrentVaultAttachment(
+  attachment: Pick<VaultAttachmentFile, "assetId" | "relativePath">,
+): VaultAttachmentFile | undefined {
+  const matches = attachment.assetId
+    ? vaultState.attachmentFiles.filter((candidate) =>
+      candidate.assetId === attachment.assetId
+    )
+    : vaultState.attachmentFiles.filter((candidate) =>
+      candidate.relativePath.toLocaleLowerCase()
+        === attachment.relativePath.toLocaleLowerCase()
+    );
+
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function applyRelocatedAttachmentResult(
@@ -2295,10 +2332,9 @@ function rewriteAttachmentReferences(
   const sourceName = sourceRelativePath.split("/").at(-1) || "Attachment";
   const targetName = targetRelativePath.split("/").at(-1) || "Attachment";
   for (const attachment of parseVaultAttachmentReferences(content, noteRelativePath)) {
-    const trackedPath = trackedAttachmentPath(attachment.assetId);
     const resolvedPath = resolveMarkdownImagePath(noteRelativePath, attachment.destination);
     const matchesAsset = Boolean(previousAssetId && attachment.assetId === previousAssetId);
-    const matchesPath = !trackedPath
+    const matchesPath = !attachment.assetId
       && resolvedPath?.toLocaleLowerCase() === sourceRelativePath.toLocaleLowerCase();
     if (matchesAsset || matchesPath) {
       replacements.push({
@@ -2316,17 +2352,6 @@ function rewriteAttachmentReferences(
   }
 
   return applyMarkdownReplacements(content, replacements);
-}
-
-function trackedAttachmentPath(assetId: string | undefined): string | undefined {
-  if (!assetId) {
-    return undefined;
-  }
-
-  return vaultState.embeddedAttachments.find((attachment) => attachment.id === assetId)
-    ?.relativePath
-    ?? vaultState.attachmentFiles.find((attachment) => attachment.assetId === assetId)
-      ?.relativePath;
 }
 
 function vaultAttachmentPathKeys(): ReadonlySet<string> {
