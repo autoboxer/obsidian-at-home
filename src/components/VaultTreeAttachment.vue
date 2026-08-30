@@ -9,6 +9,7 @@ import {
   activateVaultAttachment,
   renameVaultAttachment,
   requestInsertVaultAttachment,
+  showVaultItemInFolder,
   treeDragState,
 } from "../stores/vault";
 import type { VaultAttachmentFile } from "../types";
@@ -84,6 +85,15 @@ function activateAttachment(): void {
   void activateVaultAttachment(props.attachment);
 }
 
+function showInFolder(): void {
+  closeMenu();
+  void showVaultItemInFolder({
+    assetId: props.attachment.assetId,
+    kind: "attachment",
+    relativePath: props.attachment.relativePath,
+  });
+}
+
 function beginRename(): void {
   closeMenu();
   editValue.value = fileName.value;
@@ -127,7 +137,7 @@ function toggleMenu(): void {
 
 function openContextMenu(event: MouseEvent): void {
   const menuWidth = 190;
-  const menuHeight = 128;
+  const menuHeight = 164;
   menuPosition.value = {
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
@@ -213,6 +223,10 @@ function handleMenuFocusOut(event: FocusEvent): void {
             <button type="button" role="menuitem" @click="beginRename">
               <AppIcon name="edit" :size="14" />
               Rename
+            </button>
+            <button type="button" role="menuitem" @click="showInFolder">
+              <AppIcon name="folder-open" :size="14" />
+              Show in folder
             </button>
           </div>
         </Transition>

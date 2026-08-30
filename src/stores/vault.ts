@@ -48,6 +48,7 @@ import {
   getWorkspaceRevision,
   importWorkspaceAssets,
   isTauri,
+  locateWorkspaceVaultItem,
   openWorkspaceAttachment,
   openWorkspace,
   pickFolder,
@@ -58,6 +59,8 @@ import {
   saveWorkspace,
   saveWorkspaceAttachmentCopy,
   saveWorkspaceWithImageImport,
+  showWorkspaceVaultItemInFolder,
+  type WorkspaceVaultItemKind,
 } from "../services/native";
 import type {
   CssSnippet,
@@ -2444,6 +2447,84 @@ export async function activateVaultAttachment(
     );
   } catch (error) {
     notify(errorMessage(error, "The attachment could not be opened."), "warning");
+  }
+}
+
+export interface VaultItemLocator {
+  assetId?: string;
+  itemId?: string;
+  kind: WorkspaceVaultItemKind;
+  relativePath: string;
+}
+
+export async function locateVaultItem(locator: VaultItemLocator): Promise<string | undefined> {
+  if (vaultSession.backend !== "native" || !vaultSession.path) {
+    return locator.relativePath;
+  }
+  const sourcePath = vaultSession.path;
+  let relativePath = locator.relativePath;
+  if (locator.kind === "note" || locator.kind === "folder") {
+    if (!(await flushVault())) {
+      return undefined;
+    }
+    if (vaultSession.backend !== "native" || vaultSession.path !== sourcePath) {
+      return undefined;
+    }
+    if (locator.kind === "note") {
+      const note = locator.itemId
+        ? vaultState.notes.find((candidate) => candidate.id === locator.itemId)
+        : vaultState.notes.find((candidate) => candidate.relativePath === locator.relativePath);
+      relativePath = note?.relativePath ?? "";
+    } else {
+      const folder = locator.itemId
+        ? vaultState.folders.find((candidate) => candidate.id === locator.itemId)
+        : vaultState.folders.find((candidate) => folderPath(candidate.id) === locator.relativePath);
+      relativePath = folder ? folderPath(folder.id) : "";
+    }
+    if (!relativePath) {
+      notify("The vault item is no longer available.", "warning");
+
+      return undefined;
+    }
+  }
+  try {
+    return await locateWorkspaceVaultItem(
+      sourcePath,
+      locator.kind,
+      relativePath,
+      locator.assetId,
+    );
+  } catch (error) {
+    notify(errorMessage(error, "The vault item could not be located."), "warning");
+
+    return undefined;
+  }
+}
+
+export async function showVaultItemInFolder(locator: VaultItemLocator): Promise<void> {
+  if (vaultSession.backend !== "native" || !vaultSession.path) {
+    notify("Showing vault files in a system folder is available in the desktop app", "warning");
+
+    return;
+  }
+  const sourcePath = vaultSession.path;
+  const relativePath = await locateVaultItem(locator);
+  if (
+    !relativePath
+    || vaultSession.backend !== "native"
+    || vaultSession.path !== sourcePath
+  ) {
+    return;
+  }
+  try {
+    await showWorkspaceVaultItemInFolder(
+      sourcePath,
+      locator.kind,
+      relativePath,
+      locator.assetId,
+    );
+  } catch (error) {
+    notify(errorMessage(error, "The vault item could not be shown in its folder."), "warning");
   }
 }
 

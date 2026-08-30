@@ -517,6 +517,36 @@ export async function openWorkspaceAttachment(
   });
 }
 
+export type WorkspaceVaultItemKind = "note" | "folder" | "image" | "attachment";
+
+export async function locateWorkspaceVaultItem(
+  path: string,
+  kind: WorkspaceVaultItemKind,
+  relativePath: string,
+  assetId?: string,
+): Promise<string> {
+  return invoke<string>("workspace_locate_vault_item", {
+    path,
+    kind,
+    relativePath,
+    assetId,
+  });
+}
+
+export async function showWorkspaceVaultItemInFolder(
+  path: string,
+  kind: WorkspaceVaultItemKind,
+  relativePath: string,
+  assetId?: string,
+): Promise<void> {
+  await invoke<void>("workspace_show_vault_item_in_folder", {
+    path,
+    kind,
+    relativePath,
+    assetId,
+  });
+}
+
 export async function saveWorkspaceAttachmentCopy(
   path: string,
   attachmentRelativePath: string,
