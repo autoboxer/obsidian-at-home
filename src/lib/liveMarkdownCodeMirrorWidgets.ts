@@ -5,6 +5,7 @@ import {
   markdownAttachmentIsExecutable,
   markdownAttachmentPresentation,
   type MarkdownAttachmentMetadata,
+  type MarkdownAttachmentRenameTarget,
   type ParsedMarkdownAttachment,
 } from "./markdownAttachments";
 import type { Rect } from "@codemirror/view";
@@ -268,6 +269,11 @@ export type MarkdownAttachmentAction = (
   metadata: MarkdownAttachmentMetadata | null | undefined,
 ) => void;
 
+export type MarkdownAttachmentRenameAction = (
+  target: MarkdownAttachmentRenameTarget,
+  fileName: string,
+) => Promise<boolean>;
+
 export class MarkdownAttachmentWidget extends WidgetType {
   constructor(
     private readonly attachment: ParsedMarkdownAttachment,
@@ -276,6 +282,7 @@ export class MarkdownAttachmentWidget extends WidgetType {
     private readonly to: number,
     private readonly resolutionVersion: number,
     private readonly activateAttachment?: MarkdownAttachmentAction,
+    private readonly renameAttachment?: MarkdownAttachmentRenameAction,
   ) {
     super();
   }
@@ -285,11 +292,15 @@ export class MarkdownAttachmentWidget extends WidgetType {
       && this.metadata?.byteLength === other.metadata?.byteLength
       && this.metadata?.mediaType === other.metadata?.mediaType
       && this.metadata?.openingDisabled === other.metadata?.openingDisabled
+      && this.metadata?.renameTarget?.assetId === other.metadata?.renameTarget?.assetId
+      && this.metadata?.renameTarget?.relativePath
+        === other.metadata?.renameTarget?.relativePath
       && this.metadata?.relativePath === other.metadata?.relativePath
       && this.from === other.from
       && this.to === other.to
       && this.resolutionVersion === other.resolutionVersion
-      && this.activateAttachment === other.activateAttachment;
+      && this.activateAttachment === other.activateAttachment
+      && this.renameAttachment === other.renameAttachment;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -303,7 +314,7 @@ export class MarkdownAttachmentWidget extends WidgetType {
     const copy = document.createElement("span");
     const name = document.createElement("span");
     const details = document.createElement("span");
-    const action = document.createElement("button");
+    const actions = document.createElement("span");
     const archive = markdownAttachmentIsArchive(
       this.metadata?.relativePath ?? this.attachment.destination,
       this.metadata?.mediaType,
@@ -331,27 +342,163 @@ export class MarkdownAttachmentWidget extends WidgetType {
     details.className = "attachment-card__details";
     details.textContent = `${presentation.typeLabel} · ${presentation.sizeLabel}`;
     copy.append(name, details);
-    action.className = "attachment-card__action";
-    action.type = "button";
-    action.disabled = executable;
-    action.textContent = executable
-      ? "Unavailable"
-      : archive ? "Save archive as…" : "Open";
-    action.title = executable
-      ? "Opening executable or installer attachments is not supported"
-      : archive ? "Save the archive outside the vault" : "Open with the default application";
-    action.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    action.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!executable) {
+    actions.className = "attachment-card__actions";
+    if (!executable) {
+      const action = document.createElement("button");
+      action.className = "attachment-card__action";
+      action.type = "button";
+      action.textContent = archive ? "Save archive as…" : "Open";
+      action.title = archive
+        ? "Save the archive outside the vault"
+        : "Open with the default application";
+      action.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      action.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
         this.activateAttachment?.(this.attachment, this.metadata);
-      }
-    });
-    card.append(icon, copy, action);
+      });
+      actions.append(action);
+    }
+    const renameTarget = this.metadata?.renameTarget;
+    if (renameTarget && this.renameAttachment) {
+      const rename = document.createElement("button");
+      const fileName = renameTarget.relativePath.split("/").at(-1)
+        || presentation.name;
+      rename.className = "attachment-card__action attachment-card__action--rename";
+      rename.type = "button";
+      rename.textContent = "Rename";
+      rename.title = `Rename ${fileName}`;
+      rename.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      rename.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const form = document.createElement("span");
+        const input = document.createElement("input");
+        const save = document.createElement("button");
+        const cancel = document.createElement("button");
+        let submitting = false;
+        const restoreCard = () => {
+          card.classList.remove("is-renaming");
+          card.removeAttribute("aria-busy");
+          card.replaceChildren(icon, copy, actions);
+          rename.focus();
+        };
+        const resetFailedSubmission = () => {
+          if (!card.isConnected) {
+            return;
+          }
+          submitting = false;
+          card.removeAttribute("aria-busy");
+          input.readOnly = false;
+          save.disabled = false;
+          cancel.disabled = false;
+          save.textContent = "Save";
+          input.focus();
+        };
+        const submitRename = () => {
+          if (submitting) {
+            return;
+          }
+          const requestedFileName = input.value;
+          const normalizedNoOp = fileName === fileName.trim()
+            && requestedFileName.trim() === fileName;
+          if (requestedFileName === fileName || normalizedNoOp) {
+            restoreCard();
+
+            return;
+          }
+          submitting = true;
+          card.setAttribute("aria-busy", "true");
+          input.readOnly = true;
+          save.disabled = true;
+          cancel.disabled = true;
+          save.textContent = "Renaming…";
+          void Promise.resolve()
+            .then(() => this.renameAttachment!(renameTarget, requestedFileName))
+            .then((renamed) => {
+              if (renamed) {
+                if (card.isConnected) {
+                  restoreCard();
+                }
+              } else {
+                resetFailedSubmission();
+              }
+            }, resetFailedSubmission);
+        };
+
+        form.className = "attachment-card__rename-form";
+        form.setAttribute("role", "form");
+        form.setAttribute("aria-label", `Rename ${fileName}`);
+        input.className = "attachment-card__rename-input";
+        input.type = "text";
+        input.value = fileName;
+        input.maxLength = 180;
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        input.setAttribute("aria-label", "Attachment file name");
+        save.className = "attachment-card__action";
+        save.type = "button";
+        save.textContent = "Save";
+        save.addEventListener("click", (saveEvent) => {
+          saveEvent.preventDefault();
+          saveEvent.stopPropagation();
+          submitRename();
+        });
+        cancel.className = "attachment-card__action";
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", (cancelEvent) => {
+          cancelEvent.preventDefault();
+          cancelEvent.stopPropagation();
+          if (!submitting) {
+            restoreCard();
+          }
+        });
+        form.addEventListener("mousedown", (formEvent) => {
+          formEvent.stopPropagation();
+        });
+        form.addEventListener("click", (formEvent) => {
+          formEvent.stopPropagation();
+        });
+        form.addEventListener("keydown", (keyEvent) => {
+          if (keyEvent.key === "Escape") {
+            keyEvent.preventDefault();
+            keyEvent.stopPropagation();
+            if (!submitting) {
+              restoreCard();
+            }
+          } else if (
+            keyEvent.key === "Enter"
+            && keyEvent.target === input
+            && !keyEvent.isComposing
+          ) {
+            keyEvent.preventDefault();
+            keyEvent.stopPropagation();
+            submitRename();
+          }
+        });
+        form.append(input, save, cancel);
+        card.classList.add("is-renaming");
+        card.replaceChildren(icon, form);
+        input.focus();
+        const extensionStart = fileName.lastIndexOf(".");
+        input.setSelectionRange(
+          0,
+          extensionStart > 0 ? extensionStart : fileName.length,
+        );
+      });
+      actions.append(rename);
+    }
+    card.append(icon, copy);
+    if (actions.childElementCount) {
+      card.append(actions);
+    }
     card.addEventListener("mousedown", (event) => {
       if (event.button === 0) {
         event.stopPropagation();

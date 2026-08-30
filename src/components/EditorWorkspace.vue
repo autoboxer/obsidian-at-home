@@ -61,6 +61,7 @@ import {
   navigateForward,
   moveNoteToFolder,
   notify,
+  renameVaultAttachment,
   selectNote,
   togglePinned,
   uiState,
@@ -1333,6 +1334,7 @@ onBeforeUnmount(() => externalFileDropAbort?.abort());
             :note-id="activeNote.id"
             :note-relative-path="activeNote.relativePath"
             :note-titles="noteTitles"
+            :rename-attachment="renameVaultAttachment"
             :show-frontmatter="uiState.frontmatterVisible"
             :vault-id="positionVaultId"
             :vault-path="vaultSession.path"

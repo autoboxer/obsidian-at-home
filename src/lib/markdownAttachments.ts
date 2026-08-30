@@ -75,7 +75,13 @@ export interface MarkdownAttachmentMetadata {
   byteLength?: number;
   mediaType?: string;
   openingDisabled?: boolean;
+  renameTarget?: MarkdownAttachmentRenameTarget;
   relativePath?: string;
+}
+
+export interface MarkdownAttachmentRenameTarget {
+  assetId?: string;
+  relativePath: string;
 }
 
 export interface MarkdownAttachmentPresentation {
