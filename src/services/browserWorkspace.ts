@@ -45,7 +45,15 @@ export function readBrowserWorkspace(
         recentlyDeletedNotes: parseRecentlyDeletedNotes(parsed.recentlyDeletedNotes),
         migrationFingerprint: storageFingerprint(JSON.stringify(vault)),
         needsRewrite: parsedVault.selectedFolderId !== vault.selectedFolderId
-          || !stringArraysMatch(parsedVault.recentNoteIds, vault.recentNoteIds),
+          || !stringArraysMatch(parsedVault.recentNoteIds, vault.recentNoteIds)
+          || !embedSettingsMatch(
+            parsedVault.imageEmbedSettings,
+            vault.imageEmbedSettings,
+          )
+          || !embedSettingsMatch(
+            parsedVault.attachmentEmbedSettings,
+            vault.attachmentEmbedSettings,
+          ),
       };
     }
 
@@ -211,6 +219,15 @@ function stringArraysMatch(value: unknown, expected: string[]): boolean {
   return Array.isArray(value)
     && value.length === expected.length
     && value.every((item, index) => item === expected[index]);
+}
+
+function embedSettingsMatch(
+  value: unknown,
+  expected: VaultData["imageEmbedSettings"],
+): boolean {
+  return isRecord(value)
+    && value.location === expected.location
+    && value.folderPath === expected.folderPath;
 }
 
 function storageFingerprint(value: string): string {

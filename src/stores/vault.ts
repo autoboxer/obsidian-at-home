@@ -3955,10 +3955,15 @@ function normalizeVault(input: Partial<VaultData>): VaultData {
 function normalizeImageEmbedSettings(
   value: VaultData["imageEmbedSettings"] | undefined,
 ): VaultData["imageEmbedSettings"] {
+  if (value?.location === "specified-folder-mirrored") {
+    return {
+      location: "specified-folder",
+      folderPath: typeof value.folderPath === "string" ? value.folderPath : "",
+    };
+  }
   if (
     value?.location === "note-folder"
     || value?.location === "specified-folder"
-    || value?.location === "specified-folder-mirrored"
   ) {
     return {
       location: value.location,

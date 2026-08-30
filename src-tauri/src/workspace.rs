@@ -1856,7 +1856,9 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
             opening_disabled: attachment.opening_disabled,
         })
         .collect();
-    let image_embed_settings = match normalize_image_embed_settings(&state.image_embed_settings) {
+    let image_embed_settings = match migrate_legacy_image_embed_settings(
+        &state.image_embed_settings,
+    ) {
         Ok(settings) => settings,
         Err(error) => {
             warnings.push(format!("Reset invalid image embed settings: {error}"));
@@ -1864,7 +1866,7 @@ fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, St
         }
     };
     let attachment_embed_settings =
-        match normalize_attachment_embed_settings(&state.attachment_embed_settings) {
+        match migrate_legacy_attachment_embed_settings(&state.attachment_embed_settings) {
             Ok(settings) => settings,
             Err(error) => {
                 warnings.push(format!("Reset invalid attachment embed settings: {error}"));
@@ -2306,8 +2308,8 @@ fn save_workspace_files_with_recovery(
         recent_note_ids,
         recently_deleted_notes,
         assets: old_state.assets.clone(),
-        image_embed_settings: normalize_image_embed_settings(&vault.image_embed_settings)?,
-        attachment_embed_settings: normalize_attachment_embed_settings(
+        image_embed_settings: migrate_legacy_image_embed_settings(&vault.image_embed_settings)?,
+        attachment_embed_settings: migrate_legacy_attachment_embed_settings(
             &vault.attachment_embed_settings,
         )?,
         selected_folder_id: vault.selected_folder_id.clone(),
@@ -3200,6 +3202,16 @@ fn normalize_image_embed_settings(
     }
 }
 
+fn migrate_legacy_image_embed_settings(
+    settings: &ImageEmbedSettings,
+) -> Result<ImageEmbedSettings, String> {
+    let mut normalized = normalize_image_embed_settings(settings)?;
+    if normalized.location == ImageEmbedLocation::SpecifiedFolderMirrored {
+        normalized.location = ImageEmbedLocation::SpecifiedFolder;
+    }
+    Ok(normalized)
+}
+
 fn image_destination_folder(
     note_relative_path: &str,
     settings: &ImageEmbedSettings,
@@ -3261,6 +3273,16 @@ fn normalize_attachment_embed_settings(
             })
         }
     }
+}
+
+fn migrate_legacy_attachment_embed_settings(
+    settings: &AttachmentEmbedSettings,
+) -> Result<AttachmentEmbedSettings, String> {
+    let mut normalized = normalize_attachment_embed_settings(settings)?;
+    if normalized.location == ImageEmbedLocation::SpecifiedFolderMirrored {
+        normalized.location = ImageEmbedLocation::SpecifiedFolder;
+    }
+    Ok(normalized)
 }
 
 fn attachment_destination_folder(
@@ -12505,6 +12527,87 @@ mod tests {
     }
 
     #[test]
+    fn legacy_mirrored_settings_migrate_idempotently_without_moving_assets() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nlegacy-mirrored-image";
+        let workspace = TestWorkspace::new("legacy-mirrored-settings-migration");
+        fs::create_dir_all(workspace.root.join("Images/Projects"))
+            .expect("legacy image folder should be created");
+        fs::create_dir_all(workspace.root.join("Files/Projects"))
+            .expect("legacy attachment folder should be created");
+        fs::create_dir_all(workspace.root.join("Projects"))
+            .expect("note folder should be created");
+        fs::write(workspace.root.join("Images/Projects/Photo.png"), PNG)
+            .expect("legacy image should be written");
+        fs::write(
+            workspace.root.join("Files/Projects/Report.pdf"),
+            b"legacy attachment",
+        )
+        .expect("legacy attachment should be written");
+        fs::write(workspace.root.join("Projects/Note.md"), "# Note")
+            .expect("note should be written");
+
+        let mut state = WorkspaceState::default();
+        state.image_embed_settings = ImageEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Images".to_owned(),
+        };
+        state.attachment_embed_settings = AttachmentEmbedSettings {
+            location: ImageEmbedLocation::SpecifiedFolderMirrored,
+            folder_path: "Files".to_owned(),
+        };
+        write_workspace_state(&workspace.root, &state)
+            .expect("legacy workspace state should be written");
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Legacy settings"))
+            .expect("legacy workspace should load");
+        assert_eq!(
+            loaded.vault.image_embed_settings,
+            ImageEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Images".to_owned(),
+            },
+        );
+        assert_eq!(
+            loaded.vault.attachment_embed_settings,
+            AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: "Files".to_owned(),
+            },
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Images/Projects/Photo.png")).unwrap(),
+            PNG,
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Files/Projects/Report.pdf")).unwrap(),
+            b"legacy attachment",
+        );
+        assert!(!workspace.root.join("Images/Photo.png").exists());
+        assert!(!workspace.root.join("Files/Report.pdf").exists());
+
+        let (persisted, _) = read_workspace_state(
+            &workspace.root,
+            &mut WarningCollector::default(),
+        );
+        let persisted = persisted.expect("migrated workspace state should remain readable");
+        assert_eq!(persisted.image_embed_settings, loaded.vault.image_embed_settings);
+        assert_eq!(
+            persisted.attachment_embed_settings,
+            loaded.vault.attachment_embed_settings,
+        );
+
+        let reopened = load_workspace(&workspace.root, &empty_vault("Legacy settings"))
+            .expect("migrated workspace should reopen");
+        assert_eq!(reopened.vault.image_embed_settings, loaded.vault.image_embed_settings);
+        assert_eq!(
+            reopened.vault.attachment_embed_settings,
+            loaded.vault.attachment_embed_settings,
+        );
+        assert!(workspace.root.join("Images/Projects/Photo.png").exists());
+        assert!(workspace.root.join("Files/Projects/Report.pdf").exists());
+    }
+
+    #[test]
     fn mirrored_image_storage_follows_each_notes_folder() {
         const FIRST: &[u8] = b"\x89PNG\r\n\x1a\nfirst-mirrored-image";
         const SECOND: &[u8] = b"\x89PNG\r\n\x1a\nsecond-mirrored-image";
@@ -13129,7 +13232,13 @@ mod tests {
         assert_eq!(fs::read(workspace.root.join(&second.attachment.relative_path)).unwrap(), b"");
         let loaded = load_workspace(&workspace.root, &empty_vault("Attachments"))
             .expect("mirrored attachments should reload");
-        assert_eq!(loaded.vault.attachment_embed_settings, settings);
+        assert_eq!(
+            loaded.vault.attachment_embed_settings,
+            AttachmentEmbedSettings {
+                location: ImageEmbedLocation::SpecifiedFolder,
+                folder_path: settings.folder_path,
+            },
+        );
         assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test1"));
         assert!(loaded.vault.folders.iter().any(|folder| folder.name == "test2"));
     }
