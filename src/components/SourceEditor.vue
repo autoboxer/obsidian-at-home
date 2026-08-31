@@ -143,8 +143,10 @@ const emit = defineEmits<{
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
   pasteImage: [capture: ImageInsertionCapture, file?: File];
+  revealAttachmentInTree: [assetId: string | undefined, relativePath: string];
   requestEmbedAttachment: [capture: AttachmentInsertionCapture];
   requestEmbedImage: [capture: ImageInsertionCapture];
+  showAttachmentInFolder: [assetId: string | undefined, relativePath: string];
   vaultImageDrop: [capture: ImageInsertionCapture, relativePath: string];
   vaultAttachmentDrop: [capture: AttachmentInsertionCapture, relativePath: string];
   "update:modelValue": [value: string];
@@ -959,8 +961,10 @@ onMounted(() => {
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
       renameAttachment: props.renameAttachment,
+      revealAttachmentInTree: revealLiveMarkdownAttachmentInTree,
       resolveAttachmentMetadata: resolveLiveMarkdownAttachmentMetadata,
       resolveImageSource: resolveLiveMarkdownImageSource,
+      showAttachmentInFolder: showLiveMarkdownAttachmentInFolder,
       wikiLinkIsResolved: inlineWikiLinkIsResolved,
     }),
     codeMirrorDocumentSearchExtension,
@@ -1380,6 +1384,38 @@ function activateLiveMarkdownAttachment(
       metadata?.mediaType,
       metadata?.openingDisabled,
     );
+  }
+}
+
+function revealLiveMarkdownAttachmentInTree(
+  attachment: ParsedMarkdownAttachment,
+  metadata: MarkdownAttachmentMetadata | null | undefined,
+): void {
+  emitLiveMarkdownAttachmentLocation("revealAttachmentInTree", attachment, metadata);
+}
+
+function showLiveMarkdownAttachmentInFolder(
+  attachment: ParsedMarkdownAttachment,
+  metadata: MarkdownAttachmentMetadata | null | undefined,
+): void {
+  emitLiveMarkdownAttachmentLocation("showAttachmentInFolder", attachment, metadata);
+}
+
+function emitLiveMarkdownAttachmentLocation(
+  event: "revealAttachmentInTree" | "showAttachmentInFolder",
+  attachment: ParsedMarkdownAttachment,
+  metadata: MarkdownAttachmentMetadata | null | undefined,
+): void {
+  const relativePath = metadata?.relativePath
+    ?? resolveMarkdownImagePath(props.noteRelativePath, attachment.destination);
+  if (!relativePath) {
+    return;
+  }
+  const assetId = metadata?.renameTarget?.assetId;
+  if (event === "revealAttachmentInTree") {
+    emit("revealAttachmentInTree", assetId, relativePath);
+  } else {
+    emit("showAttachmentInFolder", assetId, relativePath);
   }
 }
 

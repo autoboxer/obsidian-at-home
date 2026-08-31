@@ -137,6 +137,22 @@ export const vaultAttachmentInsertRequest = reactive({
   relativePath: "",
 });
 
+export const vaultTreeRevealTarget = reactive<{
+  assetId: string | null;
+  kind: WorkspaceVaultItemKind | null;
+  relativePath: string;
+  requestId: number;
+  vaultKey: string;
+}>({
+  assetId: null,
+  kind: null,
+  relativePath: "",
+  requestId: 0,
+  vaultKey: "",
+});
+
+let vaultTreeRevealOperation = 0;
+
 interface UiState {
   tool: ToolView;
   notesView: "editor" | "recently-deleted";
@@ -2501,6 +2517,67 @@ export async function locateVaultItem(locator: VaultItemLocator): Promise<string
   }
 }
 
+export async function revealVaultItemInTree(locator: VaultItemLocator): Promise<boolean> {
+  const operation = ++vaultTreeRevealOperation;
+  const sourceVaultKey = currentVaultTreeKey();
+  const locatedPath = await locateVaultItem(locator);
+  if (
+    !locatedPath
+    || operation !== vaultTreeRevealOperation
+    || sourceVaultKey !== currentVaultTreeKey()
+  ) {
+    return false;
+  }
+
+  const target = currentVaultTreeItem(locator, locatedPath);
+  if (!target) {
+    notify("The vault item could not be found in the app's file tree.", "warning");
+
+    return false;
+  }
+
+  uiState.commandOpen = false;
+  uiState.tool = "notes";
+  uiState.notesView = "editor";
+  uiState.explorerOpen = true;
+  uiState.noteFilter = "";
+  vaultState.selectedFolderId = "all";
+  vaultTreeRevealTarget.assetId = target.assetId ?? null;
+  vaultTreeRevealTarget.kind = locator.kind;
+  vaultTreeRevealTarget.relativePath = target.relativePath;
+  vaultTreeRevealTarget.vaultKey = sourceVaultKey;
+  vaultTreeRevealTarget.requestId += 1;
+
+  return true;
+}
+
+export function vaultTreeItemIsRevealed(locator: VaultItemLocator): boolean {
+  if (
+    !vaultTreeRevealTarget.requestId
+    || vaultTreeRevealTarget.vaultKey !== currentVaultTreeKey()
+    || vaultTreeRevealTarget.kind !== locator.kind
+  ) {
+    return false;
+  }
+  if (vaultTreeRevealTarget.assetId) {
+    return locator.assetId === vaultTreeRevealTarget.assetId;
+  }
+
+  return locator.relativePath === vaultTreeRevealTarget.relativePath;
+}
+
+export function vaultTreeRevealIncludesFolder(relativePath: string): boolean {
+  if (
+    !vaultTreeRevealTarget.requestId
+    || vaultTreeRevealTarget.vaultKey !== currentVaultTreeKey()
+  ) {
+    return false;
+  }
+
+  return vaultTreeRevealTarget.relativePath === relativePath
+    || vaultTreeRevealTarget.relativePath.startsWith(`${relativePath}/`);
+}
+
 export async function showVaultItemInFolder(locator: VaultItemLocator): Promise<void> {
   if (vaultSession.backend !== "native" || !vaultSession.path) {
     notify("Showing vault files in a system folder is available in the desktop app", "warning");
@@ -2526,6 +2603,48 @@ export async function showVaultItemInFolder(locator: VaultItemLocator): Promise<
   } catch (error) {
     notify(errorMessage(error, "The vault item could not be shown in its folder."), "warning");
   }
+}
+
+function currentVaultTreeKey(): string {
+  return `${vaultSession.backend}\u0000${vaultSession.path ?? vaultState.name}`;
+}
+
+function currentVaultTreeItem(
+  locator: VaultItemLocator,
+  locatedPath: string,
+): { assetId?: string; relativePath: string } | undefined {
+  if (locator.kind === "attachment") {
+    const attachment = locator.assetId
+      ? vaultState.attachmentFiles.find((candidate) => candidate.assetId === locator.assetId)
+      : vaultState.attachmentFiles.find((candidate) => candidate.relativePath === locatedPath);
+
+    return attachment
+      ? {
+          ...(attachment.assetId ? { assetId: attachment.assetId } : {}),
+          relativePath: attachment.relativePath,
+        }
+      : undefined;
+  }
+  if (locator.kind === "image") {
+    const image = locator.assetId
+      ? vaultState.imageFiles.find((candidate) => candidate.assetId === locator.assetId)
+      : vaultState.imageFiles.find((candidate) => candidate.relativePath === locatedPath);
+
+    return image
+      ? {
+          ...(image.assetId ? { assetId: image.assetId } : {}),
+          relativePath: image.relativePath,
+        }
+      : undefined;
+  }
+  if (locator.kind === "note") {
+    const note = vaultState.notes.find((candidate) => candidate.relativePath === locatedPath);
+
+    return note ? { relativePath: note.relativePath } : undefined;
+  }
+  const folder = vaultState.folders.find((candidate) => folderPath(candidate.id) === locatedPath);
+
+  return folder ? { relativePath: locatedPath } : undefined;
 }
 
 function parentSystemPath(path: string): string | undefined {

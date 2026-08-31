@@ -11,6 +11,7 @@ import {
   requestInsertVaultAttachment,
   showVaultItemInFolder,
   treeDragState,
+  vaultTreeItemIsRevealed,
 } from "../stores/vault";
 import type { VaultAttachmentFile } from "../types";
 import AppIcon from "./AppIcon.vue";
@@ -51,6 +52,11 @@ const actionLabel = computed(() => {
 const rowTitle = computed(() =>
   `${props.attachment.relativePath} · Press Enter to embed or drag into the editor or onto a folder`
 );
+const revealed = computed(() => vaultTreeItemIsRevealed({
+  assetId: props.attachment.assetId,
+  kind: "attachment",
+  relativePath: props.attachment.relativePath,
+}));
 
 function startDrag(event: DragEvent): void {
   if (!event.dataTransfer) {
@@ -166,7 +172,10 @@ function handleMenuFocusOut(event: FocusEvent): void {
 <template>
   <div
     class="vault-tree-attachment"
-    :class="{ 'is-dragging': dragging }"
+    :class="{ 'is-dragging': dragging, 'is-revealed': revealed }"
+    data-vault-item-kind="attachment"
+    :data-vault-item-asset-id="attachment.assetId"
+    :data-vault-item-relative-path="attachment.relativePath"
     :style="{ '--tree-depth': depth }"
     :title="rowTitle"
     @contextmenu.prevent.stop="openContextMenu"
@@ -175,7 +184,9 @@ function handleMenuFocusOut(event: FocusEvent): void {
       <button
         type="button"
         class="vault-tree-attachment-main"
+        data-vault-item-primary
         draggable="true"
+        :aria-current="revealed ? 'true' : undefined"
         :aria-label="`Insert ${fileName} into the active note`"
         @click="insertIntoActiveNote"
         @dragstart="startDrag"

@@ -62,7 +62,9 @@ import {
   moveNoteToFolder,
   notify,
   renameVaultAttachment,
+  revealVaultItemInTree,
   selectNote,
+  showVaultItemInFolder,
   togglePinned,
   uiState,
   updateNote,
@@ -920,6 +922,28 @@ function activateEmbeddedAttachment(
   });
 }
 
+function revealEmbeddedAttachmentInTree(
+  assetId: string | undefined,
+  relativePath: string,
+): void {
+  void revealVaultItemInTree({
+    ...(assetId ? { assetId } : {}),
+    kind: "attachment",
+    relativePath,
+  });
+}
+
+function showEmbeddedAttachmentInFolder(
+  assetId: string | undefined,
+  relativePath: string,
+): void {
+  void showVaultItemInFolder({
+    ...(assetId ? { assetId } : {}),
+    kind: "attachment",
+    relativePath,
+  });
+}
+
 async function setFolder(event: Event): Promise<void> {
   if (!activeNote.value) {
     return;
@@ -1344,10 +1368,12 @@ onBeforeUnmount(() => externalFileDropAbort?.abort());
             @open-link="openRenderedLink"
             @open-wiki="openWikiLink"
             @paste-image="embedImageFromClipboard"
+            @reveal-attachment-in-tree="revealEmbeddedAttachmentInTree"
             @request-embed-attachment="embedAttachmentFromFile"
             @vault-attachment-drop="embedAttachmentFromVault"
             @vault-image-drop="embedImageFromVault"
             @request-embed-image="embedImageFromFile"
+            @show-attachment-in-folder="showEmbeddedAttachmentInFolder"
             @update:model-value="setContent"
           />
         </div>

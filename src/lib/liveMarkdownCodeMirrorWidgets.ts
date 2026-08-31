@@ -283,6 +283,8 @@ export class MarkdownAttachmentWidget extends WidgetType {
     private readonly resolutionVersion: number,
     private readonly activateAttachment?: MarkdownAttachmentAction,
     private readonly renameAttachment?: MarkdownAttachmentRenameAction,
+    private readonly revealAttachmentInTree?: MarkdownAttachmentAction,
+    private readonly showAttachmentInFolder?: MarkdownAttachmentAction,
   ) {
     super();
   }
@@ -300,7 +302,9 @@ export class MarkdownAttachmentWidget extends WidgetType {
       && this.to === other.to
       && this.resolutionVersion === other.resolutionVersion
       && this.activateAttachment === other.activateAttachment
-      && this.renameAttachment === other.renameAttachment;
+      && this.renameAttachment === other.renameAttachment
+      && this.revealAttachmentInTree === other.revealAttachmentInTree
+      && this.showAttachmentInFolder === other.showAttachmentInFolder;
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -345,7 +349,7 @@ export class MarkdownAttachmentWidget extends WidgetType {
     actions.className = "attachment-card__actions";
     if (!executable) {
       const action = document.createElement("button");
-      action.className = "attachment-card__action";
+      action.className = "attachment-card__action attachment-card__action--activate";
       action.type = "button";
       action.textContent = archive ? "Save archive as…" : "Open";
       action.title = archive
@@ -361,6 +365,24 @@ export class MarkdownAttachmentWidget extends WidgetType {
         this.activateAttachment?.(this.attachment, this.metadata);
       });
       actions.append(action);
+    }
+    if (this.revealAttachmentInTree) {
+      actions.append(createAttachmentLocationAction(
+        document,
+        "reveal-in-tree",
+        "Reveal in vault",
+        "vault",
+        () => this.revealAttachmentInTree?.(this.attachment, this.metadata),
+      ));
+    }
+    if (this.showAttachmentInFolder) {
+      actions.append(createAttachmentLocationAction(
+        document,
+        "show-in-folder",
+        "Show in folder",
+        "folder",
+        () => this.showAttachmentInFolder?.(this.attachment, this.metadata),
+      ));
     }
     const renameTarget = this.metadata?.renameTarget;
     if (renameTarget && this.renameAttachment) {
@@ -511,6 +533,76 @@ export class MarkdownAttachmentWidget extends WidgetType {
 
     return card;
   }
+}
+
+function createAttachmentLocationAction(
+  document: Document,
+  actionName: "reveal-in-tree" | "show-in-folder",
+  label: string,
+  icon: "folder" | "vault",
+  activate: () => void,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.className = "attachment-card__action attachment-card__action--icon";
+  button.type = "button";
+  button.dataset.attachmentAction = actionName;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(createAttachmentLocationIcon(document, icon));
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    activate();
+  });
+
+  return button;
+}
+
+function createAttachmentLocationIcon(
+  document: Document,
+  icon: "folder" | "vault",
+): SVGSVGElement {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.classList.add("attachment-card__action-icon");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  if (icon === "vault") {
+    const frame = document.createElementNS(namespace, "rect");
+    frame.setAttribute("x", "3.5");
+    frame.setAttribute("y", "4");
+    frame.setAttribute("width", "17");
+    frame.setAttribute("height", "16");
+    frame.setAttribute("rx", "2");
+    const divider = document.createElementNS(namespace, "path");
+    divider.setAttribute("d", "M9 4v16");
+    svg.append(frame, divider);
+  } else {
+    const folder = document.createElementNS(namespace, "path");
+    folder.setAttribute(
+      "d",
+      "M3.5 8V6.5A2.5 2.5 0 0 1 6 4h4l2 2h6a2.5 2.5 0 0 1 2.5 2.5V10",
+    );
+    const opening = document.createElementNS(namespace, "path");
+    opening.setAttribute(
+      "d",
+      "M4.5 9.5h16l-2 8a2 2 0 0 1-2 1.5H6a2 2 0 0 1-2-1.5l-1-5.5a2 2 0 0 1 1.5-2.5Z",
+    );
+    svg.append(folder, opening);
+  }
+
+  return svg;
 }
 
 export class MarkdownImageWidget extends WidgetType {

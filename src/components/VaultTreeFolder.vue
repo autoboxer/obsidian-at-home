@@ -16,6 +16,8 @@ import {
   showVaultItemInFolder,
   treeDragState,
   vaultState,
+  vaultTreeRevealIncludesFolder,
+  vaultTreeRevealTarget,
 } from "../stores/vault";
 import type { Folder, Note, VaultAttachmentFile, VaultImageFile } from "../types";
 import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
@@ -124,6 +126,16 @@ watch(
   () => {
     const folderId = activeNoteFolderId.value;
     if (folderId && branchContainsFolder(folderId)) {
+      expanded.value = true;
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => vaultTreeRevealTarget.requestId,
+  () => {
+    if (vaultTreeRevealIncludesFolder(currentFolderPath.value)) {
       expanded.value = true;
     }
   },
