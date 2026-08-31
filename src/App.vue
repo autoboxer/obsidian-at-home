@@ -78,15 +78,28 @@ function handleKeyboard(event: KeyboardEvent): void {
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLocaleLowerCase();
   const target = event.target;
-  const isEditing = target instanceof HTMLElement
-    && target.matches("input, textarea, select, [contenteditable='true']");
+  const isEditing = target instanceof Element
+    && Boolean(target.closest(
+      "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+    ));
   const appShortcut = (
     modifier && ["n", "o", "\\"].includes(key)
     || modifier && event.shiftKey && key === "t"
     || !modifier && !isEditing && key === "/"
   );
+  const zoomShortcut = modifier
+    && !event.altKey
+    && ["+", "=", "-", "_", "0"].includes(event.key);
 
-  if (modifier && !event.altKey && ["+", "=", "-", "_", "0"].includes(event.key)) {
+  if (document.documentElement.hasAttribute("data-modal-scroll-lock")) {
+    if (appShortcut || zoomShortcut) {
+      event.preventDefault();
+    }
+
+    return;
+  }
+
+  if (zoomShortcut) {
     event.preventDefault();
     if (event.key === "0") {
       resetZoom();

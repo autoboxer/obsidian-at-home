@@ -134,6 +134,7 @@ async function closeReference(): Promise<void> {
     <Transition name="overlay-fade">
       <div
         v-if="referenceOpen"
+        v-modal-scroll-lock
         class="modal-backdrop snippet-reference-backdrop"
         data-ui-region="selector-reference"
         @keydown.esc.stop="closeReference"
@@ -157,7 +158,7 @@ async function closeReference(): Promise<void> {
             </button>
           </header>
 
-          <div class="snippet-reference-content">
+          <div class="snippet-reference-content" data-modal-scroll-region>
           <p>These selectors are stable. Other interface classes may change.</p>
 
           <details open>

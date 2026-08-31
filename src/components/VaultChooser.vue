@@ -140,6 +140,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
 
 <template>
   <div
+    v-modal-scroll-lock
     class="modal-backdrop vault-chooser-backdrop"
     data-ui-region="vault-chooser"
     @keydown.esc="closeChooser"
@@ -186,7 +187,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
         <span>Reading Markdown files and rebuilding the note index.</span>
       </div>
 
-      <div v-else class="vault-chooser-body">
+      <div v-else class="vault-chooser-body" data-modal-scroll-region>
         <div v-if="vaultSession.error" class="vault-chooser-alert vault-chooser-alert--error" role="alert">
           <AppIcon name="info" :size="18" />
           <div>

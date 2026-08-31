@@ -494,6 +494,15 @@ html {
   background: var(--bg-deep);
 }
 
+html[data-modal-scroll-lock] {
+  overscroll-behavior: none;
+}
+
+html[data-modal-scroll-lock] body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 body {
   min-width: 660px;
   background: var(--body-background);
@@ -5029,10 +5038,12 @@ pre {
 .shortcut-reference-content {
   display: grid;
   min-height: 0;
+  flex: 1;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   padding: 18px 20px 22px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .shortcut-reference-content > p {
@@ -5055,6 +5066,7 @@ pre {
 }
 
 .shortcut-reference-group.group-editor {
+  height: max-content;
   grid-column: 2;
   grid-row: 2 / span 2;
 }
@@ -5160,8 +5172,19 @@ pre {
   align-items: center;
   justify-content: center;
   padding: 28px;
+  overflow: hidden;
   background: rgba(5, 4, 7, 0.67);
   backdrop-filter: blur(9px) saturate(0.8);
+  overscroll-behavior: none;
+}
+
+[data-modal-scroll-region] {
+  overscroll-behavior: contain;
+}
+
+[data-modal-scroll-active] [role="dialog"] {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 @keyframes backdrop-in {

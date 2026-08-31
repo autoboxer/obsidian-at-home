@@ -113,7 +113,7 @@ function escapeHtml(value: string): string {
 </script>
 
 <template>
-  <div class="modal-backdrop command-backdrop" data-ui-region="quick-switcher" @mousedown.self="close">
+  <div v-modal-scroll-lock class="modal-backdrop command-backdrop" data-ui-region="quick-switcher" @mousedown.self="close">
     <section
       class="command-palette"
       role="dialog"
@@ -143,7 +143,7 @@ function escapeHtml(value: string): string {
           <span>{{ query ? `${results.length} best matches` : "Recent & favorites" }}</span>
           <span v-if="query">Searching titles, content, folders, and tags</span>
         </div>
-        <div class="command-results">
+        <div class="command-results" data-modal-scroll-region>
           <button
             v-for="(result, index) in results"
             :key="result.note.id"

@@ -133,6 +133,7 @@ function handleDialogKeydown(event: KeyboardEvent): void {
   <Transition name="overlay-fade">
     <div
       v-if="referenceOpen"
+      v-modal-scroll-lock
       class="modal-backdrop shortcut-reference-backdrop"
       data-ui-region="keyboard-shortcuts"
       @mousedown.self="closeReference"
@@ -163,7 +164,7 @@ function handleDialogKeydown(event: KeyboardEvent): void {
           </button>
         </header>
 
-        <div class="shortcut-reference-content">
+        <div class="shortcut-reference-content" data-modal-scroll-region>
           <p id="shortcut-reference-description">
             Work with your vault and format Markdown without leaving the keyboard.
           </p>
