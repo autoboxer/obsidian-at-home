@@ -2664,12 +2664,13 @@ pre {
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
-  width: min(22em, 100%);
+  width: min(26em, 100%);
   max-width: 100%;
   min-height: 2.8em;
   margin: 0.16em 0;
   padding: 0.38em 0.52em;
   gap: 0.58em;
+  flex-wrap: wrap;
   border: 1px solid var(--border-faint);
   border-radius: 7px;
   background: color-mix(in srgb, var(--surface-code) 72%, transparent);
@@ -2715,7 +2716,7 @@ pre {
 
 .attachment-card__copy {
   display: inline-flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   flex-direction: column;
   gap: 0.12em;
@@ -2730,9 +2731,14 @@ pre {
 
 .attachment-card__actions {
   display: inline-flex;
+  width: max-content;
+  max-width: 100%;
   flex: none;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.34em;
+  margin-left: auto;
+  flex-wrap: wrap;
 }
 
 .attachment-card__action {
@@ -2756,6 +2762,18 @@ pre {
 .attachment-card__action:disabled {
   cursor: default;
   opacity: 0.5;
+}
+
+.attachment-card__action--icon {
+  display: inline-grid;
+  width: 2em;
+  height: 2em;
+  padding: 0;
+  place-items: center;
+}
+
+.attachment-card__action-icon {
+  display: block;
 }
 
 .attachment-card__rename-form {
@@ -7527,6 +7545,18 @@ pre {
 .vault-tree-attachment:hover,
 .vault-tree-attachment:focus-within {
   color: var(--text-soft);
+}
+
+.vault-tree-attachment.is-revealed,
+.vault-tree-attachment.is-revealed:hover,
+.vault-tree-attachment.is-revealed:focus-within {
+  background: var(--surface-control-active);
+  box-shadow: inset 2px 0 var(--violet);
+  color: var(--violet-bright);
+}
+
+.vault-tree-attachment.is-revealed .vault-tree-attachment-icon {
+  color: var(--violet-bright);
 }
 
 .vault-tree-note.active {

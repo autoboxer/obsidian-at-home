@@ -366,6 +366,15 @@ pub enum ExternalFileUploadKind {
     Attachment,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceVaultItemKind {
+    Note,
+    Folder,
+    Image,
+    Attachment,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceExternalAssetDiscardResult {
@@ -1503,6 +1512,44 @@ pub fn workspace_relocate_attachment(
         &note_updates,
         expected_revision,
     )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_locate_vault_item(
+    app: AppHandle,
+    path: String,
+    kind: WorkspaceVaultItemKind,
+    relative_path: String,
+    asset_id: Option<String>,
+) -> Result<String, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    locate_workspace_vault_item(&root, kind, &relative_path, asset_id.as_deref())
+        .map(|(resolved_relative_path, _)| resolved_relative_path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn workspace_show_vault_item_in_folder(
+    app: AppHandle,
+    path: String,
+    kind: WorkspaceVaultItemKind,
+    relative_path: String,
+    asset_id: Option<String>,
+) -> Result<(), String> {
+    let target = {
+        let _guard = lock_workspace_io()?;
+        let root = validate_workspace_root(&path)?;
+        reject_home_vault(&app, &root)?;
+        let _workspace_guard = lock_workspace_files(&root)?;
+        let (_, target) =
+            locate_workspace_vault_item(&root, kind, &relative_path, asset_id.as_deref())?;
+        target
+    };
+    app.opener()
+        .reveal_item_in_dir(&target)
+        .map_err(|error| format!("Could not show the vault item in its folder: {error}"))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -5970,6 +6017,98 @@ fn resolve_attachment_action_source(
     }
 
     Ok((relative_path, source))
+}
+
+fn locate_workspace_vault_item(
+    root: &Path,
+    kind: WorkspaceVaultItemKind,
+    relative_path: &str,
+    asset_id: Option<&str>,
+) -> Result<(String, PathBuf), String> {
+    let resolved_relative_path = match kind {
+        WorkspaceVaultItemKind::Image | WorkspaceVaultItemKind::Attachment => {
+            resolve_vault_asset_relative_path(root, kind, relative_path, asset_id)?
+        }
+        WorkspaceVaultItemKind::Note | WorkspaceVaultItemKind::Folder => {
+            if asset_id.is_some() {
+                return Err("Notes and folders do not use stable asset IDs.".to_owned());
+            }
+            relative_path.to_owned()
+        }
+    };
+    let target = match kind {
+        WorkspaceVaultItemKind::Note => {
+            validate_markdown_relative_path(&resolved_relative_path)?;
+            resolve_workspace_file(root, &resolved_relative_path, false)?
+        }
+        WorkspaceVaultItemKind::Folder => {
+            resolve_workspace_directory(root, &resolved_relative_path)?
+        }
+        WorkspaceVaultItemKind::Image => {
+            resolve_workspace_image_file(root, &resolved_relative_path, false)?
+        }
+        WorkspaceVaultItemKind::Attachment => {
+            resolve_workspace_asset_file(root, &resolved_relative_path, false)?
+        }
+    };
+    let metadata = fs::symlink_metadata(&target)
+        .map_err(|error| format!("Could not inspect the vault item: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("The vault item is a symbolic link and cannot be revealed.".to_owned());
+    }
+    if kind == WorkspaceVaultItemKind::Folder {
+        if !metadata.is_dir() {
+            return Err("The vault item is not a folder.".to_owned());
+        }
+    } else if !metadata.is_file() {
+        return Err("The vault item is not a regular file.".to_owned());
+    }
+    let canonical = target
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the vault item: {error}"))?;
+    if !canonical.starts_with(root) {
+        return Err("The vault item resolved outside the active vault.".to_owned());
+    }
+
+    Ok((resolved_relative_path, canonical))
+}
+
+fn resolve_vault_asset_relative_path(
+    root: &Path,
+    kind: WorkspaceVaultItemKind,
+    relative_path: &str,
+    asset_id: Option<&str>,
+) -> Result<String, String> {
+    let Some(asset_id) = asset_id else {
+        return Ok(relative_path.to_owned());
+    };
+    if !is_valid_asset_id(asset_id) {
+        return Err("The vault item has an invalid stable ID.".to_owned());
+    }
+    let expected_kind = match kind {
+        WorkspaceVaultItemKind::Image => VaultAssetKind::Image,
+        WorkspaceVaultItemKind::Attachment => VaultAssetKind::Attachment,
+        _ => return Err("Only images and attachments use stable asset IDs.".to_owned()),
+    };
+    let mut warnings = WarningCollector::default();
+    let (state, state_file_was_present) = read_workspace_state(root, &mut warnings);
+    let state = state.ok_or_else(|| {
+        if state_file_was_present {
+            "The vault item cannot be located while workspace metadata is unreadable or newer than this app."
+                .to_owned()
+        } else {
+            "The vault item no longer has a stable record.".to_owned()
+        }
+    })?;
+    let stored = state
+        .assets
+        .get(asset_id)
+        .ok_or_else(|| "The vault item no longer has a stable record.".to_owned())?;
+    if stored.kind != expected_kind {
+        return Err("The stable record refers to a different vault item type.".to_owned());
+    }
+
+    Ok(stored.relative_path.clone())
 }
 
 fn is_archive_attachment_path(path: &Path) -> bool {
@@ -13341,6 +13480,156 @@ mod tests {
         )
         .expect_err("unreadable metadata should not permit a portable fallback");
         assert!(unreadable_state_error.contains("metadata is unreadable or newer"));
+    }
+
+    #[test]
+    fn vault_item_locations_are_canonical_strict_and_kind_safe() {
+        let workspace = TestWorkspace::new("vault-item-location");
+        let nested = "Deep Folder/Ångström";
+        fs::create_dir_all(workspace.root.join(nested))
+            .expect("nested vault folder should be created");
+        fs::write(workspace.root.join(format!("{nested}/Plan.md")), "# Plan")
+            .expect("nested note should be written");
+        fs::write(
+            workspace.root.join(format!("{nested}/Diagram.png")),
+            b"image bytes",
+        )
+        .expect("nested image should be written");
+        fs::write(
+            workspace.root.join(format!("{nested}/Report.pdf")),
+            b"tracked report",
+        )
+        .expect("tracked attachment should be written");
+        fs::write(workspace.root.join("Report.pdf"), b"different root report")
+            .expect("duplicate root attachment should be written");
+        let mut state = WorkspaceState::default();
+        state.assets.insert(
+            "image-location".to_owned(),
+            StoredVaultAsset {
+                kind: VaultAssetKind::Image,
+                relative_path: format!("{nested}/Diagram.png"),
+                media_type: "image/png".to_owned(),
+                fingerprint: fingerprint_bytes(b"image bytes"),
+                modified_nanos: 0,
+            },
+        );
+        state.assets.insert(
+            "attachment-location".to_owned(),
+            StoredVaultAsset {
+                kind: VaultAssetKind::Attachment,
+                relative_path: format!("{nested}/Report.pdf"),
+                media_type: "application/pdf".to_owned(),
+                fingerprint: fingerprint_bytes(b"tracked report"),
+                modified_nanos: 0,
+            },
+        );
+        write_workspace_state(&workspace.root, &state)
+            .expect("workspace state should be written");
+
+        let (note_relative, note_path) = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Note,
+            &format!("{nested}/Plan.md"),
+            None,
+        )
+        .expect("the nested note should resolve");
+        assert_eq!(note_relative, format!("{nested}/Plan.md"));
+        assert_eq!(
+            note_path,
+            workspace.root.join(format!("{nested}/Plan.md")).canonicalize().unwrap(),
+        );
+        let (folder_relative, folder_path) = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Folder,
+            nested,
+            None,
+        )
+        .expect("the nested folder should resolve");
+        assert_eq!(folder_relative, nested);
+        assert_eq!(folder_path, workspace.root.join(nested).canonicalize().unwrap());
+
+        let (image_relative, _) = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Image,
+            "Old/Diagram.png",
+            Some("image-location"),
+        )
+        .expect("the stable image record should override its old path");
+        assert_eq!(image_relative, format!("{nested}/Diagram.png"));
+        let (attachment_relative, attachment_path) = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Attachment,
+            "Report.pdf",
+            Some("attachment-location"),
+        )
+        .expect("the stable attachment record should win over a duplicate name");
+        assert_eq!(attachment_relative, format!("{nested}/Report.pdf"));
+        assert_eq!(
+            fs::read(attachment_path).unwrap(),
+            b"tracked report",
+            "the duplicate root attachment must not be selected",
+        );
+        let (portable_relative, _) = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Attachment,
+            "Report.pdf",
+            None,
+        )
+        .expect("an untracked root attachment should resolve by its exact path");
+        assert_eq!(portable_relative, "Report.pdf");
+
+        let stale_error = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Attachment,
+            "Report.pdf",
+            Some("attachment-stale"),
+        )
+        .expect_err("a stale stable ID must not fall back to the duplicate root path");
+        assert!(stale_error.contains("no longer has a stable record"));
+        let wrong_kind_error = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Attachment,
+            "Report.pdf",
+            Some("image-location"),
+        )
+        .expect_err("an image stable ID must not resolve as an attachment");
+        assert!(wrong_kind_error.contains("different vault item type"));
+        let platform_path_error = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Note,
+            r"C:\Users\Person\Plan.md",
+            None,
+        )
+        .expect_err("a platform path must not be accepted as a vault-relative path");
+        assert!(platform_path_error.contains("relative to the vault"));
+
+        fs::remove_file(workspace.root.join(format!("{nested}/Report.pdf")))
+            .expect("tracked attachment should be removed externally");
+        let deleted_error = locate_workspace_vault_item(
+            &workspace.root,
+            WorkspaceVaultItemKind::Attachment,
+            "Report.pdf",
+            Some("attachment-location"),
+        )
+        .expect_err("an externally deleted tracked attachment must not fall back");
+        assert!(deleted_error.contains("Could not inspect the vault item"));
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                workspace.root.join("Report.pdf"),
+                workspace.root.join("Linked.pdf"),
+            )
+            .expect("attachment symlink should be created");
+            let symlink_error = locate_workspace_vault_item(
+                &workspace.root,
+                WorkspaceVaultItemKind::Attachment,
+                "Linked.pdf",
+                None,
+            )
+            .expect_err("a vault item symlink must not be revealed");
+            assert!(symlink_error.contains("symbolic link"));
+        }
     }
 
     #[test]

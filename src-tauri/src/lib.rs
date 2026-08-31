@@ -31,6 +31,8 @@ pub fn run() {
             workspace::workspace_embed_vault_image,
             workspace::workspace_relocate_image,
             workspace::workspace_relocate_attachment,
+            workspace::workspace_locate_vault_item,
+            workspace::workspace_show_vault_item_in_folder,
             workspace::workspace_open_attachment,
             workspace::workspace_save_attachment_copy,
             workspace::workspace_embed_image_bytes,

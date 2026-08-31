@@ -4,6 +4,7 @@ import {
   deleteNote,
   NOTE_DRAG_MIME,
   selectNote,
+  showVaultItemInFolder,
   treeDragState,
   vaultState,
 } from "../stores/vault";
@@ -41,7 +42,7 @@ function finishDrag(): void {
 
 function openContextMenu(event: MouseEvent): void {
   const menuWidth = 174;
-  const menuHeight = 54;
+  const menuHeight = 92;
   menuPosition.value = {
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
@@ -79,6 +80,15 @@ function requestDelete(): void {
   if (window.confirm(`Delete “${title}”? It will remain in Recently Deleted for seven days.`)) {
     void deleteNote(props.note.id);
   }
+}
+
+function showInFolder(): void {
+  closeMenu();
+  void showVaultItemInFolder({
+    itemId: props.note.id,
+    kind: "note",
+    relativePath: props.note.relativePath,
+  });
 }
 </script>
 
@@ -130,6 +140,9 @@ function requestDelete(): void {
           :aria-label="`Actions for ${note.title || 'Untitled note'}`"
           @keydown="handleMenuKeydown"
         >
+          <button type="button" role="menuitem" @click="showInFolder">
+            <AppIcon name="folder-open" :size="14" /> Show in folder
+          </button>
           <button type="button" class="danger" role="menuitem" @click="requestDelete">
             <AppIcon name="trash" :size="14" /> Delete note
           </button>

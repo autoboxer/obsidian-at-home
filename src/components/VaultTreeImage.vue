@@ -4,6 +4,7 @@ import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
 import {
   renameVaultImage,
   requestInsertVaultImage,
+  showVaultItemInFolder,
   treeDragState,
 } from "../stores/vault";
 import type { VaultImageFile } from "../types";
@@ -55,6 +56,15 @@ function insertIntoActiveNote(): void {
   requestInsertVaultImage(props.image);
 }
 
+function showInFolder(): void {
+  closeMenu();
+  void showVaultItemInFolder({
+    assetId: props.image.assetId,
+    kind: "image",
+    relativePath: props.image.relativePath,
+  });
+}
+
 function beginRename(): void {
   closeMenu();
   editValue.value = fileName.value;
@@ -94,7 +104,7 @@ function toggleMenu(): void {
 
 function openContextMenu(event: MouseEvent): void {
   const menuWidth = 190;
-  const menuHeight = 92;
+  const menuHeight = 128;
   menuPosition.value = {
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
@@ -171,6 +181,10 @@ function handleMenuFocusOut(event: FocusEvent): void {
             <button type="button" role="menuitem" @click="beginRename">
               <AppIcon name="edit" :size="14" />
               Rename
+            </button>
+            <button type="button" role="menuitem" @click="showInFolder">
+              <AppIcon name="folder-open" :size="14" />
+              Show in folder
             </button>
           </div>
         </Transition>

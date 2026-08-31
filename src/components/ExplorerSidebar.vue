@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { formatCommandShortcut } from "../lib/keyboard";
 import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
 import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
@@ -12,6 +12,7 @@ import {
   moveVaultImageToFolder,
   moveNoteToFolder,
   NOTE_DRAG_MIME,
+  notify,
   openRecentlyDeletedWorkspace,
   openSearchWorkspace,
   recentNotes,
@@ -20,6 +21,8 @@ import {
   treeDragState,
   uiState,
   vaultState,
+  vaultTreeItemIsRevealed,
+  vaultTreeRevealTarget,
   visibleNotes,
 } from "../stores/vault";
 import AppIcon from "./AppIcon.vue";
@@ -35,6 +38,8 @@ const folderField = ref<HTMLInputElement>();
 const rootExpanded = ref(true);
 const rootDropActive = ref(false);
 const rootDropInvalid = ref(false);
+const fileTree = ref<HTMLElement>();
+let revealFrame: number | undefined;
 
 const vaultMonogram = computed(() => {
   const words = vaultState.name.trim().split(/\s+/).filter(Boolean);
@@ -175,6 +180,81 @@ watch(
     }
   },
 );
+
+watch(
+  () => vaultTreeRevealTarget.requestId,
+  (requestId) => {
+    if (!requestId) {
+      return;
+    }
+    rootExpanded.value = true;
+    scheduleRevealTarget(requestId);
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (revealFrame !== undefined) {
+    window.cancelAnimationFrame(revealFrame);
+  }
+});
+
+function scheduleRevealTarget(requestId: number, attempt = 0): void {
+  if (revealFrame !== undefined) {
+    window.cancelAnimationFrame(revealFrame);
+  }
+  void nextTick(() => {
+    revealFrame = window.requestAnimationFrame(() => {
+      revealFrame = undefined;
+      if (requestId !== vaultTreeRevealTarget.requestId || !currentRevealTargetIsValid()) {
+        return;
+      }
+      const row = findRevealTargetRow();
+      if (!row) {
+        if (attempt < 12) {
+          scheduleRevealTarget(requestId, attempt + 1);
+        } else {
+          notify("The vault item could not be revealed in the app's file tree.", "warning");
+        }
+
+        return;
+      }
+      const primary = row.querySelector<HTMLButtonElement>("[data-vault-item-primary]");
+      primary?.focus({ preventScroll: true });
+      row.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+    });
+  });
+}
+
+function currentRevealTargetIsValid(): boolean {
+  const kind = vaultTreeRevealTarget.kind;
+  if (!kind) {
+    return false;
+  }
+
+  return vaultTreeItemIsRevealed({
+    ...(vaultTreeRevealTarget.assetId
+      ? { assetId: vaultTreeRevealTarget.assetId }
+      : {}),
+    kind,
+    relativePath: vaultTreeRevealTarget.relativePath,
+  });
+}
+
+function findRevealTargetRow(): HTMLElement | undefined {
+  const candidates = fileTree.value?.querySelectorAll<HTMLElement>("[data-vault-item-kind]");
+
+  return [...(candidates ?? [])].find((candidate) => {
+    if (candidate.dataset.vaultItemKind !== vaultTreeRevealTarget.kind) {
+      return false;
+    }
+    if (vaultTreeRevealTarget.assetId) {
+      return candidate.dataset.vaultItemAssetId === vaultTreeRevealTarget.assetId;
+    }
+
+    return candidate.dataset.vaultItemRelativePath === vaultTreeRevealTarget.relativePath;
+  });
+}
 
 function openFolderInput(): void {
   folderInputOpen.value = true;
@@ -440,7 +520,7 @@ function handleRootKeydown(event: KeyboardEvent): void {
           </div>
         </div>
 
-        <div class="vault-file-tree" :aria-label="treeAriaLabel">
+        <div ref="fileTree" class="vault-file-tree" :aria-label="treeAriaLabel">
           <template v-if="vaultState.selectedFolderId === 'recent'">
             <VaultTreeNote
               v-for="note in visibleNotes"

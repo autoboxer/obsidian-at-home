@@ -74,8 +74,10 @@ export interface LiveMarkdownOptions {
   readonly openLink: (href: string) => void;
   readonly openWiki: (target: string, heading?: string) => void;
   readonly renameAttachment?: MarkdownAttachmentRenameAction;
+  readonly revealAttachmentInTree?: MarkdownAttachmentAction;
   readonly resolveAttachmentMetadata?: MarkdownAttachmentMetadataResolver;
   readonly resolveImageSource?: MarkdownImageSourceResolver;
+  readonly showAttachmentInFolder?: MarkdownAttachmentAction;
   readonly wikiLinkIsResolved: (target: string) => boolean;
 }
 
@@ -1660,6 +1662,8 @@ function addMarkdownAttachmentDecoration(
       resolutionVersion,
       options.activateAttachment,
       options.renameAttachment,
+      options.revealAttachmentInTree,
+      options.showAttachmentInFolder,
     ),
   }], [], {
     atomicRanges: [range],

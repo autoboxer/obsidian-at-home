@@ -13,8 +13,11 @@ import {
   moveNoteToFolder,
   NOTE_DRAG_MIME,
   renameFolder,
+  showVaultItemInFolder,
   treeDragState,
   vaultState,
+  vaultTreeRevealIncludesFolder,
+  vaultTreeRevealTarget,
 } from "../stores/vault";
 import type { Folder, Note, VaultAttachmentFile, VaultImageFile } from "../types";
 import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
@@ -123,6 +126,16 @@ watch(
   () => {
     const folderId = activeNoteFolderId.value;
     if (folderId && branchContainsFolder(folderId)) {
+      expanded.value = true;
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => vaultTreeRevealTarget.requestId,
+  () => {
+    if (vaultTreeRevealIncludesFolder(currentFolderPath.value)) {
       expanded.value = true;
     }
   },
@@ -443,7 +456,7 @@ function openContextMenu(event: MouseEvent): void {
   }
 
   const menuWidth = 180;
-  const menuHeight = 190;
+  const menuHeight = 226;
   menuPosition.value = {
     x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
@@ -584,6 +597,15 @@ function removeFolder(): void {
     deleteFolder(props.folder.id);
   }
 }
+
+function showInFolder(): void {
+  closeMenu();
+  void showVaultItemInFolder({
+    itemId: props.folder.id,
+    kind: "folder",
+    relativePath: currentFolderPath.value,
+  });
+}
 </script>
 
 <template>
@@ -669,6 +691,9 @@ function removeFolder(): void {
             :aria-label="`Actions for ${folder.name}`"
             @keydown="handleMenuKeydown"
           >
+            <button type="button" role="menuitem" @click="showInFolder">
+              <AppIcon name="folder-open" :size="14" /> Show in folder
+            </button>
             <button type="button" role="menuitem" @click="beginRename">
               <AppIcon name="edit" :size="14" /> Rename
             </button>
