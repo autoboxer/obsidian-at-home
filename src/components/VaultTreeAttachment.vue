@@ -1,72 +1,72 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref } from 'vue';
 import {
   markdownAttachmentIsArchive,
   markdownAttachmentIsExecutable,
-  VAULT_ATTACHMENT_DRAG_MIME,
-} from "../lib/markdownAttachments";
+  VAULT_ATTACHMENT_DRAG_MIME
+} from '../lib/markdownAttachments';
 import {
   activateVaultAttachment,
   renameVaultAttachment,
   requestInsertVaultAttachment,
   showVaultItemInFolder,
   treeDragState,
-  vaultTreeItemIsRevealed,
-} from "../stores/vault";
-import type { VaultAttachmentFile } from "../types";
-import AppIcon from "./AppIcon.vue";
+  vaultTreeItemIsRevealed
+} from '../stores/vault';
+import type { VaultAttachmentFile } from '../types';
+import AppIcon from './AppIcon.vue';
 
 const props = withDefaults(
   defineProps<{ attachment: VaultAttachmentFile; depth?: number }>(),
-  { depth: 0 },
+  { depth: 0 }
 );
-const dragging = ref(false);
-const editing = ref(false);
-const editValue = ref("");
+const dragging = ref( false );
+const editing = ref( false );
+const editValue = ref( '' );
 const renameInput = ref<HTMLInputElement>();
-const menuOpen = ref(false);
+const menuOpen = ref( false );
 const menuPosition = ref<{ x: number; y: number }>();
 const menu = ref<HTMLElement>();
 const menuButton = ref<HTMLButtonElement>();
 
-const fileName = computed(() =>
-  props.attachment.relativePath.split("/").at(-1) || "Attachment"
+const fileName = computed( () =>
+  props.attachment.relativePath.split( '/' ).at( -1 ) || 'Attachment'
 );
-const archive = computed(() => markdownAttachmentIsArchive(
+const archive = computed( () => markdownAttachmentIsArchive(
   props.attachment.relativePath,
-  props.attachment.mediaType,
-));
-const executable = computed(() =>
+  props.attachment.mediaType
+) );
+const executable = computed( () =>
   markdownAttachmentIsExecutable(
     props.attachment.relativePath,
-    props.attachment.openingDisabled,
+    props.attachment.openingDisabled
   )
 );
-const actionLabel = computed(() => {
-  if (executable.value) {
-    return "Opening unavailable";
+const actionLabel = computed( () => {
+  if ( executable.value ) {
+    return 'Opening unavailable';
   }
 
-  return archive.value ? "Save archive as…" : "Open file";
+  return archive.value ? 'Save archive as…' : 'Open file';
 });
-const rowTitle = computed(() =>
-  `${props.attachment.relativePath} · Press Enter to embed or drag into the editor or onto a folder`
+const rowTitle = computed( () =>
+  `${ props.attachment.relativePath } · Press Enter to embed or drag into the editor or onto a folder`
 );
-const revealed = computed(() => vaultTreeItemIsRevealed({
+const revealed = computed( () => vaultTreeItemIsRevealed({
   assetId: props.attachment.assetId,
-  kind: "attachment",
-  relativePath: props.attachment.relativePath,
-}));
+  kind: 'attachment',
+  relativePath: props.attachment.relativePath
+}) );
 
-function startDrag(event: DragEvent): void {
-  if (!event.dataTransfer) {
+function startDrag( event: DragEvent ): void {
+  if ( !event.dataTransfer ) {
     return;
   }
   closeMenu();
   event.dataTransfer.clearData();
-  event.dataTransfer.effectAllowed = "copyMove";
-  event.dataTransfer.setData(VAULT_ATTACHMENT_DRAG_MIME, props.attachment.relativePath);
-  event.dataTransfer.setData("text/plain", fileName.value);
+  event.dataTransfer.effectAllowed = 'copyMove';
+  event.dataTransfer.setData( VAULT_ATTACHMENT_DRAG_MIME, props.attachment.relativePath );
+  event.dataTransfer.setData( 'text/plain', fileName.value );
   treeDragState.noteId = null;
   treeDragState.folderId = null;
   treeDragState.imagePath = null;
@@ -76,27 +76,27 @@ function startDrag(event: DragEvent): void {
 
 function finishDrag(): void {
   dragging.value = false;
-  if (treeDragState.attachmentPath === props.attachment.relativePath) {
+  if ( treeDragState.attachmentPath === props.attachment.relativePath ) {
     treeDragState.attachmentPath = null;
   }
 }
 
 function insertIntoActiveNote(): void {
   closeMenu();
-  requestInsertVaultAttachment(props.attachment);
+  requestInsertVaultAttachment( props.attachment );
 }
 
 function activateAttachment(): void {
   closeMenu();
-  void activateVaultAttachment(props.attachment);
+  void activateVaultAttachment( props.attachment );
 }
 
 function showInFolder(): void {
   closeMenu();
   void showVaultItemInFolder({
     assetId: props.attachment.assetId,
-    kind: "attachment",
-    relativePath: props.attachment.relativePath,
+    kind: 'attachment',
+    relativePath: props.attachment.relativePath
   });
 }
 
@@ -104,24 +104,24 @@ function beginRename(): void {
   closeMenu();
   editValue.value = fileName.value;
   editing.value = true;
-  nextTick(() => {
+  nextTick( () => {
     renameInput.value?.focus();
-    const extensionStart = editValue.value.lastIndexOf(".");
+    const extensionStart = editValue.value.lastIndexOf( '.' );
     renameInput.value?.setSelectionRange(
       0,
-      extensionStart > 0 ? extensionStart : editValue.value.length,
+      extensionStart > 0 ? extensionStart : editValue.value.length
     );
   });
 }
 
 function saveRename(): void {
-  if (!editing.value) {
+  if ( !editing.value ) {
     return;
   }
   const requestedName = editValue.value;
   editing.value = false;
-  if (requestedName !== fileName.value) {
-    void renameVaultAttachment(props.attachment, requestedName);
+  if ( requestedName !== fileName.value ) {
+    void renameVaultAttachment( props.attachment, requestedName );
   }
 }
 
@@ -131,38 +131,38 @@ function cancelRename(): void {
 }
 
 function toggleMenu(): void {
-  if (menuOpen.value) {
-    closeMenu(true);
+  if ( menuOpen.value ) {
+    closeMenu( true );
 
     return;
   }
   menuPosition.value = undefined;
   menuOpen.value = true;
-  nextTick(() => menu.value?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus());
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
 }
 
-function openContextMenu(event: MouseEvent): void {
+function openContextMenu( event: MouseEvent ): void {
   const menuWidth = 190;
   const menuHeight = 164;
   menuPosition.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+    x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
+    y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
   };
   menuOpen.value = true;
-  nextTick(() => menu.value?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus());
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
 }
 
-function closeMenu(restoreFocus = false): void {
+function closeMenu( restoreFocus = false ): void {
   menuOpen.value = false;
   menuPosition.value = undefined;
-  if (restoreFocus) {
-    nextTick(() => menuButton.value?.focus());
+  if ( restoreFocus ) {
+    nextTick( () => menuButton.value?.focus() );
   }
 }
 
-function handleMenuFocusOut(event: FocusEvent): void {
+function handleMenuFocusOut( event: FocusEvent ): void {
   const anchor = event.currentTarget as HTMLElement;
-  if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
+  if ( event.relatedTarget instanceof Node && anchor.contains( event.relatedTarget ) ) {
     return;
   }
   closeMenu();
@@ -192,7 +192,11 @@ function handleMenuFocusOut(event: FocusEvent): void {
         @dragstart="startDrag"
         @dragend="finishDrag"
       >
-        <AppIcon class="vault-tree-attachment-icon" name="paperclip" :size="14" />
+        <AppIcon
+          class="vault-tree-attachment-icon"
+          name="paperclip"
+          :size="14"
+        />
         <span class="vault-tree-attachment-title">{{ fileName }}</span>
       </button>
       <div class="vault-tree-attachment-menu-anchor" @focusout="handleMenuFocusOut">
@@ -216,9 +220,13 @@ function handleMenuFocusOut(event: FocusEvent): void {
             :style="menuPosition ? { left: `${menuPosition.x}px`, top: `${menuPosition.y}px`, right: 'auto' } : undefined"
             role="menu"
             :aria-label="`Actions for ${fileName}`"
-            @keydown.esc.prevent="closeMenu(true)"
+            @keydown.esc.prevent="closeMenu( true )"
           >
-            <button type="button" role="menuitem" @click="insertIntoActiveNote">
+            <button
+              type="button"
+              role="menuitem"
+              @click="insertIntoActiveNote"
+            >
               <AppIcon name="paperclip" :size="14" />
               Insert into active note
             </button>
@@ -231,11 +239,19 @@ function handleMenuFocusOut(event: FocusEvent): void {
               <AppIcon :name="archive ? 'export' : 'arrow'" :size="14" />
               {{ actionLabel }}
             </button>
-            <button type="button" role="menuitem" @click="beginRename">
+            <button
+              type="button"
+              role="menuitem"
+              @click="beginRename"
+            >
               <AppIcon name="edit" :size="14" />
               Rename
             </button>
-            <button type="button" role="menuitem" @click="showInFolder">
+            <button
+              type="button"
+              role="menuitem"
+              @click="showInFolder"
+            >
               <AppIcon name="folder-open" :size="14" />
               Show in folder
             </button>
@@ -243,7 +259,11 @@ function handleMenuFocusOut(event: FocusEvent): void {
         </Transition>
       </div>
     </template>
-    <form v-else class="vault-tree-attachment-rename" @submit.prevent="saveRename">
+    <form
+      v-else
+      class="vault-tree-attachment-rename"
+      @submit.prevent="saveRename"
+    >
       <AppIcon name="paperclip" :size="14" />
       <input
         ref="renameInput"
@@ -253,7 +273,7 @@ function handleMenuFocusOut(event: FocusEvent): void {
         aria-label="Attachment file name"
         @blur="saveRename"
         @keydown.esc.prevent.stop="cancelRename"
-      />
+      >
     </form>
   </div>
 </template>

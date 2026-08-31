@@ -1,63 +1,63 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, ref } from 'vue';
 import {
   emptyRecentlyDeletedNotes,
   permanentlyDeleteRecentlyDeletedNote,
   recentlyDeletedNotes,
   recentlyDeletedState,
-  restoreRecentlyDeletedNote,
-} from "../stores/vault";
-import type { RecentlyDeletedNote } from "../types";
-import AppIcon from "./AppIcon.vue";
+  restoreRecentlyDeletedNote
+} from '../stores/vault';
+import type { RecentlyDeletedNote } from '../types';
+import AppIcon from './AppIcon.vue';
 
 const PAGE_SIZE = 50;
 
-const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
+const dateTimeFormatter = new Intl.DateTimeFormat( undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'short'
 });
-const visibleCount = ref(PAGE_SIZE);
+const visibleCount = ref( PAGE_SIZE );
 const workspaceRoot = ref<HTMLElement>();
 const pendingAction = ref<{
   id: string | null;
-  type: "restore" | "delete" | "empty";
-} | null>(null);
+  type: 'restore' | 'delete' | 'empty';
+} | null>( null );
 
-const visibleEntries = computed(() =>
-  recentlyDeletedNotes.value.slice(0, visibleCount.value),
+const visibleEntries = computed( () =>
+  recentlyDeletedNotes.value.slice( 0, visibleCount.value )
 );
 
-async function restore(entry: RecentlyDeletedNote): Promise<void> {
-  pendingAction.value = { id: entry.id, type: "restore" };
+async function restore( entry: RecentlyDeletedNote ): Promise<void> {
+  pendingAction.value = { id: entry.id, type: 'restore' };
   try {
-    await restoreRecentlyDeletedNote(entry.id);
+    await restoreRecentlyDeletedNote( entry.id );
   } finally {
     pendingAction.value = null;
   }
 }
 
-async function permanentlyDelete(entry: RecentlyDeletedNote): Promise<void> {
-  const title = displayTitle(entry);
+async function permanentlyDelete( entry: RecentlyDeletedNote ): Promise<void> {
+  const title = displayTitle( entry );
   const confirmed = window.confirm(
-    `Permanently delete “${title}”? This cannot be undone.`,
+    `Permanently delete “${ title }”? This cannot be undone.`
   );
-  if (!confirmed) {
+  if ( !confirmed ) {
     return;
   }
 
-  const deletedIndex = visibleEntries.value.findIndex((candidate) => candidate.id === entry.id);
-  pendingAction.value = { id: entry.id, type: "delete" };
+  const deletedIndex = visibleEntries.value.findIndex( ( candidate ) => candidate.id === entry.id );
+  pendingAction.value = { id: entry.id, type: 'delete' };
   try {
-    const deleted = await permanentlyDeleteRecentlyDeletedNote(entry.id);
-    if (!deleted) {
+    const deleted = await permanentlyDeleteRecentlyDeletedNote( entry.id );
+    if ( !deleted ) {
       return;
     }
 
     await nextTick();
-    const nextEntry = visibleEntries.value[Math.min(deletedIndex, visibleEntries.value.length - 1)];
-    if (nextEntry) {
+    const nextEntry = visibleEntries.value[ Math.min( deletedIndex, visibleEntries.value.length - 1 ) ];
+    if ( nextEntry ) {
       workspaceRoot.value
-        ?.querySelector<HTMLButtonElement>(`[data-recovery-id="${nextEntry.id}"] [data-recovery-action="restore"]`)
+        ?.querySelector<HTMLButtonElement>( `[data-recovery-id="${ nextEntry.id }"] [data-recovery-action="restore"]` )
         ?.focus();
     }
   } finally {
@@ -67,15 +67,15 @@ async function permanentlyDelete(entry: RecentlyDeletedNote): Promise<void> {
 
 async function emptyRecentlyDeleted(): Promise<void> {
   const count = recentlyDeletedNotes.value.length;
-  const noun = count === 1 ? "note" : "notes";
+  const noun = count === 1 ? 'note' : 'notes';
   const confirmed = window.confirm(
-    `Permanently delete ${count} ${noun} from Recently Deleted? This cannot be undone.`,
+    `Permanently delete ${ count } ${ noun } from Recently Deleted? This cannot be undone.`
   );
-  if (!confirmed) {
+  if ( !confirmed ) {
     return;
   }
 
-  pendingAction.value = { id: null, type: "empty" };
+  pendingAction.value = { id: null, type: 'empty' };
   try {
     await emptyRecentlyDeletedNotes();
   } finally {
@@ -83,39 +83,39 @@ async function emptyRecentlyDeleted(): Promise<void> {
   }
 }
 
-function displayTitle(entry: RecentlyDeletedNote): string {
-  return entry.note.title.trim() || "Untitled note";
+function displayTitle( entry: RecentlyDeletedNote ): string {
+  return entry.note.title.trim() || 'Untitled note';
 }
 
-function contentPreview(content: string): string {
+function contentPreview( content: string ): string {
   return content
-    .slice(0, 2_000)
-    .replace(/[#*_>`\[\]]/g, " ")
-    .replace(/\s+/g, " ")
+    .slice( 0, 2_000 )
+    .replace( /[#*_>`[\]]/g, ' ' )
+    .replace( /\s+/g, ' ' )
     .trim()
-    .slice(0, 220) || "No content";
+    .slice( 0, 220 ) || 'No content';
 }
 
-function originalLocation(entry: RecentlyDeletedNote): string {
-  const fileName = entry.note.relativePath.split("/").pop() || `${displayTitle(entry)}.md`;
-  const folder = entry.originalFolderPath || "Vault root";
+function originalLocation( entry: RecentlyDeletedNote ): string {
+  const fileName = entry.note.relativePath.split( '/' ).pop() || `${ displayTitle( entry ) }.md`;
+  const folder = entry.originalFolderPath || 'Vault root';
 
-  return `${folder}/${fileName}`;
+  return `${ folder }/${ fileName }`;
 }
 
-function formatDateTime(timestamp: number): string {
-  const date = new Date(timestamp);
+function formatDateTime( timestamp: number ): string {
+  const date = new Date( timestamp );
 
-  return Number.isNaN(date.getTime()) ? "Unknown date" : dateTimeFormatter.format(date);
+  return Number.isNaN( date.getTime() ) ? 'Unknown date' : dateTimeFormatter.format( date );
 }
 
-function dateTimeValue(timestamp: number): string | undefined {
-  const date = new Date(timestamp);
+function dateTimeValue( timestamp: number ): string | undefined {
+  const date = new Date( timestamp );
 
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  return Number.isNaN( date.getTime() ) ? undefined : date.toISOString();
 }
 
-function isPending(entry: RecentlyDeletedNote, type: "restore" | "delete"): boolean {
+function isPending( entry: RecentlyDeletedNote, type: 'restore' | 'delete' ): boolean {
   return pendingAction.value?.id === entry.id && pendingAction.value.type === type;
 }
 
@@ -136,7 +136,9 @@ function loadMore(): void {
       <header class="utility-header-row recently-deleted-header" data-ui-region="recently-deleted-header">
         <div class="utility-hero compact">
           <span class="utility-eyebrow">Recovery</span>
-          <h1 id="recently-deleted-title">Recently Deleted</h1>
+          <h1 id="recently-deleted-title">
+            Recently Deleted
+          </h1>
           <p>Restore deleted notes or remove them permanently. Notes expire automatically after seven days.</p>
         </div>
 
@@ -164,7 +166,11 @@ function loadMore(): void {
         </span>
       </div>
 
-      <p v-if="recentlyDeletedState.error" class="recently-deleted-error" role="alert">
+      <p
+        v-if="recentlyDeletedState.error"
+        class="recently-deleted-error"
+        role="alert"
+      >
         <AppIcon name="info" :size="16" />
         {{ recentlyDeletedState.error }}
       </p>
@@ -183,30 +189,38 @@ function loadMore(): void {
           >
             <header class="recently-deleted-card-header">
               <div class="recently-deleted-card-title">
-                <span v-if="entry.note.pinned" class="recently-deleted-favorite" title="Favorite note">
+                <span
+                  v-if="entry.note.pinned"
+                  class="recently-deleted-favorite"
+                  title="Favorite note"
+                >
                   <AppIcon name="star" :size="14" />
                   <span>Favorite</span>
                 </span>
-                <h2>{{ displayTitle(entry) }}</h2>
+                <h2>{{ displayTitle( entry ) }}</h2>
               </div>
 
-              <time :datetime="dateTimeValue(entry.deletedAt)">
-                Deleted {{ formatDateTime(entry.deletedAt) }}
+              <time :datetime="dateTimeValue( entry.deletedAt )">
+                Deleted {{ formatDateTime( entry.deletedAt ) }}
               </time>
             </header>
 
-            <p class="recently-deleted-preview">{{ contentPreview(entry.note.content) }}</p>
+            <p class="recently-deleted-preview">
+              {{ contentPreview( entry.note.content ) }}
+            </p>
 
             <dl class="recently-deleted-details">
               <div>
                 <dt>Original location</dt>
-                <dd :title="originalLocation(entry)">{{ originalLocation(entry) }}</dd>
+                <dd :title="originalLocation( entry )">
+                  {{ originalLocation( entry ) }}
+                </dd>
               </div>
               <div>
                 <dt>Expires</dt>
                 <dd>
-                  <time :datetime="dateTimeValue(entry.expiresAt)">
-                    {{ formatDateTime(entry.expiresAt) }}
+                  <time :datetime="dateTimeValue( entry.expiresAt )">
+                    {{ formatDateTime( entry.expiresAt ) }}
                   </time>
                 </dd>
               </div>
@@ -217,23 +231,23 @@ function loadMore(): void {
                 type="button"
                 class="primary-action-button small"
                 :disabled="recentlyDeletedState.busy"
-                :aria-label="`Restore ${displayTitle(entry)}`"
+                :aria-label="`Restore ${displayTitle( entry )}`"
                 data-recovery-action="restore"
-                @click="restore(entry)"
+                @click="restore( entry )"
               >
                 <AppIcon name="refresh" :size="14" />
-                {{ isPending(entry, "restore") ? "Restoring…" : "Restore" }}
+                {{ isPending( entry, "restore" ) ? "Restoring…" : "Restore" }}
               </button>
               <button
                 type="button"
                 class="secondary-button recently-deleted-delete-button"
                 :disabled="recentlyDeletedState.busy"
-                :aria-label="`Permanently delete ${displayTitle(entry)}`"
+                :aria-label="`Permanently delete ${displayTitle( entry )}`"
                 data-recovery-action="delete"
-                @click="permanentlyDelete(entry)"
+                @click="permanentlyDelete( entry )"
               >
                 <AppIcon name="trash" :size="14" />
-                {{ isPending(entry, "delete") ? "Deleting…" : "Delete Permanently" }}
+                {{ isPending( entry, "delete" ) ? "Deleting…" : "Delete Permanently" }}
               </button>
             </footer>
           </article>

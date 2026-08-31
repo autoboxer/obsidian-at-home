@@ -1,5 +1,5 @@
-export type SearchScope = "all" | "titles" | "content" | "tags";
-export type ToolView = "notes" | "search" | "templates" | "snippets" | "settings";
+export type SearchScope = 'all' | 'titles' | 'content' | 'tags';
+export type ToolView = 'notes' | 'search' | 'templates' | 'snippets' | 'settings';
 
 export interface Note {
   id: string;
@@ -63,9 +63,9 @@ export interface CssSnippet {
 }
 
 export type AssetEmbedLocation =
-  | "vault-root"
-  | "note-folder"
-  | "specified-folder";
+  | 'vault-root'
+  | 'note-folder'
+  | 'specified-folder';
 
 export interface AssetEmbedSettings {
   location: AssetEmbedLocation;
@@ -123,7 +123,7 @@ export interface VaultData {
   snippets: CssSnippet[];
   activeNoteId: string | null;
   recentNoteIds: string[];
-  selectedFolderId: "all" | "favorites" | "recent";
+  selectedFolderId: 'all' | 'favorites' | 'recent';
   embeddedImages: EmbeddedImage[];
   imageFiles: VaultImageFile[];
   imageEmbedSettings: ImageEmbedSettings;
@@ -215,8 +215,8 @@ export interface WorkspaceAttachmentCopyResult {
 }
 
 export interface VaultSessionState {
-  phase: "loading" | "needs-vault" | "ready" | "error";
-  backend: "native" | "browser";
+  phase: 'loading' | 'needs-vault' | 'ready' | 'error';
+  backend: 'native' | 'browser';
   path: string | null;
   recentVaults: VaultDescriptor[];
   error: string | null;
@@ -231,7 +231,7 @@ export interface SearchResult {
   note: Note;
   score: number;
   snippet: string;
-  reason: "title" | "content" | "tag" | "folder";
+  reason: 'title' | 'content' | 'tag' | 'folder';
 }
 
 export interface WikiLink {

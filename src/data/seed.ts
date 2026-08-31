@@ -1,17 +1,17 @@
-import type { CssSnippet, Folder, Note, NoteTemplate, VaultData } from "../types";
+import type { CssSnippet, Folder, Note, NoteTemplate, VaultData } from '../types';
 
 const DAY = 86_400_000;
 
-export function createSeedVault(now = Date.now()): VaultData {
+export function createSeedVault( now = Date.now() ): VaultData {
   const folders: Folder[] = [];
 
   const notes: Note[] = [
     {
-      id: "note-getting-started",
-      title: "Getting started",
-      relativePath: "Getting started.md",
+      id: 'note-getting-started',
+      title: 'Getting started',
+      relativePath: 'Getting started.md',
       folderId: null,
-      tags: ["getting-started"],
+      tags: [ 'getting-started' ],
       pinned: false,
       createdAt: now - DAY,
       updatedAt: now,
@@ -149,109 +149,109 @@ Open **CSS snippets**, create a snippet, then save and enable it. Use **Selector
 }
 \`\`\`
 
-For CSS properties and examples, see the [MDN CSS reference](https://developer.mozilla.org/en-US/docs/Web/CSS).`,
-    },
+For CSS properties and examples, see the [MDN CSS reference](https://developer.mozilla.org/en-US/docs/Web/CSS).`
+    }
   ];
 
   const templates: NoteTemplate[] = [
     {
-      id: "template-blank",
-      name: "Blank note",
-      description: "A title and open space for free-form notes.",
-      titlePattern: "Untitled note",
-      content: "# {{title}}\n\n",
-      glyph: "file-plus",
+      id: 'template-blank',
+      name: 'Blank note',
+      description: 'A title and open space for free-form notes.',
+      titlePattern: 'Untitled note',
+      content: '# {{title}}\n\n',
+      glyph: 'file-plus',
       createdAt: now - 30 * DAY,
-      builtIn: true,
+      builtIn: true
     },
     {
-      id: "template-daily",
-      name: "Daily note",
-      description: "A simple structure for priorities and daily notes.",
-      titlePattern: "{{date}}",
-      content: "# {{date}}\n\n## Focus\n\n- \n\n## Notes\n\n\n## Small win\n\n",
-      glyph: "calendar",
+      id: 'template-daily',
+      name: 'Daily note',
+      description: 'A simple structure for priorities and daily notes.',
+      titlePattern: '{{date}}',
+      content: '# {{date}}\n\n## Focus\n\n- \n\n## Notes\n\n\n## Small win\n\n',
+      glyph: 'calendar',
       createdAt: now - 30 * DAY,
-      builtIn: true,
+      builtIn: true
     },
     {
-      id: "template-meeting",
-      name: "Meeting notes",
-      description: "Context, decisions, and follow-ups in one place.",
-      titlePattern: "Meeting — {{date}}",
-      content: "# {{title}}\n\n**When:** {{date}} at {{time}}\n\n## Context\n\n## Notes\n\n## Decisions\n\n- \n\n## Follow-ups\n\n- [ ] \n",
-      glyph: "users",
+      id: 'template-meeting',
+      name: 'Meeting notes',
+      description: 'Context, decisions, and follow-ups in one place.',
+      titlePattern: 'Meeting — {{date}}',
+      content: '# {{title}}\n\n**When:** {{date}} at {{time}}\n\n## Context\n\n## Notes\n\n## Decisions\n\n- \n\n## Follow-ups\n\n- [ ] \n',
+      glyph: 'users',
       createdAt: now - 30 * DAY,
-      builtIn: true,
+      builtIn: true
     },
     {
-      id: "template-project",
-      name: "Project brief",
+      id: 'template-project',
+      name: 'Project brief',
       description: "Define a project's goal, constraints, references, and next action.",
-      titlePattern: "Project brief",
-      content: "# {{title}}\n\n## Purpose\n\n## Desired outcome\n\n## Constraints\n\n- \n\n## References\n\n- [[Related note]]\n\n## Next action\n\n- [ ] \n",
-      glyph: "briefcase",
+      titlePattern: 'Project brief',
+      content: '# {{title}}\n\n## Purpose\n\n## Desired outcome\n\n## Constraints\n\n- \n\n## References\n\n- [[Related note]]\n\n## Next action\n\n- [ ] \n',
+      glyph: 'briefcase',
       createdAt: now - 30 * DAY,
-      builtIn: true,
-    },
+      builtIn: true
+    }
   ];
 
   const snippets: CssSnippet[] = [
     {
-      id: "snippet-editor-serif",
-      name: "Comfortable writing",
-      description: "Use relaxed line height and spacing in the live editor.",
+      id: 'snippet-editor-serif',
+      name: 'Comfortable writing',
+      description: 'Use relaxed line height and spacing in the live editor.',
       enabled: true,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.source-editor {\n  --source-editor-line-height: calc(var(--note-font-size) * 1.82);\n}\n\n.source-textarea {\n  letter-spacing: -0.006em;\n}`,
+      css: `.source-editor {\n  --source-editor-line-height: calc(var(--note-font-size) * 1.82);\n}\n\n.source-textarea {\n  letter-spacing: -0.006em;\n}`
     },
     {
-      id: "snippet-violet-headings",
-      name: "Violet headings",
-      description: "Give note headings a subtle lavender tint.",
+      id: 'snippet-violet-headings',
+      name: 'Violet headings',
+      description: 'Give note headings a subtle lavender tint.',
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.live-markdown-block.is-heading {\n  color: #c9c1ff;\n}`,
+      css: `.live-markdown-block.is-heading {\n  color: #c9c1ff;\n}`
     },
     {
-      id: "snippet-wide-page",
-      name: "Wide editor",
-      description: "Reduce side padding for notes that benefit from more room.",
+      id: 'snippet-wide-page',
+      name: 'Wide editor',
+      description: 'Reduce side padding for notes that benefit from more room.',
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`,
-    },
+      css: `.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`
+    }
   ];
 
   return {
-    name: "Home Vault",
+    name: 'Home Vault',
     notes,
     folders,
     templates,
     snippets,
-    activeNoteId: "note-getting-started",
-    recentNoteIds: ["note-getting-started"],
-    selectedFolderId: "all",
+    activeNoteId: 'note-getting-started',
+    recentNoteIds: [ 'note-getting-started' ],
+    selectedFolderId: 'all',
     embeddedImages: [],
     imageFiles: [],
     imageEmbedSettings: {
-      location: "vault-root",
-      folderPath: "",
+      location: 'vault-root',
+      folderPath: ''
     },
     embeddedAttachments: [],
     attachmentFiles: [],
     attachmentEmbedSettings: {
-      location: "vault-root",
-      folderPath: "",
-    },
+      location: 'vault-root',
+      folderPath: ''
+    }
   };
 }
 
-export function createEmptyVault(now = Date.now()): VaultData {
-  const starter = createSeedVault(now);
+export function createEmptyVault( now = Date.now() ): VaultData {
+  const starter = createSeedVault( now );
 
   return {
     ...starter,
@@ -259,6 +259,6 @@ export function createEmptyVault(now = Date.now()): VaultData {
     folders: [],
     activeNoteId: null,
     recentNoteIds: [],
-    selectedFolderId: "all",
+    selectedFolderId: 'all'
   };
 }

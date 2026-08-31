@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   createFilesystemVault,
   openFilesystemVault,
@@ -7,75 +7,75 @@ import {
   reloadFilesystemVault,
   switchFilesystemVault,
   uiState,
-  vaultSession,
-} from "../stores/vault";
-import AppIcon from "./AppIcon.vue";
+  vaultSession
+} from '../stores/vault';
+import AppIcon from './AppIcon.vue';
 
-const vaultName = ref("Home Vault");
+const vaultName = ref( 'Home Vault' );
 const nameField = ref<HTMLInputElement>();
 const dialog = ref<HTMLElement>();
 
-const firstRun = computed(() => vaultSession.phase !== "ready");
+const firstRun = computed( () => vaultSession.phase !== 'ready' );
 const canClose = computed(
-  () => vaultSession.phase === "ready" && !vaultSession.busy && !vaultSession.conflict,
+  () => vaultSession.phase === 'ready' && !vaultSession.busy && !vaultSession.conflict
 );
-const nativeAvailable = computed(() => vaultSession.backend === "native");
-const nameReady = computed(() => vaultName.value.trim().length > 0);
-const errorTitle = computed(() => {
-  if (vaultSession.conflict) {
-    return "This vault changed on disk";
+const nativeAvailable = computed( () => vaultSession.backend === 'native' );
+const nameReady = computed( () => vaultName.value.trim().length > 0 );
+const errorTitle = computed( () => {
+  if ( vaultSession.conflict ) {
+    return 'This vault changed on disk';
   }
-  if (vaultSession.phase === "error") {
-    return "Couldn’t open your vaults";
+  if ( vaultSession.phase === 'error' ) {
+    return 'Couldn’t open your vaults';
   }
 
-  return "Couldn’t save or open this vault";
+  return 'Couldn’t save or open this vault';
 });
 
 function closeChooser(): void {
-  if (canClose.value) {
+  if ( canClose.value ) {
     uiState.vaultChooserOpen = false;
   }
 }
 
-function handleWindowKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
+function handleWindowKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' ) {
     closeChooser();
   }
 }
 
-function handleDialogKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Tab" || !dialog.value) {
+function handleDialogKeydown( event: KeyboardEvent ): void {
+  if ( event.key !== 'Tab' || !dialog.value ) {
     return;
   }
-  const focusable = Array.from(dialog.value.querySelectorAll<HTMLElement>(
-    "button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex='-1'])",
-  )).filter((element) => !element.hasAttribute("hidden"));
-  if (!focusable.length) {
+  const focusable = Array.from( dialog.value.querySelectorAll<HTMLElement>(
+    "button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex='-1'])"
+  ) ).filter( ( element ) => !element.hasAttribute( 'hidden' ) );
+  if ( !focusable.length ) {
     event.preventDefault();
     dialog.value.focus();
 
     return;
   }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
+  const first = focusable[ 0 ];
+  const last = focusable[ focusable.length - 1 ];
+  if ( event.shiftKey && document.activeElement === first ) {
     event.preventDefault();
     last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
+  } else if ( !event.shiftKey && document.activeElement === last ) {
     event.preventDefault();
     first.focus();
   }
 }
 
 function focusInitialControl(): void {
-  nextTick(() => {
+  nextTick( () => {
     const recoveryAction = dialog.value?.querySelector<HTMLButtonElement>(
-      ".vault-chooser-conflict button:not(:disabled)",
+      '.vault-chooser-conflict button:not(:disabled)'
     );
-    if (recoveryAction) {
+    if ( recoveryAction ) {
       recoveryAction.focus();
-    } else if (nameField.value && !nameField.value.disabled) {
+    } else if ( nameField.value && !nameField.value.disabled ) {
       nameField.value.select();
     } else {
       dialog.value?.focus();
@@ -86,53 +86,53 @@ function focusInitialControl(): void {
 watch(
   () => vaultSession.phase,
   focusInitialControl,
-  { immediate: true },
+  { immediate: true }
 );
 
-onMounted(() => {
-  window.addEventListener("keydown", handleWindowKeydown);
+onMounted( () => {
+  window.addEventListener( 'keydown', handleWindowKeydown );
   focusInitialControl();
 });
-onBeforeUnmount(() => window.removeEventListener("keydown", handleWindowKeydown));
+onBeforeUnmount( () => window.removeEventListener( 'keydown', handleWindowKeydown ) );
 
-async function createVault(useLegacy: boolean): Promise<void> {
-  if (!nativeAvailable.value || vaultSession.busy || !nameReady.value) {
+async function createVault( useLegacy: boolean ): Promise<void> {
+  if ( !nativeAvailable.value || vaultSession.busy || !nameReady.value ) {
     return;
   }
-  const succeeded = await createFilesystemVault(vaultName.value.trim(), useLegacy);
-  if (succeeded) {
+  const succeeded = await createFilesystemVault( vaultName.value.trim(), useLegacy );
+  if ( succeeded ) {
     closeChooser();
   }
 }
 
 async function openVault(): Promise<void> {
-  if (!nativeAvailable.value || vaultSession.busy) {
+  if ( !nativeAvailable.value || vaultSession.busy ) {
     return;
   }
   const succeeded = await openFilesystemVault();
-  if (succeeded) {
+  if ( succeeded ) {
     closeChooser();
   }
 }
 
-async function switchVault(path: string): Promise<void> {
-  if (!nativeAvailable.value || vaultSession.busy || path === vaultSession.path) {
+async function switchVault( path: string ): Promise<void> {
+  if ( !nativeAvailable.value || vaultSession.busy || path === vaultSession.path ) {
     return;
   }
-  const succeeded = await switchFilesystemVault(path);
-  if (succeeded) {
+  const succeeded = await switchFilesystemVault( path );
+  if ( succeeded ) {
     closeChooser();
   }
 }
 
-async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
-  if (vaultSession.busy) {
+async function resolveConflict( reloadFromDisk: boolean ): Promise<void> {
+  if ( vaultSession.busy ) {
     return;
   }
   const succeeded = reloadFromDisk
     ? await reloadFilesystemVault()
     : await overwriteFilesystemVault();
-  if (succeeded) {
+  if ( succeeded ) {
     closeChooser();
   }
 }
@@ -181,14 +181,30 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
         </button>
       </header>
 
-      <div v-if="vaultSession.phase === 'loading'" class="vault-chooser-loading" role="status">
-        <AppIcon class="vault-chooser-spinner" name="refresh" :size="22" />
+      <div
+        v-if="vaultSession.phase === 'loading'"
+        class="vault-chooser-loading"
+        role="status"
+      >
+        <AppIcon
+          class="vault-chooser-spinner"
+          name="refresh"
+          :size="22"
+        />
         <strong>Opening your vault…</strong>
         <span>Reading Markdown files and rebuilding the note index.</span>
       </div>
 
-      <div v-else class="vault-chooser-body" data-modal-scroll-region>
-        <div v-if="vaultSession.error" class="vault-chooser-alert vault-chooser-alert--error" role="alert">
+      <div
+        v-else
+        class="vault-chooser-body"
+        data-modal-scroll-region
+      >
+        <div
+          v-if="vaultSession.error"
+          class="vault-chooser-alert vault-chooser-alert--error"
+          role="alert"
+        >
           <AppIcon name="info" :size="18" />
           <div>
             <strong>{{ errorTitle }}</strong>
@@ -196,7 +212,11 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
           </div>
         </div>
 
-        <article v-if="vaultSession.conflict" class="vault-chooser-conflict" role="alert">
+        <article
+          v-if="vaultSession.conflict"
+          class="vault-chooser-conflict"
+          role="alert"
+        >
           <div>
             <strong>Choose which version to keep</strong>
             <p>
@@ -209,7 +229,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
               type="button"
               class="secondary-button"
               :disabled="vaultSession.busy"
-              @click="resolveConflict(true)"
+              @click="resolveConflict( true )"
             >
               Reload from disk
             </button>
@@ -217,7 +237,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
               type="button"
               class="settings-button settings-button--danger-ghost"
               :disabled="vaultSession.busy"
-              @click="resolveConflict(false)"
+              @click="resolveConflict( false )"
             >
               Keep app version
             </button>
@@ -249,7 +269,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
               type="button"
               class="secondary-button"
               :disabled="vaultSession.busy"
-              @click="resolveConflict(true)"
+              @click="resolveConflict( true )"
             >
               Discard and reload
             </button>
@@ -262,7 +282,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
             {{ vaultSession.warnings.length === 1 ? "file warning" : "file warnings" }}
           </summary>
           <ul>
-            <li v-for="(warning, index) in vaultSession.warnings" :key="`${index}-${warning}`">
+            <li v-for="( warning, index ) in vaultSession.warnings" :key="`${index}-${warning}`">
               {{ warning }}
             </li>
           </ul>
@@ -295,8 +315,8 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
             autocomplete="off"
             :disabled="vaultSession.busy"
             placeholder="Home Vault"
-            @keydown.enter.prevent="createVault(false)"
-          />
+            @keydown.enter.prevent="createVault( false )"
+          >
           <small>Used when creating a folder or saving your existing notes.</small>
         </label>
 
@@ -312,7 +332,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
             type="button"
             class="primary-action-button vault-chooser-action"
             :disabled="vaultSession.busy || !nativeAvailable || !nameReady"
-            @click="createVault(true)"
+            @click="createVault( true )"
           >
             <AppIcon name="folder-open" :size="16" />
             Save existing notes to a folder
@@ -332,7 +352,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
               type="button"
               class="primary-action-button vault-chooser-action"
               :disabled="vaultSession.busy || !nativeAvailable || !nameReady"
-              @click="createVault(false)"
+              @click="createVault( false )"
             >
               <AppIcon name="plus" :size="16" />
               Create vault
@@ -359,7 +379,11 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
           </article>
         </div>
 
-        <section v-if="vaultSession.recentVaults.length" class="vault-chooser-recents" aria-labelledby="recent-vaults-title">
+        <section
+          v-if="vaultSession.recentVaults.length"
+          class="vault-chooser-recents"
+          aria-labelledby="recent-vaults-title"
+        >
           <div class="vault-chooser-section-heading">
             <span id="recent-vaults-title">Recent vaults</span>
             <small>{{ vaultSession.recentVaults.length }}</small>
@@ -372,7 +396,7 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
               class="vault-chooser-recent"
               :class="{ active: vault.path === vaultSession.path }"
               :disabled="vaultSession.busy || !nativeAvailable || vault.path === vaultSession.path"
-              @click="switchVault(vault.path)"
+              @click="switchVault( vault.path )"
             >
               <span class="vault-chooser-recent-icon">
                 <AppIcon name="folder" :size="16" />
@@ -385,15 +409,27 @@ async function resolveConflict(reloadFromDisk: boolean): Promise<void> {
                 <AppIcon name="check" :size="13" />
                 Open
               </span>
-              <AppIcon v-else name="arrow" :size="15" />
+              <AppIcon
+                v-else
+                name="arrow"
+                :size="15"
+              />
             </button>
           </div>
         </section>
       </div>
 
       <footer class="vault-chooser-footer">
-        <span v-if="vaultSession.busy" class="vault-chooser-busy" role="status">
-          <AppIcon class="vault-chooser-spinner" name="refresh" :size="14" />
+        <span
+          v-if="vaultSession.busy"
+          class="vault-chooser-busy"
+          role="status"
+        >
+          <AppIcon
+            class="vault-chooser-spinner"
+            name="refresh"
+            :size="14"
+          />
           Working with your vault…
         </span>
         <span v-else>Obsidian At Home does not upload or sync your vault.</span>
