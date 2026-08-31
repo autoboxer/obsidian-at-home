@@ -3,7 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, reactive, watch } from 'vue';
 import { createEmptyVault, createSeedVault } from '../data/seed';
 import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from '../lib';
-import { resolveMarkdownImagePath, utf8ByteLength } from '../lib/imageEmbeds';
+import { resolveMarkdownImagePath } from '../lib/imageEmbeds';
 import {
   formatMarkdownImage,
   parseMarkdownImages,
@@ -14,8 +14,7 @@ import {
   markdownAttachmentIsArchive,
   markdownAttachmentIsExecutable,
   parseMarkdownAttachments,
-  relativeAttachmentDestination,
-  type ParsedMarkdownAttachment
+  relativeAttachmentDestination
 } from '../lib/markdownAttachments';
 import {
   compareRecentlyDeletedNotes,
@@ -39,6 +38,18 @@ import {
   deleteNoteEditorHistory,
   pruneNoteEditorHistories
 } from './editorHistories';
+import {
+  applyMarkdownReplacements,
+  folderContainsVaultAssets,
+  isSafeVaultAttachmentFileName,
+  isSafeVaultImageFileName,
+  rebuildVaultAssetFolders,
+  rewriteVaultAssetDestinationsForNotePath,
+  rewriteVaultAttachmentReferences,
+  rewriteVaultImageReferences,
+  upsertVaultAttachmentFile,
+  upsertVaultImageFile
+} from './vaultAssets';
 import {
   archiveWorkspaceNote,
   bootstrapWorkspace,
@@ -1947,32 +1958,7 @@ function safeNoteFileStem( value: string ): string {
 }
 
 function folderContainsAssets( folderId: string ): boolean {
-  const path = folderPath( folderId );
-  if ( !path ) {
-    return false;
-  }
-  const folderKey = path.toLocaleLowerCase();
-
-  const containsImage = vaultState.imageFiles.some( ( image ) => {
-    const imagePath = image.relativePath.toLocaleLowerCase();
-
-    return imagePath.startsWith( `${ folderKey }/` );
-  });
-
-  return containsImage || vaultState.attachmentFiles.some( ( attachment ) => {
-    const attachmentPath = attachment.relativePath.toLocaleLowerCase();
-
-    return attachmentPath.startsWith( `${ folderKey }/` );
-  });
-}
-
-function trackedImagePath( assetId: string | undefined ): string | undefined {
-  if ( !assetId ) {
-    return undefined;
-  }
-
-  return vaultState.embeddedImages.find( ( image ) => image.id === assetId )?.relativePath
-    ?? vaultState.imageFiles.find( ( image ) => image.assetId === assetId )?.relativePath;
+  return folderContainsVaultAssets( vaultState, folderPath( folderId ) );
 }
 
 export function requestInsertVaultImage( image: VaultImageFile ): void {
@@ -2009,7 +1995,7 @@ async function relocateVaultImage(
   requestedFileName: string
 ): Promise<boolean> {
   const fileName = requestedFileName.trim();
-  if ( !isSafeImageFileName( fileName ) ) {
+  if ( !isSafeVaultImageFileName( fileName ) ) {
     notify( 'Enter a safe image file name with a supported extension', 'warning' );
 
     return false;
@@ -2051,7 +2037,8 @@ async function relocateVaultImage(
 
     const assetId = currentImage.assetId || createId( 'image' );
     const noteUpdates = vaultState.notes.flatMap( ( note ): WorkspaceImageNoteUpdate[] => {
-      const content = rewriteImageReferences(
+      const content = rewriteVaultImageReferences(
+        vaultState,
         note.content,
         note.relativePath,
         currentImage.relativePath,
@@ -2178,7 +2165,10 @@ async function relocateVaultAttachment(
   attachment: Pick<VaultAttachmentFile, 'assetId' | 'relativePath'>,
   relocation: VaultAttachmentRelocation
 ): Promise<boolean> {
-  if ( relocation.kind === 'rename' && !isSafeAttachmentFileName( relocation.fileName ) ) {
+  if (
+    relocation.kind === 'rename'
+    && !isSafeVaultAttachmentFileName( relocation.fileName )
+  ) {
     notify( 'Enter a safe non-Markdown, non-image file name', 'warning' );
 
     return false;
@@ -2234,7 +2224,8 @@ async function relocateVaultAttachment(
 
     const assetId = currentAttachment.assetId || createId( 'attachment' );
     const noteUpdates = vaultState.notes.flatMap( ( note ): WorkspaceAttachmentNoteUpdate[] => {
-      const content = rewriteAttachmentReferences(
+      const content = rewriteVaultAttachmentReferences(
+        vaultState,
         note.content,
         note.relativePath,
         currentAttachment.relativePath,
@@ -2336,65 +2327,6 @@ function applyRelocatedAttachmentResult(
     });
   });
   applyWorkspaceSaveResult( result );
-}
-
-function rewriteAttachmentReferences(
-  content: string,
-  noteRelativePath: string,
-  sourceRelativePath: string,
-  targetRelativePath: string,
-  previousAssetId: string | undefined,
-  assetId: string
-): string {
-  const replacements: Array<{ from: number; to: number; value: string }> = [];
-  const sourceName = sourceRelativePath.split( '/' ).at( -1 ) || 'Attachment';
-  const targetName = targetRelativePath.split( '/' ).at( -1 ) || 'Attachment';
-  for ( const attachment of parseVaultAttachmentReferences( content, noteRelativePath ) ) {
-    const resolvedPath = resolveMarkdownImagePath( noteRelativePath, attachment.destination );
-    const matchesAsset = Boolean( previousAssetId && attachment.assetId === previousAssetId );
-    const matchesPath = !attachment.assetId
-      && resolvedPath?.toLocaleLowerCase() === sourceRelativePath.toLocaleLowerCase();
-    if ( matchesAsset || matchesPath ) {
-      replacements.push({
-        from: attachment.start,
-        to: attachment.end + 1,
-        value: formatMarkdownAttachment({
-          label: attachment.label === sourceName ? targetName : attachment.label,
-          assetId,
-          destination: relativeAttachmentDestination( noteRelativePath, targetRelativePath ),
-          ...( attachment.title !== undefined ? { title: attachment.title } : {}),
-          inTable: attachment.raw.includes( '\\|' )
-        })
-      });
-    }
-  }
-
-  return applyMarkdownReplacements( content, replacements );
-}
-
-function vaultAttachmentPathKeys(): ReadonlySet<string> {
-  return new Set(
-    vaultState.attachmentFiles.map( ( attachment ) =>
-      attachment.relativePath.toLocaleLowerCase()
-    )
-  );
-}
-
-function parseVaultAttachmentReferences(
-  content: string,
-  noteRelativePath: string,
-  attachmentPaths = vaultAttachmentPathKeys()
-): ParsedMarkdownAttachment[] {
-  return parseMarkdownAttachments( content, {
-    acceptExtensionless( destination ) {
-      const relativePath = resolveMarkdownImagePath( noteRelativePath, destination );
-
-      return Boolean(
-        relativePath
-        && attachmentPaths.has( relativePath.toLocaleLowerCase() )
-      );
-    }
-  });
 }
 
 const ARCHIVE_COPY_DIRECTORY_KEY = 'obsidian-at-home.archive-copy-directory.v1';
@@ -2652,147 +2584,17 @@ function parentSystemPath( path: string ): string | undefined {
   return index > 0 ? path.slice( 0, index ) : undefined;
 }
 
-function rewriteImageReferences(
-  content: string,
-  noteRelativePath: string,
-  sourceRelativePath: string,
-  targetRelativePath: string,
-  previousAssetId: string | undefined,
-  assetId: string
-): string {
-  const replacements: Array<{ from: number; to: number; value: string }> = [];
-  for ( const image of parseMarkdownImages( content ) ) {
-    const trackedPath = trackedImagePath( image.assetId );
-    const resolvedPath = resolveMarkdownImagePath( noteRelativePath, image.destination );
-    const matchesAsset = Boolean( previousAssetId && image.assetId === previousAssetId );
-    const matchesPath = !trackedPath
-      && resolvedPath?.toLocaleLowerCase() === sourceRelativePath.toLocaleLowerCase();
-    if ( matchesAsset || matchesPath ) {
-      replacements.push({
-        from: image.start,
-        to: image.end + 1,
-        value: formatMarkdownImage({
-          alt: image.alt,
-          assetId,
-          destination: relativeImageDestination( noteRelativePath, targetRelativePath ),
-          ...( image.width ? { width: image.width } : {}),
-          ...( image.height ? { height: image.height } : {}),
-          ...( image.title !== undefined ? { title: image.title } : {}),
-          inTable: image.raw.includes( '\\|' )
-        })
-      });
-    }
-  }
-
-  return applyMarkdownReplacements( content, replacements );
-}
-
 function rewriteAssetDestinationsForNotePath(
   content: string,
   sourceNotePath: string,
   targetNotePath: string
 ): string {
-  if ( !sourceNotePath || !targetNotePath || sourceNotePath === targetNotePath ) {
-    return content;
-  }
-  const replacements: Array<{ from: number; to: number; value: string }> = [];
-  for ( const image of parseMarkdownImages( content ) ) {
-    const trackedPath = trackedImagePath( image.assetId );
-    const imagePath = trackedPath
-      ?? resolveMarkdownImagePath( sourceNotePath, image.destination );
-    if ( !imagePath ) {
-      continue;
-    }
-    replacements.push({
-      from: image.start,
-      to: image.end + 1,
-      value: formatMarkdownImage({
-        alt: image.alt,
-        ...( image.assetId ? { assetId: image.assetId } : {}),
-        destination: relativeImageDestination( targetNotePath, imagePath ),
-        ...( image.width ? { width: image.width } : {}),
-        ...( image.height ? { height: image.height } : {}),
-        ...( image.title !== undefined ? { title: image.title } : {}),
-        inTable: image.raw.includes( '\\|' )
-      })
-    });
-  }
-  for ( const attachment of parseVaultAttachmentReferences( content, sourceNotePath ) ) {
-    const trackedPath = attachment.assetId
-      ? vaultState.embeddedAttachments.find( ( asset ) => asset.id === attachment.assetId )
-        ?.relativePath
-        ?? vaultState.attachmentFiles.find( ( file ) => file.assetId === attachment.assetId )
-          ?.relativePath
-      : undefined;
-    const attachmentPath = trackedPath
-      ?? resolveMarkdownImagePath( sourceNotePath, attachment.destination );
-    if ( !attachmentPath ) {
-      continue;
-    }
-    replacements.push({
-      from: attachment.start,
-      to: attachment.end + 1,
-      value: formatMarkdownAttachment({
-        label: attachment.label,
-        ...( attachment.assetId ? { assetId: attachment.assetId } : {}),
-        destination: relativeAttachmentDestination( targetNotePath, attachmentPath ),
-        ...( attachment.title !== undefined ? { title: attachment.title } : {}),
-        inTable: attachment.raw.includes( '\\|' )
-      })
-    });
-  }
-
-  return applyMarkdownReplacements( content, replacements );
-}
-
-function applyMarkdownReplacements(
-  content: string,
-  replacements: Array<{ from: number; to: number; value: string }>
-): string {
-  let result = content;
-  for ( const replacement of [ ...replacements ].sort( ( left, right ) => right.from - left.from ) ) {
-    result = `${ result.slice( 0, replacement.from ) }${ replacement.value }${ result.slice( replacement.to ) }`;
-  }
-
-  return result;
-}
-
-function isSafeImageFileName( value: string ): boolean {
-  if (
-    !value
-    || value !== value.trim()
-    || value === '.'
-    || value === '..'
-    || utf8ByteLength( value ) > 180
-    || value.endsWith( '.' )
-    || /[\u0000-\u001f\u007f/\\:*?"<>|]/u.test( value )
-    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test( value )
-  ) {
-    return false;
-  }
-  const extension = value.split( '.' ).at( -1 )?.toLocaleLowerCase();
-
-  return Boolean( extension && [ 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif' ].includes( extension ) );
-}
-
-function isSafeAttachmentFileName( value: string ): boolean {
-  if (
-    !value
-    || value !== value.trim()
-    || value === '.'
-    || value === '..'
-    || utf8ByteLength( value ) > 180
-    || value.endsWith( '.' )
-    || /[\u0000-\u001f\u007f/\\:*?"<>|]/u.test( value )
-    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test( value )
-  ) {
-    return false;
-  }
-  const extension = value.split( '.' ).at( -1 )?.toLocaleLowerCase();
-
-  return !extension
-    || ![ 'md', 'markdown', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif' ]
-      .includes( extension );
+  return rewriteVaultAssetDestinationsForNotePath(
+    vaultState,
+    content,
+    sourceNotePath,
+    targetNotePath
+  );
 }
 
 export function noteCountForFolder( id: string ): number {
@@ -3089,61 +2891,15 @@ function applyWorkspaceAttachmentFiles( attachments: VaultAttachmentFile[]): voi
 }
 
 function upsertWorkspaceImageFile( image: VaultImageFile ): void {
-  const portablePath = image.relativePath.toLocaleLowerCase();
-  const index = vaultState.imageFiles.findIndex( ( candidate ) =>
-    ( image.assetId && candidate.assetId === image.assetId )
-    || candidate.relativePath.toLocaleLowerCase() === portablePath
-  );
-  if ( index >= 0 ) {
-    vaultState.imageFiles.splice( index, 1, { ...image });
-  } else {
-    vaultState.imageFiles.push({ ...image });
-  }
-  ensureWorkspaceAssetFolders( image.relativePath );
+  upsertVaultImageFile( vaultState, image, () => createId( 'folder' ) );
 }
 
 function upsertWorkspaceAttachmentFile( attachment: VaultAttachmentFile ): void {
-  const portablePath = attachment.relativePath.toLocaleLowerCase();
-  const index = vaultState.attachmentFiles.findIndex( ( candidate ) =>
-    ( attachment.assetId && candidate.assetId === attachment.assetId )
-    || candidate.relativePath.toLocaleLowerCase() === portablePath
-  );
-  if ( index >= 0 ) {
-    vaultState.attachmentFiles.splice( index, 1, { ...attachment });
-  } else {
-    vaultState.attachmentFiles.push({ ...attachment });
-  }
-  ensureWorkspaceAssetFolders( attachment.relativePath );
-}
-
-function ensureWorkspaceAssetFolders( relativePath: string ): void {
-  const components = relativePath.split( '/' ).slice( 0, -1 ).filter( Boolean );
-  let parentId: string | null = null;
-  for ( const name of components ) {
-    let folder = vaultState.folders.find( ( candidate ) =>
-      candidate.parentId === parentId
-      && candidate.name.localeCompare( name, undefined, { sensitivity: 'base' }) === 0
-    );
-    if ( !folder ) {
-      folder = {
-        id: createId( 'folder' ),
-        name,
-        parentId,
-        createdAt: Date.now()
-      };
-      vaultState.folders.push( folder );
-    }
-    parentId = folder.id;
-  }
+  upsertVaultAttachmentFile( vaultState, attachment, () => createId( 'folder' ) );
 }
 
 function rebuildWorkspaceAssetFolders(): void {
-  for ( const image of vaultState.imageFiles ) {
-    ensureWorkspaceAssetFolders( image.relativePath );
-  }
-  for ( const attachment of vaultState.attachmentFiles ) {
-    ensureWorkspaceAssetFolders( attachment.relativePath );
-  }
+  rebuildVaultAssetFolders( vaultState, () => createId( 'folder' ) );
 }
 
 function addVaultWarning( message: string ): void {
