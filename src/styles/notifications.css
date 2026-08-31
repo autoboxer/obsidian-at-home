@@ -1,0 +1,68 @@
+/* Notifications */
+.app-toast {
+  position: fixed;
+  z-index: 1200;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  max-width: min(380px, calc(100vw - 36px));
+  min-height: 43px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 13px 8px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: rgba(29, 25, 35, 0.97);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-soft);
+  font-size: 10.5px;
+  backdrop-filter: blur(15px);
+}
+
+.toast-icon {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: none;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--violet-wash);
+  color: var(--violet-bright);
+}
+
+.app-toast.tone-success .toast-icon {
+  background: var(--mint-wash);
+  color: var(--mint);
+}
+
+.app-toast.tone-warning .toast-icon {
+  background: var(--amber-wash);
+  color: var(--amber);
+}
+
+.app-toast-action {
+  flex: none;
+  padding: 4px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface-control);
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.app-toast-action:hover {
+  background: var(--surface-control-hover);
+  color: var(--text);
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 180ms ease, transform 180ms cubic-bezier(0.2, 0.75, 0.2, 1);
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+}

@@ -1,0 +1,232 @@
+/* Responsive desktop compression */
+@media (max-width: 1380px) {
+  :root {
+    --explorer-width: 270px;
+    --inspector-width: 270px;
+  }
+
+  .document-heading {
+    padding-right: 36px;
+    padding-left: 36px;
+  }
+}
+
+@media (max-width: 1180px) {
+  .notes-workspace .explorer-sidebar {
+    position: absolute;
+    z-index: 80;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 286px;
+    box-shadow: 24px 0 60px rgba(0, 0, 0, 0.38);
+  }
+
+  .notes-workspace .link-inspector {
+    position: absolute;
+    z-index: 75;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 286px;
+    box-shadow: -24px 0 60px rgba(0, 0, 0, 0.38);
+  }
+
+  .template-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+}
+
+@media (max-width: 900px) {
+  :root {
+    --rail-width: 48px;
+  }
+
+  .activity-rail {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .rail-button,
+  .rail-brand {
+    width: 34px;
+    height: 34px;
+  }
+
+  .desktop-titlebar {
+    grid-template-columns: 66px 1fr 62px;
+  }
+
+  .titlebar-title > span,
+  .titlebar-title > i {
+    display: none;
+  }
+
+  .notes-workspace .explorer-sidebar {
+    width: 272px;
+  }
+
+  .editor-toolbar {
+    padding-left: 8px;
+  }
+
+  .crumb-vault,
+  .crumb-folder,
+  .editor-crumbs > svg:not(:last-of-type) {
+    display: none;
+  }
+
+  .document-heading {
+    padding: 20px 24px 14px;
+  }
+
+  .note-title-input {
+    font-size: 30px;
+  }
+
+  .source-editor .source-textarea {
+    padding-right: 28px;
+    padding-left: 25px;
+    font-size: 12px;
+  }
+
+  .utility-page,
+  .settings-view {
+    padding-right: 30px;
+    padding-left: 30px;
+  }
+
+  .utility-header-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .search-results-grid,
+  .settings-transfer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .snippet-shell {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+
+  .snippet-editor-area {
+    padding-right: 24px;
+    padding-left: 24px;
+  }
+
+  .snippet-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-import-choice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-image-storage {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .settings-image-storage__controls {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 720px) {
+  .status-stats span:nth-child(3) {
+    display: none;
+  }
+
+  .notes-workspace .explorer-sidebar {
+    width: 258px;
+  }
+
+  .editor-toolbar-actions > .icon-button:not(.active):not(.context-toggle):not(.frontmatter-toggle),
+  .crumb-note {
+    display: none;
+  }
+
+  .document-heading {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .property-control select {
+    max-width: 95px;
+  }
+
+  .utility-page,
+  .settings-view {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
+
+  .snippet-shell {
+    grid-template-columns: 195px minmax(0, 1fr);
+  }
+
+  .snippet-header-actions .toggle-control {
+    font-size: 0;
+  }
+
+  .settings-hero {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .settings-section__heading,
+  .settings-danger-row,
+  .settings-confirmation {
+    align-items: flex-start;
+  }
+
+  .settings-section__heading {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .settings-section__meta {
+    white-space: normal;
+  }
+
+  .settings-danger-row {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .settings-danger-row > .settings-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .settings-confirmation {
+    grid-template-columns: 33px minmax(0, 1fr);
+  }
+
+  .settings-confirmation__actions {
+    grid-column: 1 / -1;
+    justify-self: flex-end;
+  }
+
+  .settings-import-preview__list {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-import-review__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-import-review__stat:nth-child(-n + 4) {
+    border-bottom: 1px solid var(--border-faint);
+  }
+
+  .settings-import-review__stat:nth-child(even) {
+    border-right: 0;
+  }
+}

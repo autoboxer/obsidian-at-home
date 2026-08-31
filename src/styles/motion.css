@@ -1,0 +1,121 @@
+/* Motion */
+.panel-left-enter-active,
+.panel-left-leave-active,
+.panel-right-enter-active,
+.panel-right-leave-active {
+  overflow: hidden;
+  transition:
+    width 190ms cubic-bezier(0.2, 0.75, 0.2, 1),
+    flex-basis 190ms cubic-bezier(0.2, 0.75, 0.2, 1),
+    opacity 150ms ease,
+    transform 190ms cubic-bezier(0.2, 0.75, 0.2, 1),
+    border-color 150ms ease;
+}
+
+.panel-left-enter-from,
+.panel-left-leave-to {
+  width: 0;
+  flex-basis: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
+.panel-right-enter-from,
+.panel-right-leave-to {
+  width: 0;
+  flex-basis: 0;
+  border-left-color: transparent;
+  opacity: 0;
+  transform: translateX(10px);
+}
+
+.workspace-fade-enter-active,
+.workspace-fade-leave-active {
+  transition: opacity 160ms ease, transform 180ms cubic-bezier(0.2, 0.75, 0.2, 1);
+}
+
+.workspace-fade-enter-from,
+.workspace-fade-leave-to {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+.workspace-switch-enter-active,
+.workspace-switch-leave-active {
+  transition: opacity 150ms ease, transform 170ms cubic-bezier(0.2, 0.75, 0.2, 1);
+}
+
+.workspace-switch-enter-from,
+.workspace-switch-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.overlay-fade-enter-active,
+.overlay-fade-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.overlay-fade-enter-active .editor-modal,
+.overlay-fade-leave-active .editor-modal,
+.overlay-fade-enter-active .command-palette,
+.overlay-fade-leave-active .command-palette {
+  transition: opacity 180ms ease, transform 190ms cubic-bezier(0.2, 0.75, 0.2, 1);
+}
+
+.overlay-fade-enter-from,
+.overlay-fade-leave-to,
+.overlay-fade-enter-from .editor-modal,
+.overlay-fade-leave-to .editor-modal,
+.overlay-fade-enter-from .command-palette,
+.overlay-fade-leave-to .command-palette {
+  opacity: 0;
+}
+
+.overlay-fade-enter-from .editor-modal,
+.overlay-fade-leave-to .editor-modal {
+  transform: translateY(10px) scale(0.985);
+}
+
+.overlay-fade-enter-from .command-palette,
+.overlay-fade-leave-to .command-palette {
+  transform: translateY(-9px) scale(0.985);
+}
+
+.popover-fade-enter-active,
+.popover-fade-leave-active {
+  transition: opacity 130ms ease, transform 140ms cubic-bezier(0.2, 0.75, 0.2, 1);
+  transform-origin: top right;
+}
+
+.popover-fade-enter-from,
+.popover-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.985);
+}
+
+.collapse-fade-enter-active,
+.collapse-fade-leave-active {
+  max-height: 1000px;
+  overflow: hidden;
+  transition: max-height 190ms ease, opacity 150ms ease, transform 180ms ease;
+}
+
+.collapse-fade-enter-from,
+.collapse-fade-leave-to {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-5px);
+}
+
+.chip-swap-enter-active,
+.chip-swap-leave-active {
+  transition: opacity 120ms ease, transform 130ms ease;
+}
+
+.chip-swap-enter-from,
+.chip-swap-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
+}
