@@ -54,9 +54,9 @@ function handleZoomFocusOut(event: FocusEvent): void {
 
 <template>
   <aside class="activity-rail" data-ui-region="activity-rail">
-    <button class="rail-brand" type="button" title="Obsidian At Home" @click="selectTool('notes')">
-      <img :src="appIcon" alt="" />
-    </button>
+    <div class="rail-brand" aria-hidden="true">
+      <img :src="appIcon" alt="" draggable="false" />
+    </div>
 
     <nav class="rail-nav" aria-label="Workspace">
       <button
