@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import {
   createFolder,
   createNote,
@@ -17,17 +17,17 @@ import {
   treeDragState,
   vaultState,
   vaultTreeRevealIncludesFolder,
-  vaultTreeRevealTarget,
-} from "../stores/vault";
-import type { Folder, Note, VaultAttachmentFile, VaultImageFile } from "../types";
-import { VAULT_IMAGE_DRAG_MIME } from "../lib/imageEmbeds";
-import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
-import AppIcon from "./AppIcon.vue";
-import VaultTreeAttachment from "./VaultTreeAttachment.vue";
-import VaultTreeImage from "./VaultTreeImage.vue";
-import VaultTreeNote from "./VaultTreeNote.vue";
+  vaultTreeRevealTarget
+} from '../stores/vault';
+import type { Folder, Note, VaultAttachmentFile, VaultImageFile } from '../types';
+import { VAULT_IMAGE_DRAG_MIME } from '../lib/imageEmbeds';
+import { VAULT_ATTACHMENT_DRAG_MIME } from '../lib/markdownAttachments';
+import AppIcon from './AppIcon.vue';
+import VaultTreeAttachment from './VaultTreeAttachment.vue';
+import VaultTreeImage from './VaultTreeImage.vue';
+import VaultTreeNote from './VaultTreeNote.vue';
 
-defineOptions({ name: "VaultTreeFolder" });
+defineOptions({ name: 'VaultTreeFolder' });
 
 const props = withDefaults(
   defineProps<{
@@ -40,22 +40,22 @@ const props = withDefaults(
   }>(),
   {
     depth: 0,
-    showEmptyFolders: true,
-  },
+    showEmptyFolders: true
+  }
 );
 
-const expanded = ref(true);
-const dropActive = ref(false);
-const dropInvalid = ref(false);
-const dragging = ref(false);
-const menuOpen = ref(false);
+const expanded = ref( true );
+const dropActive = ref( false );
+const dropInvalid = ref( false );
+const dragging = ref( false );
+const menuOpen = ref( false );
 const menuPosition = ref<{ x: number; y: number }>();
-const movePickerOpen = ref(false);
-const moveTarget = ref("");
-const editing = ref(false);
-const editValue = ref(props.folder.name);
-const subfolderInputOpen = ref(false);
-const subfolderName = ref("");
+const movePickerOpen = ref( false );
+const moveTarget = ref( '' );
+const editing = ref( false );
+const editValue = ref( props.folder.name );
+const subfolderInputOpen = ref( false );
+const subfolderName = ref( '' );
 const menuButton = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 const moveSelect = ref<HTMLSelectElement>();
@@ -63,83 +63,83 @@ const renameInput = ref<HTMLInputElement>();
 const subfolderInput = ref<HTMLInputElement>();
 let expandTimer: number | undefined;
 
-const noteFolderIds = computed(() => new Set(props.notes.flatMap((note) => note.folderId ? [note.folderId] : [])));
+const noteFolderIds = computed( () => new Set( props.notes.flatMap( ( note ) => note.folderId ? [ note.folderId ] : []) ) );
 
-const directNotes = computed(() => props.notes
-  .filter((note) => note.folderId === props.folder.id)
-  .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true }) || a.id.localeCompare(b.id)));
+const directNotes = computed( () => props.notes
+  .filter( ( note ) => note.folderId === props.folder.id )
+  .sort( ( a, b ) => a.title.localeCompare( b.title, undefined, { sensitivity: 'base', numeric: true }) || a.id.localeCompare( b.id ) ) );
 
-const currentFolderPath = computed(() => folderPath(props.folder.id));
-const directImages = computed(() => props.images
-  .filter((image) => image.relativePath.slice(0, image.relativePath.lastIndexOf("/")) === currentFolderPath.value)
-  .sort((left, right) => left.relativePath.localeCompare(right.relativePath)));
-const directAttachments = computed(() => props.attachments
-  .filter((attachment) =>
-    attachment.relativePath.slice(0, attachment.relativePath.lastIndexOf("/"))
+const currentFolderPath = computed( () => folderPath( props.folder.id ) );
+const directImages = computed( () => props.images
+  .filter( ( image ) => image.relativePath.slice( 0, image.relativePath.lastIndexOf( '/' ) ) === currentFolderPath.value )
+  .sort( ( left, right ) => left.relativePath.localeCompare( right.relativePath ) ) );
+const directAttachments = computed( () => props.attachments
+  .filter( ( attachment ) =>
+    attachment.relativePath.slice( 0, attachment.relativePath.lastIndexOf( '/' ) )
       === currentFolderPath.value
   )
-  .sort((left, right) => left.relativePath.localeCompare(right.relativePath)));
+  .sort( ( left, right ) => left.relativePath.localeCompare( right.relativePath ) ) );
 
-const children = computed(() => folderChildren(props.folder.id)
-  .filter((folder) => props.showEmptyFolders || branchContainsPassedNote(folder.id)));
-const moveDestinations = computed(() => vaultState.folders
-  .filter((folder) => folder.id !== props.folder.id && !folderIsWithin(folder.id, props.folder.id))
-  .sort((a, b) => folderPath(a.id).localeCompare(folderPath(b.id))));
+const children = computed( () => folderChildren( props.folder.id )
+  .filter( ( folder ) => props.showEmptyFolders || branchContainsPassedNote( folder.id ) ) );
+const moveDestinations = computed( () => vaultState.folders
+  .filter( ( folder ) => folder.id !== props.folder.id && !folderIsWithin( folder.id, props.folder.id ) )
+  .sort( ( a, b ) => folderPath( a.id ).localeCompare( folderPath( b.id ) ) ) );
 
-const hasContents = computed(() =>
+const hasContents = computed( () =>
   children.value.length > 0
   || directNotes.value.length > 0
   || directImages.value.length > 0
   || directAttachments.value.length > 0
 );
-const canExpand = computed(() => hasContents.value || subfolderInputOpen.value);
-const branchVisible = computed(() => props.showEmptyFolders || hasContents.value);
-const passedContentKey = computed(() => [
-  ...props.notes.map((note) => `note:${note.id}`),
-  ...props.images.map((image) => `image:${image.relativePath}`),
-  ...props.attachments.map((attachment) => `attachment:${attachment.relativePath}`),
-].sort().join("\u0000"));
+const canExpand = computed( () => hasContents.value || subfolderInputOpen.value );
+const branchVisible = computed( () => props.showEmptyFolders || hasContents.value );
+const passedContentKey = computed( () => [
+  ...props.notes.map( ( note ) => `note:${ note.id }` ),
+  ...props.images.map( ( image ) => `image:${ image.relativePath }` ),
+  ...props.attachments.map( ( attachment ) => `attachment:${ attachment.relativePath }` )
+].sort().join( '\u0000' ) );
 const activeNoteFolderId = computed(
-  () => vaultState.notes.find((note) => note.id === vaultState.activeNoteId)?.folderId ?? null,
+  () => vaultState.notes.find( ( note ) => note.id === vaultState.activeNoteId )?.folderId ?? null
 );
 
 watch(
   () => props.folder.name,
-  (name) => {
-    if (!editing.value) {
+  ( name ) => {
+    if ( !editing.value ) {
       editValue.value = name;
     }
-  },
+  }
 );
 
 watch(
   passedContentKey,
   () => {
-    if (branchContainsPassedNote(props.folder.id)) {
+    if ( branchContainsPassedNote( props.folder.id ) ) {
       expanded.value = true;
     }
-  },
+  }
 );
 
 watch(
   () => vaultState.activeNoteId,
   () => {
     const folderId = activeNoteFolderId.value;
-    if (folderId && branchContainsFolder(folderId)) {
+    if ( folderId && branchContainsFolder( folderId ) ) {
       expanded.value = true;
     }
   },
-  { immediate: true },
+  { immediate: true }
 );
 
 watch(
   () => vaultTreeRevealTarget.requestId,
   () => {
-    if (vaultTreeRevealIncludesFolder(currentFolderPath.value)) {
+    if ( vaultTreeRevealIncludesFolder( currentFolderPath.value ) ) {
       expanded.value = true;
     }
   },
-  { immediate: true },
+  { immediate: true }
 );
 
 watch(
@@ -147,60 +147,60 @@ watch(
     treeDragState.noteId,
     treeDragState.folderId,
     treeDragState.imagePath,
-    treeDragState.attachmentPath,
+    treeDragState.attachmentPath
   ] as const,
-  ([noteId, folderId, imagePath, attachmentPath]) => {
-    if (!noteId && !folderId && !imagePath && !attachmentPath) {
+  ([ noteId, folderId, imagePath, attachmentPath ]) => {
+    if ( !noteId && !folderId && !imagePath && !attachmentPath ) {
       dropActive.value = false;
       dropInvalid.value = false;
       clearExpandTimer();
     }
-  },
+  }
 );
 
-onBeforeUnmount(clearExpandTimer);
+onBeforeUnmount( clearExpandTimer );
 
-function branchContainsPassedNote(folderId: string, visited = new Set<string>()): boolean {
-  if (noteFolderIds.value.has(folderId)) {
+function branchContainsPassedNote( folderId: string, visited = new Set<string>() ): boolean {
+  if ( noteFolderIds.value.has( folderId ) ) {
     return true;
   }
-  if (visited.has(folderId)) {
+  if ( visited.has( folderId ) ) {
     return false;
   }
-  visited.add(folderId);
+  visited.add( folderId );
 
-  const path = folderPath(folderId);
-  if (props.images.some((image) => image.relativePath.startsWith(`${path}/`))) {
+  const path = folderPath( folderId );
+  if ( props.images.some( ( image ) => image.relativePath.startsWith( `${ path }/` ) ) ) {
     return true;
   }
-  if (props.attachments.some((attachment) =>
-    attachment.relativePath.startsWith(`${path}/`)
-  )) {
+  if ( props.attachments.some( ( attachment ) =>
+    attachment.relativePath.startsWith( `${ path }/` )
+  ) ) {
     return true;
   }
 
-  return folderChildren(folderId).some((folder) => branchContainsPassedNote(folder.id, visited));
+  return folderChildren( folderId ).some( ( folder ) => branchContainsPassedNote( folder.id, visited ) );
 }
 
-function branchContainsFolder(folderId: string): boolean {
-  let current = vaultState.folders.find((folder) => folder.id === folderId);
+function branchContainsFolder( folderId: string ): boolean {
+  let current = vaultState.folders.find( ( folder ) => folder.id === folderId );
   const visited = new Set<string>();
-  while (current && !visited.has(current.id)) {
-    if (current.id === props.folder.id) {
+  while ( current && !visited.has( current.id ) ) {
+    if ( current.id === props.folder.id ) {
       return true;
     }
-    visited.add(current.id);
+    visited.add( current.id );
     const parentId = current.parentId;
     current = parentId
-      ? vaultState.folders.find((folder) => folder.id === parentId)
+      ? vaultState.folders.find( ( folder ) => folder.id === parentId )
       : undefined;
   }
 
   return false;
 }
 
-function isTreeDrag(event: DragEvent): boolean {
-  const types = Array.from(event.dataTransfer?.types ?? []);
+function isTreeDrag( event: DragEvent ): boolean {
+  const types = Array.from( event.dataTransfer?.types ?? []);
 
   return Boolean(
     treeDragState.noteId
@@ -208,21 +208,21 @@ function isTreeDrag(event: DragEvent): boolean {
     || treeDragState.imagePath
     || treeDragState.attachmentPath
   )
-    || types.includes(NOTE_DRAG_MIME)
-    || types.includes(FOLDER_DRAG_MIME)
-    || types.includes(VAULT_IMAGE_DRAG_MIME)
-    || types.includes(VAULT_ATTACHMENT_DRAG_MIME);
+    || types.includes( NOTE_DRAG_MIME )
+    || types.includes( FOLDER_DRAG_MIME )
+    || types.includes( VAULT_IMAGE_DRAG_MIME )
+    || types.includes( VAULT_ATTACHMENT_DRAG_MIME );
 }
 
-function startFolderDrag(event: DragEvent): void {
-  if (!event.dataTransfer) {
+function startFolderDrag( event: DragEvent ): void {
+  if ( !event.dataTransfer ) {
     return;
   }
   closeMenu();
   event.dataTransfer.clearData();
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData(FOLDER_DRAG_MIME, props.folder.id);
-  event.dataTransfer.setData("text/plain", props.folder.name);
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData( FOLDER_DRAG_MIME, props.folder.id );
+  event.dataTransfer.setData( 'text/plain', props.folder.name );
   treeDragState.noteId = null;
   treeDragState.imagePath = null;
   treeDragState.attachmentPath = null;
@@ -234,7 +234,7 @@ function finishFolderDrag(): void {
   dragging.value = false;
   dropActive.value = false;
   dropInvalid.value = false;
-  if (treeDragState.folderId === props.folder.id) {
+  if ( treeDragState.folderId === props.folder.id ) {
     treeDragState.folderId = null;
   }
   clearExpandTimer();
@@ -243,45 +243,45 @@ function finishFolderDrag(): void {
 function isInvalidFolderTarget(): boolean {
   const draggedFolderId = treeDragState.folderId;
 
-  return draggedFolderId ? folderIsWithin(props.folder.id, draggedFolderId) : false;
+  return draggedFolderId ? folderIsWithin( props.folder.id, draggedFolderId ) : false;
 }
 
 function draggedImage(): VaultImageFile | undefined {
   const relativePath = treeDragState.imagePath;
-  if (!relativePath) {
+  if ( !relativePath ) {
     return undefined;
   }
 
-  return vaultState.imageFiles.find((image) => image.relativePath === relativePath);
+  return vaultState.imageFiles.find( ( image ) => image.relativePath === relativePath );
 }
 
 function isInvalidImageTarget(): boolean {
   const image = draggedImage();
-  if (!image) {
+  if ( !image ) {
     return false;
   }
-  const currentParent = image.relativePath.split("/").slice(0, -1).join("/");
+  const currentParent = image.relativePath.split( '/' ).slice( 0, -1 ).join( '/' );
 
   return currentParent === currentFolderPath.value;
 }
 
 function draggedAttachment(): VaultAttachmentFile | undefined {
   const relativePath = treeDragState.attachmentPath;
-  if (!relativePath) {
+  if ( !relativePath ) {
     return undefined;
   }
 
-  return vaultState.attachmentFiles.find((attachment) =>
+  return vaultState.attachmentFiles.find( ( attachment ) =>
     attachment.relativePath === relativePath
   );
 }
 
 function isInvalidAttachmentTarget(): boolean {
   const attachment = draggedAttachment();
-  if (!attachment) {
+  if ( !attachment ) {
     return false;
   }
-  const currentParent = attachment.relativePath.split("/").slice(0, -1).join("/");
+  const currentParent = attachment.relativePath.split( '/' ).slice( 0, -1 ).join( '/' );
 
   return currentParent === currentFolderPath.value;
 }
@@ -292,17 +292,17 @@ function isInvalidDropTarget(): boolean {
     || isInvalidAttachmentTarget();
 }
 
-function folderIsWithin(folderId: string, ancestorId: string): boolean {
-  let cursor = vaultState.folders.find((folder) => folder.id === folderId);
+function folderIsWithin( folderId: string, ancestorId: string ): boolean {
+  let cursor = vaultState.folders.find( ( folder ) => folder.id === folderId );
   const visited = new Set<string>();
-  while (cursor && !visited.has(cursor.id)) {
-    if (cursor.id === ancestorId) {
+  while ( cursor && !visited.has( cursor.id ) ) {
+    if ( cursor.id === ancestorId ) {
       return true;
     }
-    visited.add(cursor.id);
+    visited.add( cursor.id );
     const parentId = cursor.parentId;
     cursor = parentId
-      ? vaultState.folders.find((folder) => folder.id === parentId)
+      ? vaultState.folders.find( ( folder ) => folder.id === parentId )
       : undefined;
   }
 
@@ -310,55 +310,55 @@ function folderIsWithin(folderId: string, ancestorId: string): boolean {
 }
 
 function scheduleExpand(): void {
-  if (expanded.value || !hasContents.value || expandTimer !== undefined) {
+  if ( expanded.value || !hasContents.value || expandTimer !== undefined ) {
     return;
   }
-  expandTimer = window.setTimeout(() => {
+  expandTimer = window.setTimeout( () => {
     expanded.value = true;
     expandTimer = undefined;
-  }, 550);
+  }, 550 );
 }
 
 function clearExpandTimer(): void {
-  if (expandTimer === undefined) {
+  if ( expandTimer === undefined ) {
     return;
   }
-  window.clearTimeout(expandTimer);
+  window.clearTimeout( expandTimer );
   expandTimer = undefined;
 }
 
-function handleDragEnter(event: DragEvent): void {
-  if (!isTreeDrag(event)) {
+function handleDragEnter( event: DragEvent ): void {
+  if ( !isTreeDrag( event ) ) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
   dropInvalid.value = isInvalidDropTarget();
   dropActive.value = !dropInvalid.value;
-  if (!dropInvalid.value) {
+  if ( !dropInvalid.value ) {
     scheduleExpand();
   }
 }
 
-function handleDragOver(event: DragEvent): void {
-  if (!isTreeDrag(event)) {
+function handleDragOver( event: DragEvent ): void {
+  if ( !isTreeDrag( event ) ) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
   dropInvalid.value = isInvalidDropTarget();
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = dropInvalid.value ? "none" : "move";
+  if ( event.dataTransfer ) {
+    event.dataTransfer.dropEffect = dropInvalid.value ? 'none' : 'move';
   }
   dropActive.value = !dropInvalid.value;
-  if (!dropInvalid.value) {
+  if ( !dropInvalid.value ) {
     scheduleExpand();
   }
 }
 
-function handleDragLeave(event: DragEvent): void {
+function handleDragLeave( event: DragEvent ): void {
   const row = event.currentTarget as HTMLElement;
-  if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
+  if ( event.relatedTarget instanceof Node && row.contains( event.relatedTarget ) ) {
     return;
   }
   dropActive.value = false;
@@ -366,17 +366,17 @@ function handleDragLeave(event: DragEvent): void {
   clearExpandTimer();
 }
 
-async function handleDrop(event: DragEvent): Promise<void> {
+async function handleDrop( event: DragEvent ): Promise<void> {
   dropActive.value = false;
   const invalid = dropInvalid.value || isInvalidDropTarget();
   dropInvalid.value = false;
   clearExpandTimer();
-  if (!isTreeDrag(event)) {
+  if ( !isTreeDrag( event ) ) {
     return;
   }
   event.preventDefault();
   event.stopPropagation();
-  if (invalid) {
+  if ( invalid ) {
     treeDragState.noteId = null;
     treeDragState.folderId = null;
     treeDragState.imagePath = null;
@@ -384,178 +384,178 @@ async function handleDrop(event: DragEvent): Promise<void> {
 
     return;
   }
-  const noteId = event.dataTransfer?.getData(NOTE_DRAG_MIME).trim() || treeDragState.noteId;
-  const folderId = event.dataTransfer?.getData(FOLDER_DRAG_MIME).trim() || treeDragState.folderId;
-  const imagePath = event.dataTransfer?.getData(VAULT_IMAGE_DRAG_MIME).trim()
+  const noteId = event.dataTransfer?.getData( NOTE_DRAG_MIME ).trim() || treeDragState.noteId;
+  const folderId = event.dataTransfer?.getData( FOLDER_DRAG_MIME ).trim() || treeDragState.folderId;
+  const imagePath = event.dataTransfer?.getData( VAULT_IMAGE_DRAG_MIME ).trim()
     || treeDragState.imagePath;
-  const attachmentPath = event.dataTransfer?.getData(VAULT_ATTACHMENT_DRAG_MIME).trim()
+  const attachmentPath = event.dataTransfer?.getData( VAULT_ATTACHMENT_DRAG_MIME ).trim()
     || treeDragState.attachmentPath;
   const image = imagePath
-    ? vaultState.imageFiles.find((candidate) => candidate.relativePath === imagePath)
+    ? vaultState.imageFiles.find( ( candidate ) => candidate.relativePath === imagePath )
     : undefined;
   const attachment = attachmentPath
-    ? vaultState.attachmentFiles.find((candidate) =>
+    ? vaultState.attachmentFiles.find( ( candidate ) =>
       candidate.relativePath === attachmentPath
     )
     : undefined;
   let moved = false;
-  if (attachment) {
-    moved = await moveVaultAttachmentToFolder(attachment, props.folder.id);
-  } else if (image) {
-    moved = await moveVaultImageToFolder(image, props.folder.id);
-  } else if (noteId) {
-    moved = await moveNoteToFolder(noteId, props.folder.id);
-  } else if (folderId) {
-    moved = moveFolder(folderId, props.folder.id);
+  if ( attachment ) {
+    moved = await moveVaultAttachmentToFolder( attachment, props.folder.id );
+  } else if ( image ) {
+    moved = await moveVaultImageToFolder( image, props.folder.id );
+  } else if ( noteId ) {
+    moved = await moveNoteToFolder( noteId, props.folder.id );
+  } else if ( folderId ) {
+    moved = moveFolder( folderId, props.folder.id );
   }
   treeDragState.noteId = null;
   treeDragState.folderId = null;
   treeDragState.imagePath = null;
   treeDragState.attachmentPath = null;
-  if (moved) {
+  if ( moved ) {
     expanded.value = true;
   }
 }
 
 function toggleExpanded(): void {
-  if (canExpand.value) {
+  if ( canExpand.value ) {
     expanded.value = !expanded.value;
   }
 }
 
-function handleDisclosureKeydown(event: KeyboardEvent): void {
-  if (event.key === "ArrowRight" && canExpand.value && !expanded.value) {
+function handleDisclosureKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'ArrowRight' && canExpand.value && !expanded.value ) {
     event.preventDefault();
     expanded.value = true;
-  } else if (event.key === "ArrowLeft" && canExpand.value && expanded.value) {
+  } else if ( event.key === 'ArrowLeft' && canExpand.value && expanded.value ) {
     event.preventDefault();
     expanded.value = false;
   }
 }
 
 function toggleMenu(): void {
-  if (movePickerOpen.value) {
+  if ( movePickerOpen.value ) {
     closeMovePicker();
   }
-  if (menuOpen.value) {
-    closeMenu(true);
+  if ( menuOpen.value ) {
+    closeMenu( true );
 
     return;
   }
   menuPosition.value = undefined;
   menuOpen.value = true;
-  nextTick(() => menu.value?.querySelector<HTMLButtonElement>("button")?.focus());
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button' )?.focus() );
 }
 
-function openContextMenu(event: MouseEvent): void {
-  if (editing.value) {
+function openContextMenu( event: MouseEvent ): void {
+  if ( editing.value ) {
     return;
   }
-  if (movePickerOpen.value) {
+  if ( movePickerOpen.value ) {
     closeMovePicker();
   }
 
   const menuWidth = 180;
   const menuHeight = 226;
   menuPosition.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+    x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
+    y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
   };
   menuOpen.value = true;
-  nextTick(() => menu.value?.querySelector<HTMLButtonElement>("button")?.focus());
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button' )?.focus() );
 }
 
-function closeMenu(restoreFocus = false): void {
+function closeMenu( restoreFocus = false ): void {
   menuOpen.value = false;
   menuPosition.value = undefined;
-  if (restoreFocus) {
-    nextTick(() => menuButton.value?.focus());
+  if ( restoreFocus ) {
+    nextTick( () => menuButton.value?.focus() );
   }
 }
 
 function openMovePicker(): void {
   closeMenu();
-  moveTarget.value = props.folder.parentId ?? "";
+  moveTarget.value = props.folder.parentId ?? '';
   movePickerOpen.value = true;
-  nextTick(() => moveSelect.value?.focus());
+  nextTick( () => moveSelect.value?.focus() );
 }
 
-function closeMovePicker(restoreFocus = false): void {
+function closeMovePicker( restoreFocus = false ): void {
   movePickerOpen.value = false;
-  if (restoreFocus) {
-    nextTick(() => menuButton.value?.focus());
+  if ( restoreFocus ) {
+    nextTick( () => menuButton.value?.focus() );
   }
 }
 
 function submitMove(): void {
   const parentId = moveTarget.value || null;
-  if (parentId !== props.folder.parentId) {
-    moveFolder(props.folder.id, parentId);
+  if ( parentId !== props.folder.parentId ) {
+    moveFolder( props.folder.id, parentId );
   }
-  closeMovePicker(true);
+  closeMovePicker( true );
 }
 
-function handleMoveFocusOut(event: FocusEvent): void {
+function handleMoveFocusOut( event: FocusEvent ): void {
   const form = event.currentTarget as HTMLElement;
-  if (event.relatedTarget instanceof Node && form.contains(event.relatedTarget)) {
+  if ( event.relatedTarget instanceof Node && form.contains( event.relatedTarget ) ) {
     return;
   }
   closeMovePicker();
 }
 
-function handleMenuFocusOut(event: FocusEvent): void {
+function handleMenuFocusOut( event: FocusEvent ): void {
   const anchor = event.currentTarget as HTMLElement;
-  if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
+  if ( event.relatedTarget instanceof Node && anchor.contains( event.relatedTarget ) ) {
     return;
   }
   closeMenu();
 }
 
-function handleMenuKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
+function handleMenuKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' ) {
     event.preventDefault();
-    closeMenu(true);
+    closeMenu( true );
 
     return;
   }
 
-  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+  if ( ![ 'ArrowDown', 'ArrowUp', 'Home', 'End' ].includes( event.key ) ) {
     return;
   }
-  const items = Array.from(menu.value?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? []);
-  if (!items.length) {
+  const items = Array.from( menu.value?.querySelectorAll<HTMLButtonElement>( "[role='menuitem']" ) ?? []);
+  if ( !items.length ) {
     return;
   }
   event.preventDefault();
-  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
-  let nextIndex = currentIndex;
-  if (event.key === "Home") {
+  const currentIndex = items.indexOf( document.activeElement as HTMLButtonElement );
+  let nextIndex: number;
+  if ( event.key === 'Home' ) {
     nextIndex = 0;
-  } else if (event.key === "End") {
+  } else if ( event.key === 'End' ) {
     nextIndex = items.length - 1;
-  } else if (event.key === "ArrowDown") {
-    nextIndex = (currentIndex + 1) % items.length;
+  } else if ( event.key === 'ArrowDown' ) {
+    nextIndex = ( currentIndex + 1 ) % items.length;
   } else {
-    nextIndex = (currentIndex - 1 + items.length) % items.length;
+    nextIndex = ( currentIndex - 1 + items.length ) % items.length;
   }
-  items[nextIndex]?.focus();
+  items[ nextIndex ]?.focus();
 }
 
 function beginRename(): void {
   closeMenu();
   editValue.value = props.folder.name;
   editing.value = true;
-  nextTick(() => {
+  nextTick( () => {
     renameInput.value?.focus();
     renameInput.value?.select();
   });
 }
 
 function saveRename(): void {
-  if (!editing.value) {
+  if ( !editing.value ) {
     return;
   }
-  renameFolder(props.folder.id, editValue.value);
+  renameFolder( props.folder.id, editValue.value );
   editValue.value = props.folder.name;
   editing.value = false;
 }
@@ -569,32 +569,32 @@ function openSubfolderInput(): void {
   closeMenu();
   subfolderInputOpen.value = true;
   expanded.value = true;
-  nextTick(() => subfolderInput.value?.focus());
+  nextTick( () => subfolderInput.value?.focus() );
 }
 
 function closeSubfolderInput(): void {
   subfolderInputOpen.value = false;
-  subfolderName.value = "";
+  subfolderName.value = '';
 }
 
 function submitSubfolder(): void {
   const name = subfolderName.value.trim();
-  if (name) {
-    createFolder(name, props.folder.id);
+  if ( name ) {
+    createFolder( name, props.folder.id );
   }
   closeSubfolderInput();
 }
 
 function addNoteInside(): void {
   closeMenu();
-  createNote(props.folder.id);
+  createNote( props.folder.id );
   expanded.value = true;
 }
 
 function removeFolder(): void {
   closeMenu();
-  if (window.confirm(`Remove the folder “${props.folder.name}”? Its contents will move up one level.`)) {
-    deleteFolder(props.folder.id);
+  if ( window.confirm( `Remove the folder “${ props.folder.name }”? Its contents will move up one level.` ) ) {
+    deleteFolder( props.folder.id );
   }
 }
 
@@ -602,8 +602,8 @@ function showInFolder(): void {
   closeMenu();
   void showVaultItemInFolder({
     itemId: props.folder.id,
-    kind: "folder",
-    relativePath: currentFolderPath.value,
+    kind: 'folder',
+    relativePath: currentFolderPath.value
   });
 }
 </script>
@@ -645,7 +645,11 @@ function showInFolder(): void {
         <span class="vault-tree-folder-name">{{ folder.name }}</span>
       </button>
 
-      <form v-else class="vault-tree-folder-rename" @submit.prevent="saveRename">
+      <form
+        v-else
+        class="vault-tree-folder-rename"
+        @submit.prevent="saveRename"
+      >
         <input
           ref="renameInput"
           v-model="editValue"
@@ -654,7 +658,7 @@ function showInFolder(): void {
           aria-label="Folder name"
           @blur="saveRename"
           @keydown.esc.prevent.stop="cancelRename"
-        />
+        >
       </form>
 
       <button
@@ -668,7 +672,11 @@ function showInFolder(): void {
         <AppIcon name="folder-plus" :size="13" />
       </button>
 
-      <div v-if="!editing" class="vault-tree-folder-menu-anchor" @focusout="handleMenuFocusOut">
+      <div
+        v-if="!editing"
+        class="vault-tree-folder-menu-anchor"
+        @focusout="handleMenuFocusOut"
+      >
         <button
           ref="menuButton"
           type="button"
@@ -691,22 +699,47 @@ function showInFolder(): void {
             :aria-label="`Actions for ${folder.name}`"
             @keydown="handleMenuKeydown"
           >
-            <button type="button" role="menuitem" @click="showInFolder">
+            <button
+              type="button"
+              role="menuitem"
+              @click="showInFolder"
+            >
               <AppIcon name="folder-open" :size="14" /> Show in folder
             </button>
-            <button type="button" role="menuitem" @click="beginRename">
+            <button
+              type="button"
+              role="menuitem"
+              @click="beginRename"
+            >
               <AppIcon name="edit" :size="14" /> Rename
             </button>
-            <button type="button" role="menuitem" @click="addNoteInside">
+            <button
+              type="button"
+              role="menuitem"
+              @click="addNoteInside"
+            >
               <AppIcon name="file-plus" :size="14" /> New note inside
             </button>
-            <button type="button" role="menuitem" @click="openSubfolderInput">
+            <button
+              type="button"
+              role="menuitem"
+              @click="openSubfolderInput"
+            >
               <AppIcon name="folder-plus" :size="14" /> New folder inside
             </button>
-            <button type="button" role="menuitem" @click="openMovePicker">
+            <button
+              type="button"
+              role="menuitem"
+              @click="openMovePicker"
+            >
               <AppIcon name="arrow" :size="14" /> Move folder…
             </button>
-            <button type="button" class="danger" role="menuitem" @click="removeFolder">
+            <button
+              type="button"
+              class="danger"
+              role="menuitem"
+              @click="removeFolder"
+            >
               <AppIcon name="trash" :size="14" /> Delete folder
             </button>
           </div>
@@ -717,21 +750,33 @@ function showInFolder(): void {
             class="popover-menu vault-tree-move-popover"
             @submit.prevent="submitMove"
             @focusout="handleMoveFocusOut"
-            @keydown.esc.prevent="closeMovePicker(true)"
+            @keydown.esc.prevent="closeMovePicker( true )"
           >
             <strong>Move {{ folder.name }}</strong>
             <label>
               <span>Destination</span>
-              <select ref="moveSelect" v-model="moveTarget" aria-label="Move folder to">
+              <select
+                ref="moveSelect"
+                v-model="moveTarget"
+                aria-label="Move folder to"
+              >
                 <option value="">Vault root</option>
-                <option v-for="destination in moveDestinations" :key="destination.id" :value="destination.id">
-                  {{ folderPath(destination.id) }}
+                <option
+                  v-for="destination in moveDestinations"
+                  :key="destination.id"
+                  :value="destination.id"
+                >
+                  {{ folderPath( destination.id ) }}
                 </option>
               </select>
             </label>
             <div class="vault-tree-move-actions">
-              <button type="button" @click="closeMovePicker(true)">Cancel</button>
-              <button type="submit" :disabled="moveTarget === (folder.parentId ?? '')">Move</button>
+              <button type="button" @click="closeMovePicker( true )">
+                Cancel
+              </button>
+              <button type="submit" :disabled="moveTarget === ( folder.parentId ?? '' )">
+                Move
+              </button>
             </div>
           </form>
         </Transition>
@@ -758,7 +803,7 @@ function showInFolder(): void {
               :aria-label="`New folder inside ${folder.name}`"
               @blur="submitSubfolder"
               @keydown.esc.prevent.stop="closeSubfolderInput"
-            />
+            >
           </form>
         </Transition>
         <VaultTreeFolder

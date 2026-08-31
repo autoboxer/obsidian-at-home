@@ -1,0 +1,474 @@
+:where(:root),
+:where(html[data-theme="aubergine"]) {
+  color-scheme: dark;
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+
+  /* Aubergine is the default palette. */
+  --bg-deep: #09080d;
+  --bg: #0d0c12;
+  --bg-raised: #121017;
+  --bg-elevated: #17141d;
+  --bg-hover: #1c1823;
+  --bg-active: #231d2d;
+  --panel: #111016;
+  --panel-soft: #141219;
+  --panel-deep: #0c0b10;
+  --text: #f0edf5;
+  --text-soft: #c4bdcd;
+  --text-muted: #888091;
+  --text-faint: #625c69;
+  --violet: #a88ae8;
+  --violet-bright: #c3a9ff;
+  --violet-deep: #6f4fb0;
+  --aubergine: #21152a;
+  --mint: #7fd4b2;
+  --amber: #e6b96f;
+  --red: #ee8d9c;
+  --blue: #83b8e8;
+
+  /* Derived colors keep every built-in palette internally consistent. */
+  --border-faint: color-mix(in srgb, var(--text) 5.5%, transparent);
+  --border: color-mix(in srgb, var(--text) 9.5%, transparent);
+  --border-strong: color-mix(in srgb, var(--text) 17%, transparent);
+  --violet-wash: color-mix(in srgb, var(--violet) 14%, transparent);
+  --violet-glow: color-mix(in srgb, var(--violet) 25%, transparent);
+  --mint-wash: color-mix(in srgb, var(--mint) 12%, transparent);
+  --amber-wash: color-mix(in srgb, var(--amber) 12%, transparent);
+  --red-wash: color-mix(in srgb, var(--red) 12%, transparent);
+  --focus-ring: color-mix(in srgb, var(--violet-bright) 32%, transparent);
+  --focus-wash: color-mix(in srgb, var(--text) 3.5%, transparent);
+
+  --surface-shell: var(--bg);
+  --surface-sidebar: var(--panel);
+  --surface-toolbar: color-mix(in srgb, var(--panel) 88%, transparent);
+  --surface-raised: var(--bg-raised);
+  --surface-elevated: var(--bg-elevated);
+  --surface-popup: color-mix(in srgb, var(--bg-elevated) 98%, transparent);
+  --surface-control: color-mix(in srgb, var(--text) 3.5%, transparent);
+  --surface-control-hover: color-mix(in srgb, var(--text) 6%, transparent);
+  --surface-control-active: color-mix(in srgb, var(--violet) 16%, var(--bg-raised));
+  --surface-code: var(--panel-deep);
+  --surface-code-gutter: color-mix(in srgb, var(--panel-deep) 76%, var(--bg));
+  --surface-card: color-mix(in srgb, var(--bg-raised) 96%, transparent);
+  --surface-card-hover: color-mix(in srgb, var(--bg-elevated) 98%, transparent);
+  --overlay-backdrop: rgba(5, 4, 7, 0.67);
+  --control-highlight: color-mix(in srgb, var(--text) 4%, transparent);
+  --control-highlight-strong: color-mix(in srgb, var(--text) 8%, transparent);
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in srgb, var(--text) 17%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text) 27%, transparent);
+  --selection-bg: color-mix(in srgb, var(--violet) 34%, transparent);
+  --selection-text: var(--text);
+  --text-on-accent: #fff;
+  --editor-text: color-mix(in srgb, var(--text) 84%, var(--text-soft));
+  --heading-text: var(--text);
+  --strong-text: color-mix(in srgb, var(--text) 94%, var(--violet-bright));
+  --link-text: var(--violet-bright);
+  --link-text-hover: color-mix(in srgb, var(--violet-bright) 70%, var(--text));
+  --inline-code-text: color-mix(in srgb, var(--violet) 58%, var(--text));
+  --blockquote-text: var(--text-soft);
+
+  --syntax-comment: var(--text-faint);
+  --syntax-keyword: var(--violet-bright);
+  --syntax-title: var(--blue);
+  --syntax-type: color-mix(in srgb, var(--blue) 72%, var(--mint));
+  --syntax-string: var(--mint);
+  --syntax-number: color-mix(in srgb, var(--amber) 78%, var(--mint));
+  --syntax-meta: var(--amber);
+  --syntax-property: color-mix(in srgb, var(--violet) 78%, var(--text));
+  --syntax-deletion: var(--red);
+  --syntax-addition: var(--mint);
+
+  --body-background:
+    radial-gradient(circle at 70% -20%, color-mix(in srgb, var(--violet-deep) 13%, transparent), transparent 35%),
+    var(--bg-deep);
+  --titlebar-background: linear-gradient(180deg, var(--bg-elevated), var(--panel-deep));
+  --rail-background:
+    linear-gradient(180deg, color-mix(in srgb, var(--violet-deep) 11%, transparent), transparent 28%),
+    var(--panel-deep);
+  --sidebar-background:
+    radial-gradient(circle at 15% 0, color-mix(in srgb, var(--violet-deep) 10%, transparent), transparent 30%),
+    var(--panel);
+  --workspace-background:
+    radial-gradient(circle at 70% -10%, color-mix(in srgb, var(--violet-deep) 14%, transparent), transparent 30%),
+    radial-gradient(circle at 7% 88%, color-mix(in srgb, var(--mint) 5%, transparent), transparent 25%),
+    var(--bg);
+  --editor-background:
+    radial-gradient(circle at 45% -15%, color-mix(in srgb, var(--violet-deep) 8%, transparent), transparent 28%),
+    var(--panel-deep);
+  --document-heading-background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel-soft) 44%, transparent),
+    color-mix(in srgb, var(--panel-deep) 18%, transparent)
+  );
+  --primary-button-background: linear-gradient(180deg, var(--violet), var(--violet-deep));
+  --modal-background:
+    radial-gradient(circle at 90% 0, color-mix(in srgb, var(--violet-deep) 13%, transparent), transparent 30%),
+    var(--bg-elevated);
+  --chooser-background:
+    radial-gradient(circle at 88% -8%, color-mix(in srgb, var(--violet-deep) 18%, transparent), transparent 31%),
+    radial-gradient(circle at 4% 100%, color-mix(in srgb, var(--mint) 7%, transparent), transparent 28%),
+    var(--bg-elevated);
+
+  --shadow-sm: 0 8px 20px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 28px 80px rgba(0, 0, 0, 0.48), 0 2px 10px rgba(0, 0, 0, 0.24);
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  --font-mono: var(--mono);
+  --font-sans: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --serif: var(--font-sans);
+  --app-font-size: 13px;
+  --note-font-family: var(--font-sans);
+  --note-font: var(--note-font-family);
+  --note-font-size: 16px;
+  --titlebar-height: 30px;
+  --rail-width: 52px;
+  --explorer-width: 292px;
+  --inspector-width: 286px;
+}
+
+/* Engineer-favorite dark palettes */
+:where(html[data-theme="dracula"]) {
+  color-scheme: dark;
+  --bg-deep: #191a21;
+  --bg: #1e1f29;
+  --bg-raised: #242530;
+  --bg-elevated: #2b2c38;
+  --bg-hover: #313240;
+  --bg-active: #3b3550;
+  --panel: #21222c;
+  --panel-soft: #282a36;
+  --panel-deep: #191a21;
+  --text: #f8f8f2;
+  --text-soft: #d7d7d2;
+  --text-muted: #a5a6ad;
+  --text-faint: #6f7079;
+  --violet: #bd93f9;
+  --violet-bright: #d6b7ff;
+  --violet-deep: #8b63c7;
+  --aubergine: #3b2d4d;
+  --mint: #50fa7b;
+  --amber: #f1fa8c;
+  --red: #ff5555;
+  --blue: #8be9fd;
+}
+
+:where(html[data-theme="one-dark"]) {
+  color-scheme: dark;
+  --bg-deep: #1b1d23;
+  --bg: #21252b;
+  --bg-raised: #282c34;
+  --bg-elevated: #2f343d;
+  --bg-hover: #353b45;
+  --bg-active: #3e4451;
+  --panel: #252931;
+  --panel-soft: #2c313a;
+  --panel-deep: #1d2026;
+  --text: #e6e9ef;
+  --text-soft: #c8ccd4;
+  --text-muted: #8d939e;
+  --text-faint: #5c6370;
+  --violet: #c678dd;
+  --violet-bright: #d99bf0;
+  --violet-deep: #8e4fa1;
+  --aubergine: #392a42;
+  --mint: #98c379;
+  --amber: #e5c07b;
+  --red: #e06c75;
+  --blue: #61afef;
+}
+
+:where(html[data-theme="tokyo-night"]) {
+  color-scheme: dark;
+  --bg-deep: #13141c;
+  --bg: #16161e;
+  --bg-raised: #1a1b26;
+  --bg-elevated: #202231;
+  --bg-hover: #292c3c;
+  --bg-active: #34364a;
+  --panel: #181924;
+  --panel-soft: #1f2030;
+  --panel-deep: #13141c;
+  --text: #c0caf5;
+  --text-soft: #a9b1d6;
+  --text-muted: #787c99;
+  --text-faint: #565f89;
+  --violet: #bb9af7;
+  --violet-bright: #c7adff;
+  --violet-deep: #7d5fb2;
+  --aubergine: #29243d;
+  --mint: #9ece6a;
+  --amber: #e0af68;
+  --red: #f7768e;
+  --blue: #7aa2f7;
+}
+
+:where(html[data-theme="catppuccin-mocha"]) {
+  color-scheme: dark;
+  --bg-deep: #11111b;
+  --bg: #181825;
+  --bg-raised: #1e1e2e;
+  --bg-elevated: #313244;
+  --bg-hover: #36384a;
+  --bg-active: #45475a;
+  --panel: #1e1e2e;
+  --panel-soft: #252537;
+  --panel-deep: #11111b;
+  --text: #cdd6f4;
+  --text-soft: #bac2de;
+  --text-muted: #9399b2;
+  --text-faint: #6c7086;
+  --violet: #cba6f7;
+  --violet-bright: #d9bfff;
+  --violet-deep: #8f6bb8;
+  --aubergine: #352a48;
+  --mint: #a6e3a1;
+  --amber: #f9e2af;
+  --red: #f38ba8;
+  --blue: #89b4fa;
+}
+
+:where(html[data-theme="nord"]) {
+  color-scheme: dark;
+  --bg-deep: #242933;
+  --bg: #2e3440;
+  --bg-raised: #343b49;
+  --bg-elevated: #3b4252;
+  --bg-hover: #434c5e;
+  --bg-active: #4c566a;
+  --panel: #303744;
+  --panel-soft: #3b4252;
+  --panel-deep: #272c36;
+  --text: #eceff4;
+  --text-soft: #d8dee9;
+  --text-muted: #aeb7c5;
+  --text-faint: #697484;
+  --violet: #b48ead;
+  --violet-bright: #d0a9c8;
+  --violet-deep: #81667c;
+  --aubergine: #403542;
+  --mint: #a3be8c;
+  --amber: #ebcb8b;
+  --red: #bf616a;
+  --blue: #88c0d0;
+}
+
+:where(html[data-theme="gruvbox-dark"]) {
+  color-scheme: dark;
+  --bg-deep: #1d2021;
+  --bg: #282828;
+  --bg-raised: #32302f;
+  --bg-elevated: #3c3836;
+  --bg-hover: #45403d;
+  --bg-active: #504945;
+  --panel: #2c2a29;
+  --panel-soft: #3c3836;
+  --panel-deep: #1d2021;
+  --text: #ebdbb2;
+  --text-soft: #d5c4a1;
+  --text-muted: #a89984;
+  --text-faint: #665c54;
+  --violet: #d3869b;
+  --violet-bright: #e9a8b8;
+  --violet-deep: #9b5f70;
+  --aubergine: #3c2d33;
+  --mint: #b8bb26;
+  --amber: #fabd2f;
+  --red: #fb4934;
+  --blue: #83a598;
+}
+
+:where(html[data-theme="solarized-dark"]) {
+  color-scheme: dark;
+  --bg-deep: #00232b;
+  --bg: #002b36;
+  --bg-raised: #073642;
+  --bg-elevated: #10434e;
+  --bg-hover: #164d58;
+  --bg-active: #1d5863;
+  --panel: #05323c;
+  --panel-soft: #0b3c47;
+  --panel-deep: #00232b;
+  --text: #eee8d5;
+  --text-soft: #b8b6a9;
+  --text-muted: #839496;
+  --text-faint: #586e75;
+  --violet: #6c71c4;
+  --violet-bright: #9a9ee3;
+  --violet-deep: #4e5297;
+  --aubergine: #283151;
+  --mint: #859900;
+  --amber: #b58900;
+  --red: #dc322f;
+  --blue: #268bd2;
+}
+
+/* Engineer-favorite light palettes */
+:where(html[data-theme="github-light"]) {
+  color-scheme: light;
+  --bg-deep: #eef1f4;
+  --bg: #ffffff;
+  --bg-raised: #f6f8fa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-active: #eaeef2;
+  --panel: #f6f8fa;
+  --panel-soft: #f0f3f6;
+  --panel-deep: #eaeef2;
+  --text: #1f2328;
+  --text-soft: #424a53;
+  --text-muted: #656d76;
+  --text-faint: #8c959f;
+  --violet: #8250df;
+  --violet-bright: #6639ba;
+  --violet-deep: #4c2889;
+  --aubergine: #eee8fa;
+  --mint: #1a7f37;
+  --amber: #9a6700;
+  --red: #cf222e;
+  --blue: #0969da;
+}
+
+:where(html[data-theme="one-light"]) {
+  color-scheme: light;
+  --bg-deep: #e8e8e8;
+  --bg: #fafafa;
+  --bg-raised: #f0f0f0;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e9e9ea;
+  --bg-active: #dfe1e5;
+  --panel: #f2f2f2;
+  --panel-soft: #eaeaeb;
+  --panel-deep: #e2e2e3;
+  --text: #383a42;
+  --text-soft: #4f525e;
+  --text-muted: #696c77;
+  --text-faint: #9da0aa;
+  --violet: #a626a4;
+  --violet-bright: #8a2588;
+  --violet-deep: #6f1b6d;
+  --aubergine: #f3e4f2;
+  --mint: #50a14f;
+  --amber: #a66b00;
+  --red: #e45649;
+  --blue: #4078f2;
+}
+
+:where(html[data-theme="catppuccin-latte"]) {
+  color-scheme: light;
+  --bg-deep: #dce0e8;
+  --bg: #eff1f5;
+  --bg-raised: #e6e9ef;
+  --bg-elevated: #f7f8fb;
+  --bg-hover: #dfe3eb;
+  --bg-active: #ccd0da;
+  --panel: #e6e9ef;
+  --panel-soft: #dfe3eb;
+  --panel-deep: #dce0e8;
+  --text: #4c4f69;
+  --text-soft: #5c5f77;
+  --text-muted: #7c7f93;
+  --text-faint: #9ca0b0;
+  --violet: #8839ef;
+  --violet-bright: #7627d6;
+  --violet-deep: #5c1cae;
+  --aubergine: #eadcfb;
+  --mint: #40a02b;
+  --amber: #b66b00;
+  --red: #d20f39;
+  --blue: #1e66f5;
+}
+
+:where(html[data-theme="gruvbox-light"]) {
+  color-scheme: light;
+  --bg-deep: #ebdbb2;
+  --bg: #fbf1c7;
+  --bg-raised: #f2e5bc;
+  --bg-elevated: #fff8d8;
+  --bg-hover: #e9dbb2;
+  --bg-active: #d5c4a1;
+  --panel: #f2e5bc;
+  --panel-soft: #ebdbb2;
+  --panel-deep: #e2cca1;
+  --text: #3c3836;
+  --text-soft: #504945;
+  --text-muted: #7c6f64;
+  --text-faint: #a89984;
+  --violet: #8f3f71;
+  --violet-bright: #7a315f;
+  --violet-deep: #5e2448;
+  --aubergine: #ead6df;
+  --mint: #79740e;
+  --amber: #a75d00;
+  --red: #9d0006;
+  --blue: #076678;
+}
+
+:where(html[data-theme="solarized-light"]) {
+  color-scheme: light;
+  --bg-deep: #eee8d5;
+  --bg: #fdf6e3;
+  --bg-raised: #f5efdc;
+  --bg-elevated: #fffaf0;
+  --bg-hover: #ece5d1;
+  --bg-active: #ded7c3;
+  --panel: #f4edda;
+  --panel-soft: #eee8d5;
+  --panel-deep: #e5deca;
+  --text: #073642;
+  --text-soft: #405b61;
+  --text-muted: #657b83;
+  --text-faint: #93a1a1;
+  --violet: #6c71c4;
+  --violet-bright: #555bb6;
+  --violet-deep: #3f448f;
+  --aubergine: #e5e1f0;
+  --mint: #718000;
+  --amber: #9b7300;
+  --red: #c52d2a;
+  --blue: #1679b2;
+}
+
+:where(html[data-theme="rose-pine-dawn"]) {
+  color-scheme: light;
+  --bg-deep: #f2e9e1;
+  --bg: #faf4ed;
+  --bg-raised: #fffaf3;
+  --bg-elevated: #fffaf3;
+  --bg-hover: #f4ece5;
+  --bg-active: #e8ded7;
+  --panel: #f2e9e1;
+  --panel-soft: #eee6df;
+  --panel-deep: #e8ded7;
+  --text: #575279;
+  --text-soft: #6e6a86;
+  --text-muted: #797593;
+  --text-faint: #9893a5;
+  --violet: #907aa9;
+  --violet-bright: #78628f;
+  --violet-deep: #5f4b75;
+  --aubergine: #e7ddeb;
+  --mint: #286983;
+  --amber: #b97818;
+  --red: #b4637a;
+  --blue: #3d7f89;
+}
+
+:where(
+  html[data-theme="github-light"],
+  html[data-theme="one-light"],
+  html[data-theme="catppuccin-latte"],
+  html[data-theme="gruvbox-light"],
+  html[data-theme="solarized-light"],
+  html[data-theme="rose-pine-dawn"]
+) {
+  --overlay-backdrop: rgba(31, 35, 40, 0.34);
+  --text-on-accent: #fff;
+  --shadow-sm: 0 8px 22px rgba(31, 35, 40, 0.12);
+  --shadow-lg: 0 28px 80px rgba(31, 35, 40, 0.18), 0 2px 10px rgba(31, 35, 40, 0.08);
+}

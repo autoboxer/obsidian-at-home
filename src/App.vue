@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from "vue";
-import ActivityRail from "./components/ActivityRail.vue";
-import AppIcon from "./components/AppIcon.vue";
-import CommandPalette from "./components/CommandPalette.vue";
-import EditorWorkspace from "./components/EditorWorkspace.vue";
-import ExplorerSidebar from "./components/ExplorerSidebar.vue";
-import LinkInspector from "./components/LinkInspector.vue";
-import RecentlyDeletedWorkspace from "./components/RecentlyDeletedWorkspace.vue";
-import SearchWorkspace from "./components/SearchWorkspace.vue";
-import SettingsView from "./components/SettingsView.vue";
-import SnippetStudio from "./components/SnippetStudio.vue";
-import TemplateGallery from "./components/TemplateGallery.vue";
-import VaultChooser from "./components/VaultChooser.vue";
-import { applyAppZoom } from "./services/native";
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
+import ActivityRail from './components/ActivityRail.vue';
+import AppIcon from './components/AppIcon.vue';
+import CommandPalette from './components/CommandPalette.vue';
+import EditorWorkspace from './components/EditorWorkspace.vue';
+import ExplorerSidebar from './components/ExplorerSidebar.vue';
+import LinkInspector from './components/LinkInspector.vue';
+import RecentlyDeletedWorkspace from './components/RecentlyDeletedWorkspace.vue';
+import SearchWorkspace from './components/SearchWorkspace.vue';
+import SettingsView from './components/SettingsView.vue';
+import SnippetStudio from './components/SnippetStudio.vue';
+import TemplateGallery from './components/TemplateGallery.vue';
+import VaultChooser from './components/VaultChooser.vue';
+import { applyAppZoom } from './services/native';
 import {
   activeNote,
   createNote,
@@ -22,23 +22,23 @@ import {
   vaultSession,
   vaultState,
   zoomIn,
-  zoomOut,
-} from "./stores/vault";
-import type { ToolView } from "./types";
+  zoomOut
+} from './stores/vault';
+import type { ToolView } from './types';
 
-const requestedView = new URLSearchParams(window.location.search).get("view") as ToolView | null;
-if (requestedView && ["notes", "search", "templates", "snippets", "settings"].includes(requestedView)) {
+const requestedView = new URLSearchParams( window.location.search ).get( 'view' ) as ToolView | null;
+if ( requestedView && [ 'notes', 'search', 'templates', 'snippets', 'settings' ].includes( requestedView ) ) {
   uiState.tool = requestedView;
 }
 
 const vaultChooserVisible = computed(
-  () => vaultSession.phase !== "loading"
-    && (vaultSession.phase !== "ready" || uiState.vaultChooserOpen),
+  () => vaultSession.phase !== 'loading'
+    && ( vaultSession.phase !== 'ready' || uiState.vaultChooserOpen )
 );
 const appInteractionBlocked = computed(
-  () => vaultSession.phase !== "ready"
+  () => vaultSession.phase !== 'ready'
     || uiState.vaultChooserOpen
-    || vaultSession.busy,
+    || vaultSession.busy
 );
 
 function runToastAction(): void {
@@ -49,61 +49,61 @@ function runToastAction(): void {
 
 watch(
   () => uiState.zoom,
-  (zoom) => void applyAppZoom(zoom),
-  { immediate: true },
+  ( zoom ) => void applyAppZoom( zoom ),
+  { immediate: true }
 );
 
-const titlebarContext = computed(() => {
-  if (uiState.tool === "notes") {
-    if (uiState.notesView === "recently-deleted") {
-      return "Recently Deleted";
+const titlebarContext = computed( () => {
+  if ( uiState.tool === 'notes' ) {
+    if ( uiState.notesView === 'recently-deleted' ) {
+      return 'Recently Deleted';
     }
 
     return activeNote.value?.title || vaultState.name;
   }
-  if (uiState.tool === "search") {
-    return "Search";
+  if ( uiState.tool === 'search' ) {
+    return 'Search';
   }
-  if (uiState.tool === "templates") {
-    return "Templates";
+  if ( uiState.tool === 'templates' ) {
+    return 'Templates';
   }
-  if (uiState.tool === "snippets") {
-    return "CSS snippets";
+  if ( uiState.tool === 'snippets' ) {
+    return 'CSS snippets';
   }
 
-  return "Settings";
+  return 'Settings';
 });
 
-function handleKeyboard(event: KeyboardEvent): void {
+function handleKeyboard( event: KeyboardEvent ): void {
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLocaleLowerCase();
   const target = event.target;
   const isEditing = target instanceof Element
-    && Boolean(target.closest(
-      "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
-    ));
+    && Boolean( target.closest(
+      "input, textarea, select, [contenteditable]:not([contenteditable='false'])"
+    ) );
   const appShortcut = (
-    modifier && ["n", "o", "\\"].includes(key)
-    || modifier && event.shiftKey && key === "t"
-    || !modifier && !isEditing && key === "/"
+    modifier && [ 'n', 'o', '\\' ].includes( key )
+    || modifier && event.shiftKey && key === 't'
+    || !modifier && !isEditing && key === '/'
   );
   const zoomShortcut = modifier
     && !event.altKey
-    && ["+", "=", "-", "_", "0"].includes(event.key);
+    && [ '+', '=', '-', '_', '0' ].includes( event.key );
 
-  if (document.documentElement.hasAttribute("data-modal-scroll-lock")) {
-    if (appShortcut || zoomShortcut) {
+  if ( document.documentElement.hasAttribute( 'data-modal-scroll-lock' ) ) {
+    if ( appShortcut || zoomShortcut ) {
       event.preventDefault();
     }
 
     return;
   }
 
-  if (zoomShortcut) {
+  if ( zoomShortcut ) {
     event.preventDefault();
-    if (event.key === "0") {
+    if ( event.key === '0' ) {
       resetZoom();
-    } else if (event.key === "-" || event.key === "_") {
+    } else if ( event.key === '-' || event.key === '_' ) {
       zoomOut();
     } else {
       zoomIn();
@@ -113,20 +113,20 @@ function handleKeyboard(event: KeyboardEvent): void {
   }
 
   if (
-    vaultSession.phase !== "ready"
+    vaultSession.phase !== 'ready'
     || uiState.vaultChooserOpen
     || vaultSession.busy
   ) {
-    if (appShortcut) {
+    if ( appShortcut ) {
       event.preventDefault();
     }
 
     return;
   }
 
-  if (modifier && key === "o") {
+  if ( modifier && key === 'o' ) {
     event.preventDefault();
-    if (uiState.commandOpen) {
+    if ( uiState.commandOpen ) {
       uiState.commandOpen = false;
     } else {
       openQuickSearch();
@@ -134,23 +134,23 @@ function handleKeyboard(event: KeyboardEvent): void {
 
     return;
   }
-  if (modifier && key === "n") {
+  if ( modifier && key === 'n' ) {
     event.preventDefault();
     createNote();
 
     return;
   }
-  if (modifier && event.shiftKey && key === "t") {
+  if ( modifier && event.shiftKey && key === 't' ) {
     event.preventDefault();
-    uiState.tool = "templates";
+    uiState.tool = 'templates';
 
     return;
   }
-  if (modifier && key === "\\") {
+  if ( modifier && key === '\\' ) {
     event.preventDefault();
-    if (uiState.tool !== "notes") {
-      uiState.tool = "notes";
-      uiState.notesView = "editor";
+    if ( uiState.tool !== 'notes' ) {
+      uiState.tool = 'notes';
+      uiState.notesView = 'editor';
       uiState.explorerOpen = true;
     } else {
       uiState.explorerOpen = !uiState.explorerOpen;
@@ -158,7 +158,7 @@ function handleKeyboard(event: KeyboardEvent): void {
 
     return;
   }
-  if (event.key === "Escape" && uiState.commandOpen) {
+  if ( event.key === 'Escape' && uiState.commandOpen ) {
     event.preventDefault();
     event.stopPropagation();
     uiState.commandOpen = false;
@@ -166,33 +166,43 @@ function handleKeyboard(event: KeyboardEvent): void {
     return;
   }
 
-  if (!isEditing && event.key === "/" && uiState.tool === "notes") {
+  if ( !isEditing && event.key === '/' && uiState.tool === 'notes' ) {
     event.preventDefault();
-    document.querySelector<HTMLInputElement>(".vault-tree-filter input")?.focus();
+    document.querySelector<HTMLInputElement>( '.vault-tree-filter input' )?.focus();
   }
 }
 
-function preventExternalFileNavigation(event: DragEvent): void {
-  if (Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+function preventExternalFileNavigation( event: DragEvent ): void {
+  if ( Array.from( event.dataTransfer?.types ?? []).includes( 'Files' ) ) {
     event.preventDefault();
   }
 }
 
-onMounted(() => {
-  window.addEventListener("keydown", handleKeyboard);
-  window.addEventListener("dragover", preventExternalFileNavigation, true);
-  window.addEventListener("drop", preventExternalFileNavigation, true);
+onMounted( () => {
+  window.addEventListener( 'keydown', handleKeyboard );
+  window.addEventListener( 'dragover', preventExternalFileNavigation, true );
+  window.addEventListener( 'drop', preventExternalFileNavigation, true );
 });
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", handleKeyboard);
-  window.removeEventListener("dragover", preventExternalFileNavigation, true);
-  window.removeEventListener("drop", preventExternalFileNavigation, true);
+onBeforeUnmount( () => {
+  window.removeEventListener( 'keydown', handleKeyboard );
+  window.removeEventListener( 'dragover', preventExternalFileNavigation, true );
+  window.removeEventListener( 'drop', preventExternalFileNavigation, true );
 });
 </script>
 
 <template>
-  <div class="app-frame" :class="`tool-${uiState.tool}`" :data-app-view="uiState.tool" data-ui-region="app">
-    <header class="desktop-titlebar" data-ui-region="titlebar" data-tauri-drag-region :inert="appInteractionBlocked">
+  <div
+    class="app-frame"
+    :class="`tool-${uiState.tool}`"
+    :data-app-view="uiState.tool"
+    data-ui-region="app"
+  >
+    <header
+      class="desktop-titlebar"
+      data-ui-region="titlebar"
+      data-tauri-drag-region
+      :inert="appInteractionBlocked"
+    >
       <div class="traffic-light-space" data-tauri-drag-region />
       <div class="titlebar-title" data-tauri-drag-region>
         <span>Obsidian At Home</span>
@@ -206,7 +216,12 @@ onBeforeUnmount(() => {
       <ActivityRail />
 
       <Transition name="workspace-switch" mode="out-in">
-        <div v-if="uiState.tool === 'notes'" key="notes" class="notes-workspace" :data-note-view="uiState.notesView">
+        <div
+          v-if="uiState.tool === 'notes'"
+          key="notes"
+          class="notes-workspace"
+          :data-note-view="uiState.notesView"
+        >
           <Transition name="panel-left">
             <ExplorerSidebar v-if="uiState.explorerOpen" />
           </Transition>
@@ -234,7 +249,14 @@ onBeforeUnmount(() => {
     </Transition>
 
     <Transition name="toast">
-      <div v-if="uiState.toast" :key="uiState.toast.id" class="app-toast" :class="`tone-${uiState.toast.tone}`" data-ui-region="notification" role="status">
+      <div
+        v-if="uiState.toast"
+        :key="uiState.toast.id"
+        class="app-toast"
+        :class="`tone-${uiState.toast.tone}`"
+        data-ui-region="notification"
+        role="status"
+      >
         <span class="toast-icon">
           <AppIcon :name="uiState.toast.tone === 'success' ? 'check' : uiState.toast.tone === 'warning' ? 'info' : 'sparkles'" :size="15" />
         </span>

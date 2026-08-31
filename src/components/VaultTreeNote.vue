@@ -1,31 +1,31 @@
 <script setup lang="ts">
-import { nextTick, ref } from "vue";
+import { nextTick, ref } from 'vue';
 import {
   deleteNote,
   NOTE_DRAG_MIME,
   selectNote,
   showVaultItemInFolder,
   treeDragState,
-  vaultState,
-} from "../stores/vault";
-import type { Note } from "../types";
-import AppIcon from "./AppIcon.vue";
+  vaultState
+} from '../stores/vault';
+import type { Note } from '../types';
+import AppIcon from './AppIcon.vue';
 
-const props = withDefaults(defineProps<{ note: Note; depth?: number }>(), { depth: 0 });
-const dragging = ref(false);
-const menuOpen = ref(false);
+const props = withDefaults( defineProps<{ note: Note; depth?: number }>(), { depth: 0 });
+const dragging = ref( false );
+const menuOpen = ref( false );
 const menuPosition = ref<{ x: number; y: number }>();
 const noteButton = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 
-function startDrag(event: DragEvent): void {
-  if (!event.dataTransfer) {
+function startDrag( event: DragEvent ): void {
+  if ( !event.dataTransfer ) {
     return;
   }
   event.dataTransfer.clearData();
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData(NOTE_DRAG_MIME, props.note.id);
-  event.dataTransfer.setData("text/plain", props.note.title || "Untitled note");
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData( NOTE_DRAG_MIME, props.note.id );
+  event.dataTransfer.setData( 'text/plain', props.note.title || 'Untitled note' );
   treeDragState.noteId = props.note.id;
   treeDragState.folderId = null;
   treeDragState.imagePath = null;
@@ -35,50 +35,50 @@ function startDrag(event: DragEvent): void {
 
 function finishDrag(): void {
   dragging.value = false;
-  if (treeDragState.noteId === props.note.id) {
+  if ( treeDragState.noteId === props.note.id ) {
     treeDragState.noteId = null;
   }
 }
 
-function openContextMenu(event: MouseEvent): void {
+function openContextMenu( event: MouseEvent ): void {
   const menuWidth = 174;
   const menuHeight = 92;
   menuPosition.value = {
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+    x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
+    y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
   };
   menuOpen.value = true;
-  nextTick(() => menu.value?.querySelector<HTMLButtonElement>("button")?.focus());
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button' )?.focus() );
 }
 
-function closeMenu(restoreFocus = false): void {
+function closeMenu( restoreFocus = false ): void {
   menuOpen.value = false;
   menuPosition.value = undefined;
-  if (restoreFocus) {
-    nextTick(() => noteButton.value?.focus());
+  if ( restoreFocus ) {
+    nextTick( () => noteButton.value?.focus() );
   }
 }
 
-function handleFocusOut(event: FocusEvent): void {
+function handleFocusOut( event: FocusEvent ): void {
   const row = event.currentTarget as HTMLElement;
-  if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
+  if ( event.relatedTarget instanceof Node && row.contains( event.relatedTarget ) ) {
     return;
   }
   closeMenu();
 }
 
-function handleMenuKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") {
+function handleMenuKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' ) {
     event.preventDefault();
-    closeMenu(true);
+    closeMenu( true );
   }
 }
 
 function requestDelete(): void {
   closeMenu();
-  const title = props.note.title || "Untitled note";
-  if (window.confirm(`Delete “${title}”? It will remain in Recently Deleted for seven days.`)) {
-    void deleteNote(props.note.id);
+  const title = props.note.title || 'Untitled note';
+  if ( window.confirm( `Delete “${ title }”? It will remain in Recently Deleted for seven days.` ) ) {
+    void deleteNote( props.note.id );
   }
 }
 
@@ -86,8 +86,8 @@ function showInFolder(): void {
   closeMenu();
   void showVaultItemInFolder({
     itemId: props.note.id,
-    kind: "note",
-    relativePath: props.note.relativePath,
+    kind: 'note',
+    relativePath: props.note.relativePath
   });
 }
 </script>
@@ -108,13 +108,22 @@ function showInFolder(): void {
       type="button"
       class="vault-tree-note-main"
       draggable="true"
-      @click="selectNote(note.id)"
+      @click="selectNote( note.id )"
       @dragstart="startDrag"
       @dragend="finishDrag"
     >
-      <AppIcon class="vault-tree-note-icon" name="file-text" :size="14" />
+      <AppIcon
+        class="vault-tree-note-icon"
+        name="file-text"
+        :size="14"
+      />
       <span class="vault-tree-note-title">{{ note.title || "Untitled note" }}</span>
-      <span v-if="note.pinned" class="vault-tree-note-favorite" title="Favorite" aria-label="Favorite">
+      <span
+        v-if="note.pinned"
+        class="vault-tree-note-favorite"
+        title="Favorite"
+        aria-label="Favorite"
+      >
         <AppIcon name="star" :size="11" />
       </span>
     </button>
@@ -140,10 +149,19 @@ function showInFolder(): void {
           :aria-label="`Actions for ${note.title || 'Untitled note'}`"
           @keydown="handleMenuKeydown"
         >
-          <button type="button" role="menuitem" @click="showInFolder">
+          <button
+            type="button"
+            role="menuitem"
+            @click="showInFolder"
+          >
             <AppIcon name="folder-open" :size="14" /> Show in folder
           </button>
-          <button type="button" class="danger" role="menuitem" @click="requestDelete">
+          <button
+            type="button"
+            class="danger"
+            role="menuitem"
+            @click="requestDelete"
+          >
             <AppIcon name="trash" :size="14" /> Delete note
           </button>
         </div>

@@ -1,0 +1,787 @@
+/* Semantic appearance bridge
+   Keep component rules palette-neutral so light and dark themes share one UI. */
+.desktop-titlebar {
+  background: var(--titlebar-background);
+}
+
+.activity-rail {
+  background: var(--rail-background);
+}
+
+.rail-button {
+  color: var(--text-muted);
+}
+
+.rail-button::before {
+  box-shadow: 0 0 10px var(--violet-glow);
+}
+
+.rail-button:hover,
+.icon-button:hover,
+.icon-button.active,
+.rail-zoom-actions button:hover:not(:disabled) {
+  background: var(--surface-control-hover);
+}
+
+.rail-button.active {
+  border-color: color-mix(in srgb, var(--violet) 12%, transparent);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--violet) 18%, transparent),
+    color-mix(in srgb, var(--violet-deep) 9%, transparent)
+  );
+}
+
+.rail-button:disabled,
+.rail-zoom-actions button:disabled {
+  color: var(--text-faint);
+}
+
+.rail-tooltip,
+.rail-zoom-popover,
+.popover-menu,
+.tag-suggestions,
+.wiki-suggestions,
+.app-toast {
+  background: var(--surface-popup);
+}
+
+.icon-button.active {
+  border-color: color-mix(in srgb, var(--violet) 24%, transparent);
+  background: var(--violet-wash);
+}
+
+.explorer-sidebar {
+  background: var(--sidebar-background);
+}
+
+.link-inspector {
+  background:
+    radial-gradient(circle at 85% 0, color-mix(in srgb, var(--violet-deep) 8%, transparent), transparent 30%),
+    var(--panel-soft);
+}
+
+.vault-identity:hover,
+.section-label button:hover,
+.vault-tree-filter button:hover,
+.vault-tree-folder-row:hover,
+.vault-tree-note:hover,
+.vault-tree-image:hover,
+.vault-tree-image:focus-within,
+.vault-tree-attachment:hover,
+.vault-tree-attachment:focus-within,
+.vault-tree-folder-add:hover,
+.vault-tree-folder-more:hover,
+.tag-chip button:hover,
+.add-tag-button:hover,
+.inspector-tabs button:hover,
+.settings-icon-button:hover,
+.settings-button--quiet:hover,
+.command-footer > button:hover,
+.template-card > footer button:hover {
+  background: var(--surface-control-hover);
+}
+
+.vault-monogram,
+.explorer-create-button,
+.empty-glyph,
+.vault-chooser-mark {
+  border-color: color-mix(in srgb, var(--violet) 18%, transparent);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--violet) 18%, transparent),
+    color-mix(in srgb, var(--violet-deep) 8%, transparent)
+  );
+  color: var(--violet-bright);
+}
+
+.explorer-create-button:hover {
+  border-color: color-mix(in srgb, var(--violet-bright) 30%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--violet) 28%, var(--surface-raised)),
+    color-mix(in srgb, var(--violet-deep) 18%, var(--surface-raised))
+  );
+  color: var(--text);
+}
+
+.explorer-scroll,
+.inspector-scroll,
+.utility-workspace,
+.settings-view {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.smart-folders > button:hover,
+.tag-list > button:hover,
+.vault-tree-root-row:hover {
+  background: var(--surface-control);
+}
+
+.vault-tree-root-row,
+.command-empty > div,
+.search-zero-state > div,
+.inspector-tabs,
+.connection-heading small,
+.snippet-status,
+.snippet-reference-button,
+.snippet-reference-content details,
+.vault-chooser-section-heading small,
+.vault-chooser-current-badge {
+  background: var(--surface-control);
+}
+
+.smart-folders > button.active,
+.vault-tree-folder-row.drop-active,
+.vault-tree-note.active,
+.inspector-tabs button.active,
+.search-scopes button.active,
+.snippet-list-item.active,
+.command-result:hover,
+.command-result.active {
+  border-color: color-mix(in srgb, var(--violet) 26%, transparent);
+  background: var(--surface-control-active);
+  color: var(--text);
+}
+
+.smart-folders > button.drop-active,
+.vault-tree-root-row.drop-active {
+  border-color: color-mix(in srgb, var(--violet) 28%, transparent);
+  background: color-mix(in srgb, var(--violet) 20%, var(--surface-raised));
+  color: var(--violet-bright);
+}
+
+.vault-tree-root-row.drop-invalid,
+.vault-tree-folder-row.drop-invalid {
+  border-color: color-mix(in srgb, var(--red) 28%, transparent);
+  background: var(--red-wash);
+  color: var(--red);
+}
+
+.vault-tree-filter,
+.new-folder-form input,
+.vault-tree-folder-rename,
+.vault-tree-subfolder-form,
+.quick-folder-entry input,
+.vault-tree-move-popover select,
+.snippet-fields input,
+.modal-fields input,
+.modal-fields textarea,
+.vault-chooser-name-field input,
+.appearance-font-family select {
+  background: var(--surface-control);
+  color: var(--text);
+}
+
+.vault-tree-move-popover select option,
+.property-control select option,
+.appearance-font-family select option,
+.appearance-font-family select optgroup {
+  background: var(--surface-popup);
+  color: var(--text);
+}
+
+.vault-tree-folder-row:hover,
+.vault-tree-note:hover,
+.vault-tree-image:hover,
+.vault-tree-image:focus-within,
+.vault-tree-attachment:hover,
+.vault-tree-attachment:focus-within {
+  color: var(--text-soft);
+}
+
+.vault-tree-attachment.is-revealed,
+.vault-tree-attachment.is-revealed:hover,
+.vault-tree-attachment.is-revealed:focus-within {
+  background: var(--surface-control-active);
+  box-shadow: inset 2px 0 var(--violet);
+  color: var(--violet-bright);
+}
+
+.vault-tree-attachment.is-revealed .vault-tree-attachment-icon {
+  color: var(--violet-bright);
+}
+
+.vault-tree-note.active {
+  box-shadow: inset 2px 0 var(--violet);
+}
+
+.smart-folders > button.active > small,
+.vault-tree-note.active,
+.vault-tree-note.active .vault-tree-note-icon {
+  color: var(--violet-bright);
+}
+
+.section-label,
+.eyebrow,
+.utility-eyebrow,
+.settings-eyebrow,
+.command-empty > div,
+.search-zero-state > div {
+  color: var(--text-muted);
+}
+
+.vault-tree-note-icon {
+  color: var(--text-faint);
+}
+
+.vault-tree-note-delete:hover {
+  background: var(--red-wash);
+  color: var(--red);
+}
+
+.quick-folder-entry,
+.note-info-card,
+.connection-card,
+.backlink-card,
+.empty-connection,
+.info-tag-cloud > span {
+  background: var(--surface-control);
+}
+
+.popover-menu button:hover,
+.search-box-large button:hover,
+.snippet-reference-button:hover {
+  background: var(--surface-control-hover);
+}
+
+.editor-workspace {
+  background: var(--editor-background);
+}
+
+.editor-toolbar {
+  background: var(--surface-toolbar);
+}
+
+.editor-crumbs {
+  color: var(--text-faint);
+}
+
+.crumb-vault {
+  color: var(--text-muted);
+}
+
+.crumb-folder {
+  color: var(--text-soft);
+}
+
+.property-control,
+.tag-chip,
+.inline-tag-form,
+.add-tag-button {
+  background: var(--surface-control);
+}
+
+.document-heading {
+  border-bottom-color: var(--border-faint);
+  background: var(--document-heading-background);
+}
+
+.note-title-input {
+  color: var(--heading-text);
+}
+
+.note-title-input::placeholder {
+  color: var(--text-faint);
+}
+
+.tag-chip {
+  border-color: color-mix(in srgb, var(--violet) 12%, transparent);
+  background: color-mix(in srgb, var(--violet) 9%, transparent);
+  color: color-mix(in srgb, var(--violet) 55%, var(--text-soft));
+}
+
+.tag-chip button,
+.suggestion-kicker,
+.editor-language-pill {
+  color: var(--text-muted);
+}
+
+.editor-canvas,
+.source-editor {
+  background: var(--surface-shell);
+}
+
+.source-editor .cm-gutters {
+  border-right-color: var(--border-faint);
+  background: color-mix(in srgb, var(--text) 1.5%, transparent);
+  color: var(--text-faint);
+  line-height: var(--source-editor-line-height);
+}
+
+.source-editor .cm-editor {
+  font-family: var(--note-font-family);
+  font-size: var(--note-font-size);
+}
+
+.source-editor .source-textarea {
+  color: var(--editor-text);
+}
+
+.editor-language-pill {
+  background: var(--surface-toolbar);
+}
+
+.wiki-suggestion:hover,
+.wiki-suggestion.active {
+  background: var(--surface-control-active);
+}
+
+.is-code-content .hljs-comment,
+.is-code-content .hljs-quote,
+.is-code-content .hljs-code,
+.is-code-content .hljs-formula {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.is-code-content .hljs-keyword,
+.is-code-content .hljs-selector-tag,
+.is-code-content .hljs-literal,
+.is-code-content .hljs-doctag,
+.is-code-content .hljs-template-tag,
+.is-code-content .hljs-variable.language_ {
+  color: var(--syntax-keyword);
+}
+
+.is-code-content .hljs-title,
+.is-code-content .hljs-section,
+.is-code-content .hljs-title.function_,
+.is-code-content .hljs-link {
+  color: var(--syntax-title);
+}
+
+.is-code-content .hljs-built_in,
+.is-code-content .hljs-type,
+.is-code-content .hljs-class .hljs-title {
+  color: var(--syntax-type);
+}
+
+.is-code-content .hljs-string,
+.is-code-content .hljs-regexp,
+.is-code-content .hljs-addition,
+.is-code-content .hljs-attribute {
+  color: var(--syntax-string);
+}
+
+.is-code-content .hljs-number,
+.is-code-content .hljs-symbol,
+.is-code-content .hljs-bullet,
+.is-code-content .hljs-operator,
+.is-code-content .hljs-selector-attr,
+.is-code-content .hljs-selector-class,
+.is-code-content .hljs-selector-id,
+.is-code-content .hljs-variable,
+.is-code-content .hljs-template-variable {
+  color: var(--syntax-number);
+}
+
+.is-code-content .hljs-meta,
+.is-code-content .hljs-meta .hljs-keyword,
+.is-code-content .hljs-tag {
+  color: var(--syntax-meta);
+}
+
+.is-code-content .hljs-name,
+.is-code-content .hljs-attr,
+.is-code-content .hljs-selector-pseudo,
+.is-code-content .hljs-property {
+  color: var(--syntax-property);
+}
+
+.is-code-content .hljs-subst,
+.is-code-content .hljs-params,
+.is-code-content .hljs-punctuation {
+  color: var(--editor-text);
+}
+
+.is-code-content .hljs-deletion {
+  color: var(--syntax-deletion);
+  background: var(--red-wash);
+}
+
+.is-code-content .hljs-addition {
+  color: var(--syntax-addition);
+  background: var(--mint-wash);
+}
+
+.is-code-content .hljs-emphasis {
+  font-style: italic;
+}
+
+.is-code-content .hljs-strong {
+  font-weight: 700;
+}
+
+.editor-statusbar {
+  background: var(--panel-deep);
+  color: var(--text-faint);
+}
+
+.empty-editor {
+  background: radial-gradient(
+    circle at 50% 38%,
+    color-mix(in srgb, var(--violet-deep) 10%, transparent),
+    transparent 23%
+  );
+}
+
+.empty-editor h2,
+.utility-hero h1,
+.settings-hero__title,
+.settings-section__title,
+.vault-chooser-heading h2 {
+  color: var(--heading-text);
+}
+
+.connection-heading,
+.search-result-topline,
+.search-result-topline span:first-child,
+.search-open-hint,
+.backlink-excerpt,
+.info-tag-cloud > span {
+  color: var(--text-muted);
+}
+
+.connection-card.unresolved strong {
+  color: var(--amber);
+}
+
+.utility-workspace,
+.settings-view {
+  background: var(--workspace-background);
+}
+
+.utility-hero h1 em {
+  color: color-mix(in srgb, var(--violet) 60%, var(--text-soft));
+}
+
+.utility-hero code,
+.snippet-help code,
+.settings-export-receipt__path,
+.settings-import-review__path {
+  background: var(--surface-control);
+  color: var(--inline-code-text);
+}
+
+.primary-action-button,
+.settings-button--primary {
+  border-color: color-mix(in srgb, var(--violet-bright) 22%, transparent);
+  background: var(--primary-button-background);
+  box-shadow: inset 0 1px var(--control-highlight-strong), var(--shadow-sm);
+  color: var(--text-on-accent);
+}
+
+.secondary-button,
+.settings-button--quiet,
+.settings-button--secondary {
+  background: var(--surface-control);
+  color: var(--text-soft);
+}
+
+.secondary-button:hover,
+.settings-button--secondary:hover:not(:disabled) {
+  background: var(--surface-control-hover);
+}
+
+.search-box-large {
+  border-color: color-mix(in srgb, var(--violet) 19%, transparent);
+  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
+  box-shadow: var(--shadow-sm), inset 0 1px var(--control-highlight);
+  color: var(--text-muted);
+}
+
+.search-box-large:focus-within {
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-lg), 0 0 0 2px var(--focus-wash);
+}
+
+.search-scopes button,
+.library-toolbar label,
+.search-result-card,
+.template-card,
+.snippet-list-item,
+.settings-section,
+.settings-stat-card,
+.settings-transfer-card,
+.settings-image-storage,
+.settings-import-choice,
+.settings-confirmation,
+.settings-import-review,
+.settings-import-preview,
+.vault-chooser-current,
+.vault-chooser-card,
+.vault-chooser-recent {
+  background: var(--surface-card);
+}
+
+.search-result-card:hover,
+.template-card:hover,
+.connection-card:hover,
+.backlink-card:hover,
+.snippet-list-item:hover,
+.vault-chooser-recent:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--violet) 18%, transparent);
+  background: var(--surface-card-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.search-result-card > strong,
+.template-card-body > strong,
+.snippet-list-item strong,
+.settings-transfer-card__title,
+.settings-import-review__title {
+  color: var(--text);
+}
+
+.search-result-card > p,
+.template-card-body > p,
+.snippet-list-item small,
+.settings-transfer-card__description,
+.settings-feature-list,
+.settings-import-choice__copy p {
+  color: var(--text-muted);
+}
+
+.search-tags em {
+  background: color-mix(in srgb, var(--violet) 8%, transparent);
+  color: color-mix(in srgb, var(--violet) 55%, var(--text-muted));
+}
+
+.search-tags em.matched {
+  background: color-mix(in srgb, var(--violet) 20%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--violet) 12%, transparent);
+  color: var(--violet-bright);
+}
+
+.template-card-preview {
+  background:
+    radial-gradient(circle at 78% 15%, color-mix(in srgb, var(--violet) 12%, transparent), transparent 32%),
+    linear-gradient(145deg, var(--bg-elevated), var(--bg-raised));
+}
+
+.paper-lines > span {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text-soft) 40%, transparent),
+    color-mix(in srgb, var(--text-soft) 6%, transparent)
+  );
+}
+
+.template-card-body > code,
+.settings-import-preview {
+  background: color-mix(in srgb, var(--panel-deep) 22%, transparent);
+  color: var(--text-muted);
+}
+
+.built-in-badge {
+  color: var(--mint);
+}
+
+.template-card > footer .template-use {
+  color: var(--violet);
+}
+
+.snippet-library {
+  background: color-mix(in srgb, var(--panel-deep) 76%, transparent);
+}
+
+.snippet-editor-area,
+.css-editor-frame {
+  background: var(--surface-shell);
+}
+
+.snippet-editor-header,
+.css-editor-topbar {
+  background: var(--surface-toolbar);
+}
+
+.css-editor-body {
+  background: var(--surface-code);
+}
+
+.css-line-numbers {
+  color: var(--text-faint);
+}
+
+.snippet-fields label > span,
+.modal-fields label > span,
+.css-editor-topbar > span:first-child,
+.snippet-help > span > svg {
+  color: var(--text-muted);
+}
+
+.css-editor-body textarea,
+.snippet-reference-example pre {
+  background: var(--surface-code);
+  color: var(--editor-text);
+}
+
+.snippet-reference-grid > code {
+  color: var(--inline-code-text);
+}
+
+.toggle-control > span {
+  background: var(--surface-control-hover);
+}
+
+.toggle-control > span > i {
+  background: var(--text-muted);
+  box-shadow: var(--shadow-sm);
+}
+
+.toggle-control > input:checked + span {
+  border-color: color-mix(in srgb, var(--mint) 22%, transparent);
+  background: var(--mint-wash);
+}
+
+.modal-backdrop,
+.command-backdrop {
+  background: var(--overlay-backdrop);
+}
+
+.editor-modal,
+.vault-chooser-dialog {
+  background: var(--modal-background);
+}
+
+.command-palette {
+  border-color: var(--border-strong);
+  background: var(--modal-background);
+  box-shadow: var(--shadow-lg);
+}
+
+.command-input-wrap,
+.command-footer,
+.editor-modal > footer,
+.vault-chooser-footer {
+  background: color-mix(in srgb, var(--panel-deep) 22%, transparent);
+}
+
+.command-result-icon,
+.settings-feedback__icon,
+.settings-export-receipt__icon,
+.settings-transfer-card__icon,
+.settings-import-review__icon,
+.settings-danger-row__icon,
+.vault-chooser-card-icon,
+.vault-chooser-recent-icon {
+  background: var(--surface-control);
+}
+
+.command-section-label,
+.command-section-label > span:last-child,
+.command-result-copy > span:last-child,
+.command-result-meta,
+.command-footer > button {
+  color: var(--text-muted);
+}
+
+.command-result-title {
+  color: var(--text);
+}
+
+.settings-section {
+  box-shadow: inset 0 1px var(--control-highlight);
+}
+
+.settings-section--overview,
+.settings-section--appearance {
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--violet) 8%, transparent), transparent 35%),
+    var(--surface-card);
+}
+
+.settings-stat-card,
+.settings-transfer-card,
+.settings-import-choice,
+.settings-import-review,
+.settings-confirmation {
+  border-color: var(--border-faint);
+}
+
+.settings-transfer-card--export {
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--mint) 7%, transparent), transparent 35%),
+    var(--surface-card);
+}
+
+.settings-feedback,
+.settings-export-receipt,
+.settings-desktop-notice,
+.vault-chooser-alert,
+.vault-chooser-conflict {
+  background: var(--surface-card);
+}
+
+.settings-feedback__message,
+.settings-export-receipt__path,
+.settings-import-review__path,
+.settings-import-preview__label,
+.settings-import-preview__overflow,
+.settings-import-empty,
+.settings-confirmation__copy p,
+.settings-danger-row__copy,
+.vault-chooser-heading p,
+.vault-chooser-card p,
+.vault-chooser-migration p {
+  color: var(--text-muted);
+}
+
+.settings-export-receipt strong,
+.settings-confirmation__copy strong,
+.vault-chooser-migration strong,
+.vault-chooser-card strong {
+  color: var(--text-soft);
+}
+
+.settings-export-receipt__counts,
+.settings-import-preview__label,
+.settings-import-preview__list li,
+.settings-import-preview__list svg,
+.settings-import-preview__overflow,
+.vault-chooser-current code,
+.vault-chooser-section-heading small,
+.vault-chooser-recent-icon {
+  color: var(--text-muted);
+}
+
+.settings-warning-details,
+.settings-warning-list {
+  color: var(--amber);
+}
+
+.settings-button--danger-ghost,
+.settings-button--danger-ghost:hover:not(:disabled),
+.settings-button--danger {
+  color: var(--red);
+}
+
+.settings-section--danger {
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--red) 7%, transparent), transparent 33%),
+    var(--surface-card);
+}
+
+.vault-chooser-dialog {
+  background: var(--chooser-background);
+  box-shadow: var(--shadow-lg), inset 0 1px var(--control-highlight);
+}
+
+.vault-chooser-card--open,
+.vault-chooser-migration {
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--mint) 8%, transparent), transparent 42%),
+    var(--surface-card);
+}
+
+.vault-chooser-current code,
+.vault-chooser-recent-copy code {
+  color: var(--text-muted);
+}
+
+.vault-chooser-name-field input:focus {
+  border-color: var(--focus-ring);
+  background: var(--surface-elevated);
+  box-shadow: 0 0 0 2px var(--focus-wash);
+}

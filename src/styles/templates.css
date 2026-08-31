@@ -1,0 +1,218 @@
+/* Template library */
+.templates-page {
+  width: min(100%, 1150px);
+}
+
+.library-toolbar {
+  display: flex;
+  min-height: 70px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+}
+
+.library-toolbar label {
+  display: flex;
+  width: min(310px, 100%);
+  height: 33px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--border-faint);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-faint);
+}
+
+.library-toolbar label:focus-within {
+  border-color: var(--focus-ring);
+  background: var(--focus-wash);
+  color: var(--text-muted);
+}
+
+.library-toolbar input {
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 10.5px;
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.template-card {
+  display: flex;
+  min-width: 0;
+  min-height: 300px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-faint);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.016);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.014);
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.template-card:hover {
+  border-color: rgba(184, 143, 237, 0.17);
+  box-shadow: 0 17px 38px rgba(0, 0, 0, 0.17);
+  transform: translateY(-2px);
+}
+
+.template-card-preview {
+  position: relative;
+  height: 119px;
+  flex: none;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-faint);
+  background:
+    radial-gradient(circle at 78% 15%, rgba(148, 98, 197, 0.12), transparent 32%),
+    linear-gradient(145deg, #191520, #121017);
+}
+
+.template-card-preview::after {
+  position: absolute;
+  right: -30px;
+  bottom: -52px;
+  width: 150px;
+  height: 120px;
+  border: 1px solid rgba(192, 153, 238, 0.07);
+  border-radius: 42% 58% 0 0;
+  content: "";
+  transform: rotate(-16deg);
+}
+
+.template-glyph {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(191, 151, 241, 0.14);
+  border-radius: 10px;
+  background: rgba(124, 78, 158, 0.12);
+  color: var(--violet);
+}
+
+.paper-lines {
+  position: absolute;
+  top: 21px;
+  right: 19px;
+  display: flex;
+  width: 46%;
+  flex-direction: column;
+  gap: 7px;
+  opacity: 0.45;
+}
+
+.paper-lines > span {
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(208, 194, 218, 0.4), rgba(208, 194, 218, 0.06));
+}
+
+.paper-lines > span:nth-child(2) { width: 82%; }
+.paper-lines > span:nth-child(3) { width: 91%; }
+.paper-lines > span:nth-child(4) { width: 64%; }
+
+.built-in-badge {
+  position: absolute;
+  bottom: 11px;
+  left: 15px;
+  padding: 3px 6px;
+  border: 1px solid rgba(126, 211, 179, 0.12);
+  border-radius: 5px;
+  background: var(--mint-wash);
+  color: #83baa4;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+}
+
+.template-card-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 14px 15px 13px;
+}
+
+.template-card-body > strong {
+  color: var(--text);
+  font-family: var(--serif);
+  font-size: 16px;
+  font-weight: 570;
+  letter-spacing: -0.02em;
+}
+
+.template-card-body > p {
+  display: -webkit-box;
+  margin: 5px 0 12px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.template-card-body > code {
+  margin-top: auto;
+  padding: 7px 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-faint);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.13);
+  color: #8d7b99;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-card > footer {
+  display: flex;
+  height: 43px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 12px;
+  border-top: 1px solid var(--border-faint);
+}
+
+.template-card > footer button {
+  display: flex;
+  height: 29px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 570;
+}
+
+.template-card > footer button:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-soft);
+}
+
+.template-card > footer .template-use {
+  color: #a386b6;
+}
+
+.template-card > footer .template-use:hover {
+  background: var(--violet-wash);
+  color: var(--violet-bright);
+}

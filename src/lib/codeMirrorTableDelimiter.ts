@@ -1,34 +1,34 @@
 import {
   EditorSelection,
-  Transaction,
-} from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import { liveMarkdownDocumentModel } from "./liveMarkdownDocumentModel";
-import { isLiveMarkdownTableDelimiterCandidate } from "./liveMarkdownTable";
-import type { Extension } from "@codemirror/state";
+  Transaction
+} from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { liveMarkdownDocumentModel } from './liveMarkdownDocumentModel';
+import { isLiveMarkdownTableDelimiterCandidate } from './liveMarkdownTable';
+import type { Extension } from '@codemirror/state';
 
-const SMART_DASHES = new Set(["–", "—"]);
+const SMART_DASHES = new Set([ '–', '—' ]);
 
 export const tableDelimiterHyphenExtension: Extension =
-  EditorView.inputHandler.of(preserveTableDelimiterHyphens);
+  EditorView.inputHandler.of( preserveTableDelimiterHyphens );
 
 function preserveTableDelimiterHyphens(
   view: EditorView,
   from: number,
   to: number,
-  text: string,
+  text: string
 ): boolean {
-  if (view.composing || !SMART_DASHES.has(text)) {
+  if ( view.composing || !SMART_DASHES.has( text ) ) {
     return false;
   }
 
   const value = view.state.doc.toString();
-  if (!isLiveMarkdownTableDelimiterCandidate(
+  if ( !isLiveMarkdownTableDelimiterCandidate(
     value,
     from,
     to,
-    liveMarkdownDocumentModel(view.state).blocks,
-  )) {
+    liveMarkdownDocumentModel( view.state ).blocks
+  ) ) {
     return false;
   }
 
@@ -36,15 +36,15 @@ function preserveTableDelimiterHyphens(
   // DOM observer restore them without a same-text document transaction,
   // which would otherwise consume or invalidate the preceding undo step.
   const current = view.state.selection.main;
-  if (current.from === from && current.to === to) {
+  if ( current.from === from && current.to === to ) {
     view.dispatch({
       selection: view.state.selection.replaceRange(
-        EditorSelection.cursor(to),
-        view.state.selection.mainIndex,
+        EditorSelection.cursor( to ),
+        view.state.selection.mainIndex
       ),
-      annotations: Transaction.addToHistory.of(false),
+      annotations: Transaction.addToHistory.of( false ),
       scrollIntoView: true,
-      userEvent: "input.type",
+      userEvent: 'input.type'
     });
   }
 

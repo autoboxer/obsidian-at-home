@@ -4,72 +4,72 @@ import {
   onBeforeUnmount,
   ref,
   shallowRef,
-  watch,
-} from "vue";
-import { EditorSelection } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+  watch
+} from 'vue';
+import { EditorSelection } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 import {
   activeDocumentSearchMatch,
   codeMirrorDocumentSearchExtension,
-  setDocumentSearchMatches,
-} from "../lib/codeMirrorDocumentSearch";
+  setDocumentSearchMatches
+} from '../lib/codeMirrorDocumentSearch';
 import {
   DOCUMENT_SEARCH_MIN_LENGTH,
   findDocumentTextMatches,
   normalizeDocumentSearchQuery,
-  stepDocumentSearchIndex,
-} from "../lib/documentSearch";
-import type { Ref } from "vue";
-import type { DocumentSearchDirection, DocumentTextMatch } from "../lib/documentSearch";
+  stepDocumentSearchIndex
+} from '../lib/documentSearch';
+import type { Ref } from 'vue';
+import type { DocumentSearchDirection, DocumentTextMatch } from '../lib/documentSearch';
 
 const SEARCH_DEBOUNCE_MS = 140;
 
 export { codeMirrorDocumentSearchExtension };
 
-export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefined>) {
-  const isOpen = ref(false);
-  const isPending = ref(false);
-  const query = ref("");
+export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefined> ) {
+  const isOpen = ref( false );
+  const isPending = ref( false );
+  const query = ref( '' );
   const searchInput = ref<HTMLInputElement>();
   const matches = shallowRef<readonly DocumentTextMatch[]>([]);
-  const activeMatchIndex = ref(-1);
+  const activeMatchIndex = ref( -1 );
   let searchTimer: number | undefined;
 
-  const normalizedQuery = computed(() => normalizeDocumentSearchQuery(query.value));
-  const matchCount = computed(() => matches.value.length);
-  const activeMatchNumber = computed(() =>
+  const normalizedQuery = computed( () => normalizeDocumentSearchQuery( query.value ) );
+  const matchCount = computed( () => matches.value.length );
+  const activeMatchNumber = computed( () =>
     activeMatchIndex.value < 0 ? 0 : activeMatchIndex.value + 1
   );
-  const statusText = computed(() => {
-    if (!query.value.trim()) {
-      return `${DOCUMENT_SEARCH_MIN_LENGTH}+ characters`;
+  const statusText = computed( () => {
+    if ( !query.value.trim() ) {
+      return `${ DOCUMENT_SEARCH_MIN_LENGTH }+ characters`;
     }
-    if (!normalizedQuery.value) {
-      return `${DOCUMENT_SEARCH_MIN_LENGTH} characters minimum`;
+    if ( !normalizedQuery.value ) {
+      return `${ DOCUMENT_SEARCH_MIN_LENGTH } characters minimum`;
     }
-    if (isPending.value) {
-      return "Searching…";
+    if ( isPending.value ) {
+      return 'Searching…';
     }
-    if (!matchCount.value) {
-      return "0 matches";
+    if ( !matchCount.value ) {
+      return '0 matches';
     }
 
-    return `${activeMatchNumber.value} of ${matchCount.value}`;
+    return `${ activeMatchNumber.value } of ${ matchCount.value }`;
   });
 
-  watch(query, () => {
-    if (isOpen.value) {
-      scheduleSearch(true);
-    }
-  });
-
-  watch(editorView, () => {
-    if (isOpen.value && normalizedQuery.value) {
-      scheduleSearch(false, 0);
+  watch( query, () => {
+    if ( isOpen.value ) {
+      scheduleSearch( true );
     }
   });
 
-  onBeforeUnmount(cancelScheduledSearch);
+  watch( editorView, () => {
+    if ( isOpen.value && normalizedQuery.value ) {
+      scheduleSearch( false, 0 );
+    }
+  });
+
+  onBeforeUnmount( cancelScheduledSearch );
 
   async function openSearch(): Promise<void> {
     isOpen.value = true;
@@ -77,7 +77,7 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
     editorView.value?.requestMeasure();
     searchInput.value?.focus();
     searchInput.value?.select();
-    scheduleSearch(true, 0);
+    scheduleSearch( true, 0 );
   }
 
   async function closeSearch(): Promise<void> {
@@ -86,115 +86,115 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
     resetResults();
     await nextTick();
     const view = editorView.value;
-    if (!view) {
+    if ( !view ) {
       return;
     }
 
-    const activeMatch = activeDocumentSearchMatch(view.state);
+    const activeMatch = activeDocumentSearchMatch( view.state );
     view.requestMeasure();
     view.dispatch({
       effects: setDocumentSearchMatches.of({
         activeIndex: activeMatchIndex.value,
-        matches: matches.value,
+        matches: matches.value
       }),
-      ...(activeMatch && activeMatch.to <= view.state.doc.length
+      ...( activeMatch && activeMatch.to <= view.state.doc.length
         ? {
-            selection: EditorSelection.range(activeMatch.from, activeMatch.to),
-            scrollIntoView: true,
-            userEvent: "select.search",
-          }
-        : {}),
+          selection: EditorSelection.range( activeMatch.from, activeMatch.to ),
+          scrollIntoView: true,
+          userEvent: 'select.search'
+        }
+        : {})
     });
     view.focus();
   }
 
-  function handleEditorSearchKeydown(event: KeyboardEvent): void {
-    if (event.isComposing) {
+  function handleEditorSearchKeydown( event: KeyboardEvent ): void {
+    if ( event.isComposing ) {
       return;
     }
 
-    const commandModifier = (event.metaKey || event.ctrlKey) && !event.altKey;
-    if (commandModifier && event.key.toLocaleLowerCase() === "f") {
+    const commandModifier = ( event.metaKey || event.ctrlKey ) && !event.altKey;
+    if ( commandModifier && event.key.toLocaleLowerCase() === 'f' ) {
       event.preventDefault();
       event.stopPropagation();
       void openSearch();
 
       return;
     }
-    if (!isOpen.value) {
+    if ( !isOpen.value ) {
       return;
     }
-    if (event.key === "Escape") {
+    if ( event.key === 'Escape' ) {
       event.preventDefault();
       event.stopPropagation();
       void closeSearch();
 
       return;
     }
-    if (event.key === "F3") {
+    if ( event.key === 'F3' ) {
       event.preventDefault();
       event.stopPropagation();
-      moveToMatch(event.shiftKey ? "previous" : "next");
+      moveToMatch( event.shiftKey ? 'previous' : 'next' );
     }
   }
 
-  function handleSearchInputKeydown(event: KeyboardEvent): void {
-    const modifiedTab = event.key === "Tab" && (
+  function handleSearchInputKeydown( event: KeyboardEvent ): void {
+    const modifiedTab = event.key === 'Tab' && (
       event.altKey || event.ctrlKey || event.metaKey
     );
     if (
       event.isComposing ||
       modifiedTab ||
-      (event.key !== "Tab" && event.key !== "Enter")
+      ( event.key !== 'Tab' && event.key !== 'Enter' )
     ) {
       return;
     }
 
     event.preventDefault();
     event.stopPropagation();
-    moveToMatch(event.shiftKey ? "previous" : "next");
+    moveToMatch( event.shiftKey ? 'previous' : 'next' );
   }
 
-  function moveToMatch(direction: DocumentSearchDirection): void {
+  function moveToMatch( direction: DocumentSearchDirection ): void {
     activeMatchIndex.value = stepDocumentSearchIndex(
       activeMatchIndex.value,
       matchCount.value,
-      direction,
+      direction
     );
     updateDecorations();
     scrollToActiveMatch();
   }
 
   function refreshSearch(): void {
-    if (isOpen.value && normalizedQuery.value) {
-      scheduleSearch(false, 0);
+    if ( isOpen.value && normalizedQuery.value ) {
+      scheduleSearch( false, 0 );
     }
   }
 
-  function scheduleSearch(resetActiveMatch: boolean, delay = SEARCH_DEBOUNCE_MS): void {
+  function scheduleSearch( resetActiveMatch: boolean, delay = SEARCH_DEBOUNCE_MS ): void {
     cancelScheduledSearch();
-    if (!normalizedQuery.value) {
+    if ( !normalizedQuery.value ) {
       clearResults();
 
       return;
     }
 
     isPending.value = true;
-    if (resetActiveMatch) {
+    if ( resetActiveMatch ) {
       matches.value = [];
       activeMatchIndex.value = -1;
       updateDecorations();
     }
-    searchTimer = window.setTimeout(() => {
+    searchTimer = window.setTimeout( () => {
       searchTimer = undefined;
-      performSearch(resetActiveMatch);
-    }, delay);
+      performSearch( resetActiveMatch );
+    }, delay );
   }
 
-  function performSearch(resetActiveMatch: boolean): void {
+  function performSearch( resetActiveMatch: boolean ): void {
     const view = editorView.value;
     const searchQuery = normalizedQuery.value;
-    if (!isOpen.value || !view || !searchQuery) {
+    if ( !isOpen.value || !view || !searchQuery ) {
       clearResults();
 
       return;
@@ -202,7 +202,7 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
 
     matches.value = findDocumentTextMatches(
       view.state.doc.toString(),
-      searchQuery,
+      searchQuery
     );
     if (
       resetActiveMatch ||
@@ -213,20 +213,20 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
     }
     isPending.value = false;
     updateDecorations();
-    if (activeMatchIndex.value >= 0) {
+    if ( activeMatchIndex.value >= 0 ) {
       scrollToActiveMatch();
     }
   }
 
   function scrollToActiveMatch(): void {
     const view = editorView.value;
-    const match = matches.value[activeMatchIndex.value];
-    if (!view || !match) {
+    const match = matches.value[ activeMatchIndex.value ];
+    if ( !view || !match ) {
       return;
     }
 
     view.dispatch({
-      effects: EditorView.scrollIntoView(match.from, { y: "center" }),
+      effects: EditorView.scrollIntoView( match.from, { y: 'center' })
     });
   }
 
@@ -245,17 +245,17 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
     editorView.value?.dispatch({
       effects: setDocumentSearchMatches.of({
         activeIndex: activeMatchIndex.value,
-        matches: matches.value,
-      }),
+        matches: matches.value
+      })
     });
   }
 
   function cancelScheduledSearch(): void {
-    if (searchTimer === undefined) {
+    if ( searchTimer === undefined ) {
       return;
     }
 
-    window.clearTimeout(searchTimer);
+    window.clearTimeout( searchTimer );
     searchTimer = undefined;
   }
 
@@ -270,6 +270,6 @@ export function useCodeMirrorDocumentSearch(editorView: Ref<EditorView | undefin
     query,
     refreshSearch,
     searchInput,
-    statusText,
+    statusText
   };
 }

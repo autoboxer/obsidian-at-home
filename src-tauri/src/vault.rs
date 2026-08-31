@@ -12,6 +12,17 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use walkdir::{DirEntry, WalkDir};
 
+pub(crate) mod dialogs;
+pub(crate) mod export;
+pub(crate) mod import;
+
+pub use dialogs::*;
+pub use export::*;
+pub use import::*;
+
+#[cfg(test)]
+mod tests;
+
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_SNIPPET_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TOTAL_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
@@ -93,401 +104,6 @@ pub struct ExportResult {
     pub warnings: Vec<String>,
 }
 
-/// Opens the system's native directory picker and returns a normal filesystem path.
-#[tauri::command]
-pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
-    let selected = app.dialog().file().blocking_pick_folder();
-    selected
-        .map(|path| {
-            path.into_path()
-                .map(|path| path.to_string_lossy().into_owned())
-                .map_err(|error| format!("The selected folder is not a local filesystem path: {error}"))
-        })
-        .transpose()
-}
-
-/// Opens the native picker for a raster image that can be copied into a vault.
-#[tauri::command]
-pub async fn pick_image_file(app: AppHandle) -> Result<Option<String>, String> {
-    let selected = app
-        .dialog()
-        .file()
-        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"])
-        .blocking_pick_file();
-    selected
-        .map(|path| {
-            path.into_path()
-                .map(|path| path.to_string_lossy().into_owned())
-                .map_err(|error| {
-                    format!("The selected image is not a local filesystem path: {error}")
-                })
-        })
-        .transpose()
-}
-
-/// Opens the native picker for a regular file that can be copied into a vault.
-#[tauri::command]
-pub async fn pick_attachment_file(app: AppHandle) -> Result<Option<String>, String> {
-    let selected = app.dialog().file().blocking_pick_file();
-    selected
-        .map(|path| {
-            path.into_path()
-                .map(|path| path.to_string_lossy().into_owned())
-                .map_err(|error| {
-                    format!("The selected attachment is not a local filesystem path: {error}")
-                })
-        })
-        .transpose()
-}
-
-/// Reads an Obsidian vault without modifying it.
-///
-/// Markdown is returned byte-for-byte as UTF-8 text, and safe asset paths are
-/// inventoried for a later confirmed copy. Frontmatter is only inspected to infer a
-/// display title and tags; the caller receives the original content unchanged.
-#[tauri::command]
-pub fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
-    let root = validate_import_root(&path)?;
-    let vault_name = root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Imported vault")
-        .to_owned();
-
-    let mut images = Vec::new();
-    let mut attachments = Vec::new();
-    let mut notes = Vec::new();
-    let mut warnings = WarningCollector::default();
-    let mut total_bytes = 0_u64;
-
-    let walker = WalkDir::new(&root)
-        .follow_links(false)
-        .max_depth(128)
-        .into_iter()
-        .filter_entry(should_visit_note_entry);
-
-    for entry in walker {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                warnings.push(format!("Could not inspect a vault entry: {error}"));
-                continue;
-            }
-        };
-
-        if entry.file_type().is_symlink() || !entry.file_type().is_file() {
-            continue;
-        }
-        if is_canvas_path(entry.path()) {
-            continue;
-        }
-        if is_supported_image_path(entry.path()) {
-            if images.len().saturating_add(attachments.len()) >= MAX_IMPORTED_ASSETS {
-                warnings.push(format!(
-                    "Only the first {MAX_IMPORTED_ASSETS} asset files can be imported."
-                ));
-                continue;
-            }
-            if let Some(image) = inspect_portable_image(&root, &entry, &mut warnings) {
-                images.push(image);
-            }
-            continue;
-        }
-        if !is_markdown_path(entry.path()) {
-            if images.len().saturating_add(attachments.len()) >= MAX_IMPORTED_ASSETS {
-                warnings.push(format!(
-                    "Only the first {MAX_IMPORTED_ASSETS} asset files can be imported."
-                ));
-                continue;
-            }
-            if let Some(attachment) =
-                inspect_portable_attachment(&root, &entry, &mut warnings)
-            {
-                attachments.push(attachment);
-            }
-            continue;
-        }
-        if notes.len() >= MAX_IMPORTED_NOTES {
-            warnings.push(format!(
-                "Stopped after {MAX_IMPORTED_NOTES} notes to stay within the import limit."
-            ));
-            break;
-        }
-
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                warnings.push(format!(
-                    "Skipped {} because its metadata could not be read: {error}",
-                    display_relative(&root, entry.path())
-                ));
-                continue;
-            }
-        };
-        if metadata.len() > MAX_NOTE_BYTES {
-            warnings.push(format!(
-                "Skipped {} because it is larger than {} MiB.",
-                display_relative(&root, entry.path()),
-                MAX_NOTE_BYTES / 1024 / 1024
-            ));
-            continue;
-        }
-        if total_bytes.saturating_add(metadata.len()) > MAX_TOTAL_IMPORT_BYTES {
-            warnings.push(format!(
-                "Stopped after reading {} MiB of notes to stay within the import limit.",
-                MAX_TOTAL_IMPORT_BYTES / 1024 / 1024
-            ));
-            break;
-        }
-
-        let relative = match entry.path().strip_prefix(&root) {
-            Ok(relative) => relative,
-            Err(_) => {
-                warnings.push(format!(
-                    "Skipped an entry outside the selected vault: {}",
-                    entry.path().display()
-                ));
-                continue;
-            }
-        };
-        let relative_path = match path_to_slash_string(relative) {
-            Some(path) => path,
-            None => {
-                warnings.push(format!(
-                    "Skipped a note whose path is not valid Unicode: {}",
-                    entry.path().display()
-                ));
-                continue;
-            }
-        };
-        let folder_path = relative
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .and_then(path_to_slash_string)
-            .unwrap_or_default();
-
-        let content = match fs::read_to_string(entry.path()) {
-            Ok(content) => content,
-            Err(error) => {
-                warnings.push(format!(
-                    "Skipped {relative_path} because it is not readable UTF-8: {error}"
-                ));
-                continue;
-            }
-        };
-        total_bytes += metadata.len();
-
-        let frontmatter = parse_basic_frontmatter(&content);
-        let fallback_title = relative
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.trim().is_empty())
-            .unwrap_or("Untitled");
-
-        notes.push(ImportedNote {
-            title: frontmatter
-                .title
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or_else(|| fallback_title.to_owned()),
-            content,
-            folder_path,
-            relative_path,
-            tags: frontmatter.tags,
-        });
-    }
-
-    images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    attachments.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    let snippets = import_snippets(&root, &mut warnings);
-
-    Ok(ImportResult {
-        vault_name,
-        images,
-        attachments,
-        notes,
-        snippets,
-        warnings: warnings.finish(),
-    })
-}
-
-/// Writes a portable Obsidian vault, including supported asset files, into a
-/// newly-created child of `parent_path`. Existing files and directories are
-/// never reused or overwritten.
-#[tauri::command(rename_all = "camelCase")]
-pub fn export_obsidian_vault(
-    parent_path: String,
-    source_path: String,
-    vault_name: String,
-    notes: Vec<ExportNote>,
-    templates: Vec<ExportTemplate>,
-    snippets: Vec<VaultSnippet>,
-) -> Result<ExportResult, String> {
-    let parent = validate_export_parent(&parent_path)?;
-    let source_root = validate_import_root(&source_path)?;
-    validate_vault_name(&vault_name)?;
-    let mut warnings = WarningCollector::default();
-    let (images, attachments) = collect_portable_assets(&source_root, &mut warnings);
-
-    let root = create_unique_export_dir(&parent, vault_name.trim()).map_err(|error| {
-        format!(
-            "Could not create a new export folder in {}: {error}",
-            parent.display()
-        )
-    })?;
-
-    let mut note_count = 0;
-    let mut template_count = 0;
-    let mut snippet_count = 0;
-
-    for note in notes {
-        if note.content.len() as u64 > MAX_NOTE_BYTES {
-            warnings.push(format!(
-                "Skipped note {:?} because it is larger than {} MiB.",
-                note.title,
-                MAX_NOTE_BYTES / 1024 / 1024
-            ));
-            continue;
-        }
-
-        let relative_folder = match checked_relative_folder(&note.folder_path) {
-            Ok(folder) => folder,
-            Err(reason) => {
-                warnings.push(format!(
-                    "Skipped note {:?} because its folder path is unsafe: {reason}",
-                    note.title
-                ));
-                continue;
-            }
-        };
-        let directory = root.join(relative_folder);
-        if let Err(error) = fs::create_dir_all(&directory) {
-            warnings.push(format!(
-                "Skipped note {:?} because its folder could not be created: {error}",
-                note.title
-            ));
-            continue;
-        }
-
-        let stem = safe_file_stem(&note.title, "Untitled");
-        let markdown = render_note_markdown(&note.title, &note.tags, &note.content);
-        match write_unique_text_file(&directory, &stem, "md", &markdown) {
-            Ok(_) => note_count += 1,
-            Err(error) => warnings.push(format!(
-                "Could not export note {:?}: {error}",
-                note.title
-            )),
-        }
-    }
-
-    if !templates.is_empty() {
-        let directory = root.join("Templates");
-        match fs::create_dir(&directory) {
-            Ok(()) => {
-                for template in templates {
-                    if template.content.len() as u64 > MAX_NOTE_BYTES {
-                        warnings.push(format!(
-                            "Skipped template {:?} because it is larger than {} MiB.",
-                            template.name,
-                            MAX_NOTE_BYTES / 1024 / 1024
-                        ));
-                        continue;
-                    }
-                    let stem = safe_file_stem(&template.name, "Untitled template");
-                    match write_unique_text_file(&directory, &stem, "md", &template.content) {
-                        Ok(_) => template_count += 1,
-                        Err(error) => warnings.push(format!(
-                            "Could not export template {:?}: {error}",
-                            template.name
-                        )),
-                    }
-                }
-            }
-            Err(error) => warnings.push(format!("Could not create Templates: {error}")),
-        }
-    }
-
-    if !snippets.is_empty() || template_count > 0 {
-        let obsidian_directory = root.join(".obsidian");
-        if let Err(error) = fs::create_dir(&obsidian_directory) {
-            warnings.push(format!("Could not create .obsidian settings: {error}"));
-        } else {
-            if template_count > 0 {
-                let settings = json!({ "folder": "Templates" });
-                if let Err(error) = write_json_file(
-                    &obsidian_directory.join("templates.json"),
-                    &settings,
-                ) {
-                    warnings.push(format!("Could not write template settings: {error}"));
-                }
-            }
-
-            if !snippets.is_empty() {
-                let snippet_directory = obsidian_directory.join("snippets");
-                if let Err(error) = fs::create_dir(&snippet_directory) {
-                    warnings.push(format!("Could not create the CSS snippets folder: {error}"));
-                } else {
-                    let mut enabled_names = Vec::new();
-                    for snippet in snippets {
-                        if snippet.css.len() as u64 > MAX_SNIPPET_BYTES {
-                            warnings.push(format!(
-                                "Skipped CSS snippet {:?} because it is larger than {} MiB.",
-                                snippet.name,
-                                MAX_SNIPPET_BYTES / 1024 / 1024
-                            ));
-                            continue;
-                        }
-                        let stem = safe_file_stem(
-                            strip_extension_case_insensitive(&snippet.name, "css"),
-                            "snippet",
-                        );
-                        match write_unique_text_file(&snippet_directory, &stem, "css", &snippet.css)
-                        {
-                            Ok(path) => {
-                                snippet_count += 1;
-                                if snippet.enabled {
-                                    if let Some(exported_stem) =
-                                        path.file_stem().and_then(|value| value.to_str())
-                                    {
-                                        enabled_names.push(exported_stem.to_owned());
-                                    }
-                                }
-                            }
-                            Err(error) => warnings.push(format!(
-                                "Could not export CSS snippet {:?}: {error}",
-                                snippet.name
-                            )),
-                        }
-                    }
-
-                    let appearance = json!({ "enabledCssSnippets": enabled_names });
-                    if let Err(error) = write_json_file(
-                        &obsidian_directory.join("appearance.json"),
-                        &appearance,
-                    ) {
-                        warnings.push(format!("Could not write CSS snippet settings: {error}"));
-                    }
-                }
-            }
-        }
-    }
-
-    let image_count = export_portable_images(&source_root, &root, &images, &mut warnings);
-    let attachment_count =
-        export_portable_attachments(&source_root, &root, &attachments, &mut warnings);
-
-    Ok(ExportResult {
-        path: root.to_string_lossy().into_owned(),
-        image_count,
-        attachment_count,
-        note_count,
-        template_count,
-        snippet_count,
-        warnings: warnings.finish(),
-    })
-}
-
 fn validate_import_root(input: &str) -> Result<PathBuf, String> {
     if input.trim().is_empty() {
         return Err("Choose an Obsidian vault folder to import.".to_owned());
@@ -540,8 +156,10 @@ fn validate_vault_name(name: &str) -> Result<(), String> {
         return Err("The exported vault name is not valid.".to_owned());
     }
     if name.ends_with('.') || name.chars().any(is_forbidden_component_character) {
-        return Err("The exported vault name contains characters that are not safe in a folder name."
-            .to_owned());
+        return Err(
+            "The exported vault name contains characters that are not safe in a folder name."
+                .to_owned(),
+        );
     }
     if is_windows_reserved_name(name) {
         return Err("The exported vault name is reserved by the operating system.".to_owned());
@@ -638,9 +256,7 @@ fn collect_portable_assets(
             if let Some(image) = inspect_portable_image(root, &entry, warnings) {
                 images.push(image);
             }
-        } else if let Some(attachment) =
-            inspect_portable_attachment(root, &entry, warnings)
-        {
+        } else if let Some(attachment) = inspect_portable_attachment(root, &entry, warnings) {
             attachments.push(attachment);
         }
     }
@@ -784,7 +400,11 @@ fn export_portable_images(
                 continue;
             }
         }
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(&target) {
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
             Ok(file) => file,
             Err(error) => {
                 warnings.push(format!("Could not export {}: {error}", image.relative_path));
@@ -976,7 +596,9 @@ fn read_enabled_snippets(obsidian: &Path, warnings: &mut WarningCollector) -> Ha
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return HashSet::new(),
         Err(error) => {
-            warnings.push(format!("Could not inspect .obsidian/appearance.json: {error}"));
+            warnings.push(format!(
+                "Could not inspect .obsidian/appearance.json: {error}"
+            ));
 
             return HashSet::new();
         }
@@ -1203,8 +825,10 @@ fn checked_relative_folder(folder: &str) -> Result<PathBuf, String> {
     let mut result = PathBuf::new();
     for component in folder.split('/') {
         if component.is_empty() || component == "." || component == ".." {
-            return Err("empty, current-directory, and parent-directory segments are not allowed"
-                .to_owned());
+            return Err(
+                "empty, current-directory, and parent-directory segments are not allowed"
+                    .to_owned(),
+            );
         }
         if component.eq_ignore_ascii_case(".obsidian")
             || component.eq_ignore_ascii_case(".trash")
@@ -1240,7 +864,10 @@ fn checked_relative_image_path(path: &str) -> Result<PathBuf, String> {
         || file_name.ends_with(' ')
         || file_name.chars().any(|character| {
             character.is_control()
-                || matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
         })
         || is_windows_reserved_name(file_name)
     {
@@ -1280,7 +907,10 @@ fn checked_relative_attachment_path(path: &str) -> Result<PathBuf, String> {
         || file_name.ends_with(' ')
         || file_name.chars().any(|character| {
             character.is_control()
-                || matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
         })
         || is_windows_reserved_name(file_name)
     {
@@ -1302,7 +932,10 @@ fn safe_file_stem(input: &str, fallback: &str) -> String {
     let mut last_was_replacement = false;
     for character in input.chars() {
         let forbidden = character.is_control()
-            || matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
+            || matches!(
+                character,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            );
         if forbidden {
             if !last_was_replacement {
                 result.push('-');
@@ -1370,7 +1003,10 @@ fn is_windows_reserved_name(name: &str) -> bool {
 
 fn is_forbidden_component_character(character: char) -> bool {
     character.is_control()
-        || matches!(character, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        || matches!(
+            character,
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+        )
 }
 
 fn render_note_markdown(title: &str, tags: &[String], content: &str) -> String {
@@ -1512,288 +1148,5 @@ impl WarningCollector {
                 .push("Additional warnings were omitted.".to_owned());
         }
         self.warnings
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    struct TempDirectory(PathBuf);
-
-    impl TempDirectory {
-        fn new(label: &str) -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock should be after epoch")
-                .as_nanos();
-            let count = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "obsidian-at-home-{label}-{}-{nonce}-{count}",
-                std::process::id()
-            ));
-            fs::create_dir(&path).expect("test directory should be created");
-            Self(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn parses_basic_frontmatter_without_touching_content() {
-        let content = "---\r\ntitle: \"A linked idea\"\r\ntags: [garden, 'in progress', '#garden']\r\nextra: keep me\r\n---\r\n# Body\r\n";
-        let parsed = parse_basic_frontmatter(content);
-
-        assert_eq!(parsed.title.as_deref(), Some("A linked idea"));
-        assert_eq!(parsed.tags, vec!["garden", "in progress"]);
-        assert!(content.contains("extra: keep me"));
-    }
-
-    #[test]
-    fn parses_block_tags_and_yaml_comments() {
-        let parsed = parse_basic_frontmatter(
-            "---\ntitle: The title # a comment\ntags:\n  - one\n  - \"two words\"\n  - #three\n---\nbody",
-        );
-
-        assert_eq!(parsed.title.as_deref(), Some("The title"));
-        assert_eq!(parsed.tags, vec!["one", "two words", "three"]);
-    }
-
-    #[test]
-    fn rendering_adds_frontmatter_but_preserves_existing_frontmatter() {
-        let rendered = render_note_markdown(
-            "A \"quoted\" title",
-            &["garden".into(), "#ideas".into()],
-            "A [[linked note]].",
-        );
-        assert!(rendered.starts_with("---\ntitle: \"A \\\"quoted\\\" title\"\n"));
-        assert!(rendered.contains("  - \"garden\"\n  - \"ideas\"\n"));
-        assert!(rendered.ends_with("A [[linked note]]."));
-
-        let existing = "---\ncustom: true\n---\nBody";
-        assert_eq!(render_note_markdown("Changed", &[], existing), existing);
-    }
-
-    #[test]
-    fn rejects_traversal_and_reserved_export_paths() {
-        assert!(checked_relative_folder("../outside").is_err());
-        assert!(checked_relative_folder("Notes/.obsidian").is_err());
-        assert!(checked_relative_folder("C:/Users/person").is_err());
-        assert!(checked_relative_folder(".obsidian-at-home/recently-deleted").is_err());
-        assert!(checked_relative_folder("Projects/Ideas").is_ok());
-        assert!(checked_relative_attachment_path("Board.canvas").is_err());
-        assert!(checked_relative_attachment_path("Projects/Board.CANVAS").is_err());
-        assert!(validate_vault_name("../vault").is_err());
-        assert!(validate_vault_name("Obsidian At Home export").is_ok());
-    }
-
-    #[test]
-    fn creates_new_export_directories_and_never_reuses_one() {
-        let parent = TempDirectory::new("unique-export");
-        let first = create_unique_export_dir(parent.path(), "My Vault").unwrap();
-        fs::write(first.join("sentinel.txt"), "keep").unwrap();
-        let second = create_unique_export_dir(parent.path(), "My Vault").unwrap();
-
-        assert_eq!(first.file_name().unwrap(), "My Vault");
-        assert_eq!(second.file_name().unwrap(), "My Vault (1)");
-        assert_eq!(fs::read_to_string(first.join("sentinel.txt")).unwrap(), "keep");
-    }
-
-    #[test]
-    fn imports_nested_notes_and_snippet_state() {
-        let vault = TempDirectory::new("import");
-        fs::create_dir_all(vault.path().join("Projects/Alpha")).unwrap();
-        fs::create_dir_all(vault.path().join("Assets")).unwrap();
-        fs::create_dir_all(vault.path().join(".trash")).unwrap();
-        fs::create_dir_all(vault.path().join(".git")).unwrap();
-        fs::create_dir_all(
-            vault
-                .path()
-                .join(".obsidian-at-home/recently-deleted"),
-        )
-        .unwrap();
-        fs::create_dir_all(vault.path().join(".obsidian/snippets")).unwrap();
-        fs::write(
-            vault.path().join("Projects/Alpha/Plan.md"),
-            "---\ntitle: Alpha plan\ntags: [work]\n---\n![Diagram](../../Assets/diagram.png)",
-        )
-        .unwrap();
-        fs::write(
-            vault.path().join("Assets/diagram.png"),
-            b"\x89PNG\r\n\x1a\nportable-image",
-        )
-        .unwrap();
-        fs::write(vault.path().join("Assets/report.pdf"), b"portable-report").unwrap();
-        fs::write(
-            vault.path().join("Projects/Alpha/Board.canvas"),
-            r#"{"nodes":[],"edges":[]}"#,
-        )
-        .unwrap();
-        fs::write(
-            vault.path().join("Assets/Sketch.CANVAS"),
-            r#"{"nodes":[],"edges":[]}"#,
-        )
-        .unwrap();
-        fs::write(vault.path().join(".trash/Deleted.md"), "deleted").unwrap();
-        fs::write(
-            vault.path().join(".git/private.png"),
-            b"\x89PNG\r\n\x1a\nprivate-image",
-        )
-        .unwrap();
-        fs::write(
-            vault
-                .path()
-                .join(".obsidian-at-home/recently-deleted/Private.md"),
-            "private recovery data",
-        )
-        .unwrap();
-        fs::write(
-            vault.path().join(".obsidian/snippets/pretty.css"),
-            ".note { color: plum; }",
-        )
-        .unwrap();
-        fs::write(
-            vault.path().join(".obsidian/appearance.json"),
-            r#"{"enabledCssSnippets":["pretty"]}"#,
-        )
-        .unwrap();
-
-        let result = import_obsidian_vault(vault.path().to_string_lossy().into_owned()).unwrap();
-
-        assert_eq!(result.notes.len(), 1);
-        assert_eq!(result.notes[0].folder_path, "Projects/Alpha");
-        assert_eq!(result.notes[0].relative_path, "Projects/Alpha/Plan.md");
-        assert!(result.notes[0].content.ends_with("![Diagram](../../Assets/diagram.png)"));
-        assert_eq!(
-            result.images,
-            vec![ImportedImage {
-                relative_path: "Assets/diagram.png".into(),
-            }]
-        );
-        assert_eq!(
-            result.attachments,
-            vec![ImportedAttachment {
-                relative_path: "Assets/report.pdf".into(),
-            }]
-        );
-        assert_eq!(result.snippets.len(), 1);
-        assert!(result.snippets[0].enabled);
-    }
-
-    #[test]
-    fn exports_obsidian_compatible_structure_and_avoids_note_collisions() {
-        let parent = TempDirectory::new("export");
-        let source = TempDirectory::new("export-source");
-        fs::create_dir_all(source.path().join("Assets")).unwrap();
-        fs::create_dir_all(source.path().join("Projects/Nested")).unwrap();
-        fs::write(
-            source.path().join("Assets/diagram.png"),
-            b"\x89PNG\r\n\x1a\nportable-image",
-        )
-        .unwrap();
-        fs::write(
-            source.path().join("Assets/report.pdf"),
-            b"portable-report",
-        )
-        .unwrap();
-        fs::write(
-            source.path().join("Projects/Board.canvas"),
-            r#"{"nodes":[],"edges":[]}"#,
-        )
-        .unwrap();
-        fs::write(
-            source.path().join("Projects/Nested/Sketch.CANVAS"),
-            r#"{"nodes":[],"edges":[]}"#,
-        )
-        .unwrap();
-        let result = export_obsidian_vault(
-            parent.path().to_string_lossy().into_owned(),
-            source.path().to_string_lossy().into_owned(),
-            "Ideas".into(),
-            vec![
-                ExportNote {
-                    title: "First note".into(),
-                    content: "Link to [[Second note]].".into(),
-                    folder_path: "Projects/Alpha".into(),
-                    tags: vec!["work".into()],
-                },
-                ExportNote {
-                    title: "First note".into(),
-                    content: "A distinct note.".into(),
-                    folder_path: "Projects/Alpha".into(),
-                    tags: vec![],
-                },
-            ],
-            vec![ExportTemplate {
-                name: "Daily".into(),
-                content: "# {{date}}".into(),
-            }],
-            vec![VaultSnippet {
-                name: "focus.css".into(),
-                css: ".workspace { color: plum; }".into(),
-                enabled: true,
-            }],
-        )
-        .unwrap();
-
-        let root = PathBuf::from(&result.path);
-        assert_eq!(result.note_count, 2);
-        assert_eq!(result.image_count, 1);
-        assert_eq!(result.attachment_count, 1);
-        assert_eq!(result.template_count, 1);
-        assert_eq!(result.snippet_count, 1);
-        assert!(root.join("Projects/Alpha/First note.md").is_file());
-        assert!(root.join("Projects/Alpha/First note 1.md").is_file());
-        assert_eq!(
-            fs::read_to_string(root.join("Templates/Daily.md")).unwrap(),
-            "# {{date}}"
-        );
-        assert!(root.join(".obsidian/snippets/focus.css").is_file());
-        assert_eq!(
-            fs::read(root.join("Assets/diagram.png")).unwrap(),
-            b"\x89PNG\r\n\x1a\nportable-image"
-        );
-        assert_eq!(
-            fs::read(root.join("Assets/report.pdf")).unwrap(),
-            b"portable-report"
-        );
-        assert!(!root.join("Projects/Board.canvas").exists());
-        assert!(!root.join("Projects/Nested/Sketch.CANVAS").exists());
-        let appearance = fs::read_to_string(root.join(".obsidian/appearance.json")).unwrap();
-        assert!(appearance.contains("focus"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn import_does_not_follow_symbolic_links() {
-        use std::os::unix::fs::symlink;
-
-        let vault = TempDirectory::new("symlink-vault");
-        let outside = TempDirectory::new("symlink-outside");
-        fs::write(outside.path().join("Private.md"), "do not import").unwrap();
-        fs::write(
-            outside.path().join("Private.png"),
-            b"\x89PNG\r\n\x1a\nprivate-image",
-        )
-        .unwrap();
-        fs::write(outside.path().join("Private.pdf"), b"private-attachment").unwrap();
-        symlink(outside.path(), vault.path().join("linked")).unwrap();
-
-        let result = import_obsidian_vault(vault.path().to_string_lossy().into_owned()).unwrap();
-        assert!(result.notes.is_empty());
-        assert!(result.images.is_empty());
-        assert!(result.attachments.is_empty());
     }
 }

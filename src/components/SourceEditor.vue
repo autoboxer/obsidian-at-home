@@ -5,26 +5,26 @@ import {
   onMounted,
   ref,
   shallowRef,
-  watch,
-} from "vue";
+  watch
+} from 'vue';
 import {
   defaultKeymap,
   history,
   historyField,
   historyKeymap,
   insertNewline,
-  isolateHistory,
-} from "@codemirror/commands";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTreeAvailable } from "@codemirror/language";
+  isolateHistory
+} from '@codemirror/commands';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { syntaxTreeAvailable } from '@codemirror/language';
 import {
   Annotation,
   Compartment,
   EditorSelection,
   EditorState,
   Prec,
-  Transaction,
-} from "@codemirror/state";
+  Transaction
+} from '@codemirror/state';
 import {
   Direction,
   drawSelection,
@@ -32,34 +32,34 @@ import {
   EditorView,
   highlightSpecialChars,
   keymap,
-  lineNumbers,
-} from "@codemirror/view";
+  lineNumbers
+} from '@codemirror/view';
 import {
   codeMirrorDocumentSearchExtension,
-  useCodeMirrorDocumentSearch,
-} from "../composables/useCodeMirrorDocumentSearch";
+  useCodeMirrorDocumentSearch
+} from '../composables/useCodeMirrorDocumentSearch';
 import {
   insertLiteralApostrophe,
-  literalApostropheExtension,
-} from "../lib/codeMirrorApostrophe";
-import { tableDelimiterHyphenExtension } from "../lib/codeMirrorTableDelimiter";
-import { normalizeOrderedListMarkers } from "../lib/liveMarkdown";
+  literalApostropheExtension
+} from '../lib/codeMirrorApostrophe';
+import { tableDelimiterHyphenExtension } from '../lib/codeMirrorTableDelimiter';
+import { normalizeOrderedListMarkers } from '../lib/liveMarkdown';
 import {
   liveMarkdownExtension,
-  refreshLiveMarkdownEffect,
-} from "../lib/liveMarkdownCodeMirror";
-import { liveMarkdownDocumentModel } from "../lib/liveMarkdownDocumentModel";
+  refreshLiveMarkdownEffect
+} from '../lib/liveMarkdownCodeMirror';
+import { liveMarkdownDocumentModel } from '../lib/liveMarkdownDocumentModel';
 import {
   joinLeadingFrontmatter,
   leadingFrontmatterEnd,
   markdownBodyStart,
-  splitLeadingFrontmatter,
-} from "../lib/frontmatter";
-import { registerNoteEditorPositionCapture } from "../stores/editorPositions";
+  splitLeadingFrontmatter
+} from '../lib/frontmatter';
+import { registerNoteEditorPositionCapture } from '../stores/editorPositions';
 import {
   openNoteEditorHistory,
-  type NoteEditorHistorySnapshot,
-} from "../stores/editorHistories";
+  type NoteEditorHistorySnapshot
+} from '../stores/editorHistories';
 import {
   deleteEmptyLiveMarkdownTableRow,
   insertLiveMarkdownTableLineBreak,
@@ -68,44 +68,44 @@ import {
   liveMarkdownTableCellTextBounds,
   moveAcrossLiveMarkdownTableCellBoundary,
   navigateLiveMarkdownTable,
-  type LiveMarkdownTableNavigation,
-} from "../lib/liveMarkdownTableNavigation";
+  type LiveMarkdownTableNavigation
+} from '../lib/liveMarkdownTableNavigation';
 import {
   toggleInlineFormatting,
   wrapInlineCode,
-  wrapMarkdownLink,
-} from "../lib/markdownFormatting";
+  wrapMarkdownLink
+} from '../lib/markdownFormatting';
 import {
   decodeMarkdownImageDestination,
   imageMediaTypeForPath,
   NOTE_IMAGE_DRAG_MIME,
   resolveMarkdownImagePath,
-  VAULT_IMAGE_DRAG_MIME,
-} from "../lib/imageEmbeds";
-import { sanitizeImageUrl } from "../lib/markdown";
+  VAULT_IMAGE_DRAG_MIME
+} from '../lib/imageEmbeds';
+import { sanitizeImageUrl } from '../lib/markdown';
 import type {
   MarkdownAttachmentMetadata,
   MarkdownAttachmentRenameTarget,
-  ParsedMarkdownAttachment,
-} from "../lib/markdownAttachments";
-import { VAULT_ATTACHMENT_DRAG_MIME } from "../lib/markdownAttachments";
-import { parseMarkdownImageAt } from "../lib/markdownImages";
-import { normalizeWikiTarget, wikiTargetTitle } from "../lib/wikiLinks";
-import { isTauri, readWorkspaceImage } from "../services/native";
-import type { Extension, SelectionRange } from "@codemirror/state";
-import type { Command, ViewUpdate } from "@codemirror/view";
-import type { MarkdownSelectionEdit } from "../lib/markdownFormatting";
-import type { ParsedMarkdownImage } from "../lib/markdownImages";
-import type { LiveMarkdownTextEdit } from "../lib/liveMarkdown";
+  ParsedMarkdownAttachment
+} from '../lib/markdownAttachments';
+import { VAULT_ATTACHMENT_DRAG_MIME } from '../lib/markdownAttachments';
+import { parseMarkdownImageAt } from '../lib/markdownImages';
+import { normalizeWikiTarget, wikiTargetTitle } from '../lib/wikiLinks';
+import { isTauri, readWorkspaceImage } from '../services/native';
+import type { Extension, SelectionRange } from '@codemirror/state';
+import type { Command, ViewUpdate } from '@codemirror/view';
+import type { MarkdownSelectionEdit } from '../lib/markdownFormatting';
+import type { ParsedMarkdownImage } from '../lib/markdownImages';
+import type { LiveMarkdownTextEdit } from '../lib/liveMarkdown';
 import type {
   AttachmentInsertionCapture,
   EmbeddedAttachment,
   EmbeddedImage,
   ImageInsertionCapture,
   NoteEditorPosition,
-  VaultAttachmentFile,
-} from "../types";
-import AppIcon from "./AppIcon.vue";
+  VaultAttachmentFile
+} from '../types';
+import AppIcon from './AppIcon.vue';
 
 const props = defineProps<{
   initialPosition?: NoteEditorPosition;
@@ -120,7 +120,7 @@ const props = defineProps<{
   noteTitles: string[];
   renameAttachment: (
     target: MarkdownAttachmentRenameTarget,
-    fileName: string,
+    fileName: string
   ) => Promise<boolean>;
   showFrontmatter: boolean;
   vaultId: string;
@@ -132,13 +132,13 @@ const emit = defineEmits<{
     assetId: string | undefined,
     relativePath: string,
     mediaType: string | undefined,
-    openingDisabled: boolean | undefined,
+    openingDisabled: boolean | undefined
   ];
   editorPosition: [vaultId: string, noteId: string, position: NoteEditorPosition];
   externalFileDrop: [
     capture: AttachmentInsertionCapture,
     files: File[],
-    rejectedCount: number,
+    rejectedCount: number
   ];
   openLink: [href: string];
   openWiki: [target: string, heading?: string];
@@ -149,30 +149,30 @@ const emit = defineEmits<{
   showAttachmentInFolder: [assetId: string | undefined, relativePath: string];
   vaultImageDrop: [capture: ImageInsertionCapture, relativePath: string];
   vaultAttachmentDrop: [capture: AttachmentInsertionCapture, relativePath: string];
-  "update:modelValue": [value: string];
+  'update:modelValue': [value: string];
 }>();
 
 const editorHost = ref<HTMLElement>();
 const editorView = shallowRef<EditorView>();
-const editorRenderReady = ref(false);
-const externalFileDragActive = ref(false);
-const suggestionIndex = ref(0);
-const suggestionQuery = ref<string | null>(null);
+const editorRenderReady = ref( false );
+const externalFileDragActive = ref( false );
+const suggestionIndex = ref( 0 );
+const suggestionQuery = ref<string | null>( null );
 const externalUpdate = Annotation.define<boolean>();
 const historyCompartment = new Compartment();
 const lineNumbersCompartment = new Compartment();
-const INDENT = "  ";
+const INDENT = '  ';
 const VIEWPORT_ANCHOR_MARGIN = 8;
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 const MAX_EXTERNAL_DROP_FILES = 100;
 let externalFileDragDepth = 0;
-let outputLineEnding = preferredLineEnding(props.modelValue);
+let outputLineEnding = preferredLineEnding( props.modelValue );
 let frontmatterHistoryChanged = false;
 let frontmatterLineOffset = 0;
-let frontmatterPrefix = "";
+let frontmatterPrefix = '';
 let positionCaptureEnabled = false;
-let removePositionCapture: (() => boolean) | undefined;
-let closeEditorHistory: ReturnType<typeof openNoteEditorHistory>["close"] | undefined;
+let removePositionCapture: ( () => boolean ) | undefined;
+let closeEditorHistory: ReturnType<typeof openNoteEditorHistory>[ 'close' ] | undefined;
 let viewportRestoreFrame: number | undefined;
 let imageInsertionSequence = 0;
 let imageResolverDisposed = false;
@@ -195,8 +195,8 @@ interface ListLine {
   indent: string;
   ordered: boolean;
   number: number;
-  delimiter: "." | ")";
-  bullet: "-" | "+" | "*";
+  delimiter: '.' | ')';
+  bullet: '-' | '+' | '*';
   spacing: string;
   contentOffset: number;
   task: boolean;
@@ -208,28 +208,28 @@ interface TextEdit {
   added: number;
 }
 
-const normalizedNoteTitles = computed(() => new Set(
-  props.noteTitles.flatMap((title) => [
-    normalizeInlineLinkTarget(title),
-    normalizeInlineLinkTarget(wikiTargetTitle(title)),
-  ]),
-));
+const normalizedNoteTitles = computed( () => new Set(
+  props.noteTitles.flatMap( ( title ) => [
+    normalizeInlineLinkTarget( title ),
+    normalizeInlineLinkTarget( wikiTargetTitle( title ) )
+  ])
+) );
 
-const suggestions = computed(() => {
-  if (suggestionQuery.value === null) {
+const suggestions = computed( () => {
+  if ( suggestionQuery.value === null ) {
     return [];
   }
   const query = suggestionQuery.value.toLocaleLowerCase();
 
   return props.noteTitles
-    .filter((title) => !query || title.toLocaleLowerCase().includes(query))
-    .sort((a, b) => {
-      const aStarts = a.toLocaleLowerCase().startsWith(query);
-      const bStarts = b.toLocaleLowerCase().startsWith(query);
+    .filter( ( title ) => !query || title.toLocaleLowerCase().includes( query ) )
+    .sort( ( a, b ) => {
+      const aStarts = a.toLocaleLowerCase().startsWith( query );
+      const bStarts = b.toLocaleLowerCase().startsWith( query );
 
-      return Number(bStarts) - Number(aStarts) || a.localeCompare(b);
+      return Number( bStarts ) - Number( aStarts ) || a.localeCompare( b );
     })
-    .slice(0, 6);
+    .slice( 0, 6 );
 });
 
 const {
@@ -243,20 +243,20 @@ const {
   query: documentSearchQuery,
   refreshSearch: refreshDocumentSearch,
   searchInput: documentSearchInput,
-  statusText: documentSearchStatus,
-} = useCodeMirrorDocumentSearch(editorView);
+  statusText: documentSearchStatus
+} = useCodeMirrorDocumentSearch( editorView );
 
-const suggestionDown: Command = (view) => {
-  if (view.composing || !suggestions.value.length) {
+const suggestionDown: Command = ( view ) => {
+  if ( view.composing || !suggestions.value.length ) {
     return false;
   }
-  suggestionIndex.value = (suggestionIndex.value + 1) % suggestions.value.length;
+  suggestionIndex.value = ( suggestionIndex.value + 1 ) % suggestions.value.length;
 
   return true;
 };
 
-const suggestionUp: Command = (view) => {
-  if (view.composing || !suggestions.value.length) {
+const suggestionUp: Command = ( view ) => {
+  if ( view.composing || !suggestions.value.length ) {
     return false;
   }
   suggestionIndex.value = (
@@ -266,18 +266,18 @@ const suggestionUp: Command = (view) => {
   return true;
 };
 
-const acceptSuggestion: Command = (view) => {
-  if (view.composing || !suggestions.value.length) {
+const acceptSuggestion: Command = ( view ) => {
+  if ( view.composing || !suggestions.value.length ) {
     return false;
   }
 
-  insertSuggestion(suggestions.value[suggestionIndex.value]!);
+  insertSuggestion( suggestions.value[ suggestionIndex.value ]! );
 
   return true;
 };
 
-const closeSuggestions: Command = (view) => {
-  if (view.composing || suggestionQuery.value === null) {
+const closeSuggestions: Command = ( view ) => {
+  if ( view.composing || suggestionQuery.value === null ) {
     return false;
   }
   suggestionQuery.value = null;
@@ -285,8 +285,8 @@ const closeSuggestions: Command = (view) => {
   return true;
 };
 
-const handleEnter: Command = (view) => {
-  if (view.composing) {
+const handleEnter: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
@@ -294,29 +294,29 @@ const handleEnter: Command = (view) => {
   const selection = view.state.selection.main;
   const tableEdit = insertLiveMarkdownTableRow(
     value,
-    liveMarkdownDocumentModel(view.state).tables,
-    selection.head,
+    liveMarkdownDocumentModel( view.state ).tables,
+    selection.head
   );
-  if (tableEdit) {
+  if ( tableEdit ) {
     applyFullDocumentEdit(
       view,
       tableEdit.value,
       tableEdit.selectionStart,
       tableEdit.selectionEnd,
-      "input.table",
+      'input.table'
     );
 
     return true;
   }
-  if (handleSmartEnter(view)) {
+  if ( handleSmartEnter( view ) ) {
     return true;
   }
 
-  return insertNewline(view);
+  return insertNewline( view );
 };
 
-const handleShiftEnter: Command = (view) => {
-  if (view.composing) {
+const handleShiftEnter: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
@@ -324,11 +324,11 @@ const handleShiftEnter: Command = (view) => {
   const selection = view.state.selection.main;
   const tableEdit = insertLiveMarkdownTableLineBreak(
     value,
-    liveMarkdownDocumentModel(view.state).tables,
+    liveMarkdownDocumentModel( view.state ).tables,
     selection.anchor,
-    selection.head,
+    selection.head
   );
-  if (!tableEdit) {
+  if ( !tableEdit ) {
     return false;
   }
 
@@ -337,7 +337,7 @@ const handleShiftEnter: Command = (view) => {
     tableEdit.value,
     tableEdit.selectionStart,
     tableEdit.selectionEnd,
-    "input.table",
+    'input.table'
   );
 
   return true;
@@ -345,16 +345,16 @@ const handleShiftEnter: Command = (view) => {
 
 function applyTableNavigation(
   view: EditorView,
-  navigation: LiveMarkdownTableNavigation,
+  navigation: LiveMarkdownTableNavigation
 ): boolean {
   const value = view.state.doc.toString();
   const tableEdit = navigateLiveMarkdownTable(
     value,
-    liveMarkdownDocumentModel(view.state).tables,
+    liveMarkdownDocumentModel( view.state ).tables,
     view.state.selection.main.head,
-    navigation,
+    navigation
   );
-  if (!tableEdit) {
+  if ( !tableEdit ) {
     return false;
   }
 
@@ -363,66 +363,66 @@ function applyTableNavigation(
     tableEdit.value,
     tableEdit.selectionStart,
     tableEdit.selectionEnd,
-    tableEdit.value === value ? "select.table" : "input.table",
+    tableEdit.value === value ? 'select.table' : 'input.table'
   );
 
   return true;
 }
 
-const handleTab: Command = (view) => {
-  if (view.composing) {
+const handleTab: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
   const selection = view.state.selection.main;
-  if (applyTableNavigation(view, "next-cell")) {
+  if ( applyTableNavigation( view, 'next-cell' ) ) {
     return true;
   }
-  if (adjustSelectedLines(view, false)) {
+  if ( adjustSelectedLines( view, false ) ) {
     return true;
   }
 
   view.dispatch({
     changes: { from: selection.from, to: selection.to, insert: INDENT },
-    selection: EditorSelection.cursor(selection.from + INDENT.length),
+    selection: EditorSelection.cursor( selection.from + INDENT.length ),
     scrollIntoView: true,
-    userEvent: "input",
+    userEvent: 'input'
   });
 
   return true;
 };
 
-const handleShiftTab: Command = (view) => {
-  if (view.composing) {
+const handleShiftTab: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
-  if (applyTableNavigation(view, "previous-cell")) {
+  if ( applyTableNavigation( view, 'previous-cell' ) ) {
     return true;
   }
 
-  adjustSelectedLines(view, true);
+  adjustSelectedLines( view, true );
 
   return true;
 };
 
-const handleTableArrowDown: Command = (view) => {
-  if (view.composing) {
+const handleTableArrowDown: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
-  return applyTableNavigation(view, "down-row");
+  return applyTableNavigation( view, 'down-row' );
 };
 
-const handleTableArrowUp: Command = (view) => {
-  if (view.composing) {
+const handleTableArrowUp: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
-  return applyTableNavigation(view, "up-row");
+  return applyTableNavigation( view, 'up-row' );
 };
 
-const deleteEmptyTableRow: Command = (view) => {
+const deleteEmptyTableRow: Command = ( view ) => {
   if (
     view.composing ||
     view.state.readOnly ||
@@ -435,27 +435,27 @@ const deleteEmptyTableRow: Command = (view) => {
   const value = view.state.doc.toString();
   const tableEdit = deleteEmptyLiveMarkdownTableRow(
     value,
-    liveMarkdownDocumentModel(view.state).tables,
-    view.state.selection.main.head,
+    liveMarkdownDocumentModel( view.state ).tables,
+    view.state.selection.main.head
   );
-  if (!tableEdit) {
+  if ( !tableEdit ) {
     return false;
   }
 
-  const selection = EditorSelection.cursor(tableEdit.selectionStart, -1);
+  const selection = EditorSelection.cursor( tableEdit.selectionStart, -1 );
   view.dispatch({
-    annotations: isolateHistory.of("full"),
-    changes: minimalDocumentChange(value, tableEdit.value),
+    annotations: isolateHistory.of( 'full' ),
+    changes: minimalDocumentChange( value, tableEdit.value ),
     selection,
     scrollIntoView: true,
-    userEvent: "delete.backward",
+    userEvent: 'delete.backward'
   });
   // CodeMirror stores the selection before a history change by default. Add
   // the intentional post-change caret so redo returns to the editable cell
   // boundary rather than mapping the old row position onto a hidden pipe.
   view.dispatch({
     selection,
-    userEvent: "select.table",
+    userEvent: 'select.table'
   });
 
   return true;
@@ -463,176 +463,176 @@ const deleteEmptyTableRow: Command = (view) => {
 
 function atTableCellBoundary(
   view: EditorView,
-  boundary: "end" | "start",
+  boundary: 'end' | 'start'
 ): boolean {
-  if (view.composing) {
+  if ( view.composing ) {
     return false;
   }
 
-  const tables = liveMarkdownDocumentModel(view.state).tables;
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
 
-  return view.state.selection.ranges.some((range) =>
+  return view.state.selection.ranges.some( ( range ) =>
     range.empty && isLiveMarkdownTableCellBoundary(
       tables,
       range.head,
-      boundary,
+      boundary
     )
   );
 }
 
-const protectTableCellStart: Command = (view) =>
-  atTableCellBoundary(view, "start");
-const protectTableCellEnd: Command = (view) =>
-  atTableCellBoundary(view, "end");
+const protectTableCellStart: Command = ( view ) =>
+  atTableCellBoundary( view, 'start' );
+const protectTableCellEnd: Command = ( view ) =>
+  atTableCellBoundary( view, 'end' );
 
 function protectTableCellSelectionBoundary(
   view: EditorView,
-  direction: "left" | "right",
+  direction: 'left' | 'right'
 ): boolean {
-  if (view.composing) {
+  if ( view.composing ) {
     return false;
   }
 
-  const tables = liveMarkdownDocumentModel(view.state).tables;
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
 
-  return view.state.selection.ranges.some((range) => {
-    const leftToStart = view.textDirectionAt(range.head) === Direction.LTR;
-    const boundary = (direction === "left") === leftToStart ? "start" : "end";
+  return view.state.selection.ranges.some( ( range ) => {
+    const leftToStart = view.textDirectionAt( range.head ) === Direction.LTR;
+    const boundary = ( direction === 'left' ) === leftToStart ? 'start' : 'end';
 
-    return isLiveMarkdownTableCellBoundary(tables, range.head, boundary);
+    return isLiveMarkdownTableCellBoundary( tables, range.head, boundary );
   });
 }
 
-const protectTableCellSelectionLeft: Command = (view) =>
-  protectTableCellSelectionBoundary(view, "left");
-const protectTableCellSelectionRight: Command = (view) =>
-  protectTableCellSelectionBoundary(view, "right");
+const protectTableCellSelectionLeft: Command = ( view ) =>
+  protectTableCellSelectionBoundary( view, 'left' );
+const protectTableCellSelectionRight: Command = ( view ) =>
+  protectTableCellSelectionBoundary( view, 'right' );
 
 function deleteToTableCellLineBoundary(
   view: EditorView,
-  boundary: "end" | "start",
+  boundary: 'end' | 'start'
 ): boolean {
   if (
     view.composing ||
     view.state.readOnly ||
-    view.state.selection.ranges.some((range) => !range.empty)
+    view.state.selection.ranges.some( ( range ) => !range.empty )
   ) {
     return false;
   }
 
-  const tables = liveMarkdownDocumentModel(view.state).tables;
-  const bounds = view.state.selection.ranges.map((range) =>
-    liveMarkdownTableCellTextBounds(tables, range.head)
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
+  const bounds = view.state.selection.ranges.map( ( range ) =>
+    liveMarkdownTableCellTextBounds( tables, range.head )
   );
-  if (bounds.every((cell) => !cell)) {
+  if ( bounds.every( ( cell ) => !cell ) ) {
     return false;
   }
 
-  const forward = boundary === "end";
-  const changes = view.state.changeByRange((range) => {
-    let target = view.moveToLineBoundary(range, forward).head;
+  const forward = boundary === 'end';
+  const changes = view.state.changeByRange( ( range ) => {
+    let target = view.moveToLineBoundary( range, forward ).head;
     target = forward
-      ? (range.head < target
+      ? ( range.head < target
         ? target
-        : Math.min(view.state.doc.length, range.head + 1))
-      : (range.head > target ? target : Math.max(0, range.head - 1));
+        : Math.min( view.state.doc.length, range.head + 1 ) )
+      : ( range.head > target ? target : Math.max( 0, range.head - 1 ) );
 
-    const cell = liveMarkdownTableCellTextBounds(tables, range.head);
-    if (cell) {
+    const cell = liveMarkdownTableCellTextBounds( tables, range.head );
+    if ( cell ) {
       target = forward
-        ? Math.max(range.head, Math.min(target, cell.to))
-        : Math.min(range.head, Math.max(target, cell.from));
+        ? Math.max( range.head, Math.min( target, cell.to ) )
+        : Math.min( range.head, Math.max( target, cell.from ) );
     }
 
-    const from = Math.min(range.head, target);
-    const to = Math.max(range.head, target);
+    const from = Math.min( range.head, target );
+    const to = Math.max( range.head, target );
 
     return from === to
       ? { range }
       : {
         changes: { from, to },
-        range: EditorSelection.cursor(from, forward ? 1 : -1),
+        range: EditorSelection.cursor( from, forward ? 1 : -1 )
       };
   });
 
-  if (!changes.changes.empty) {
+  if ( !changes.changes.empty ) {
     view.dispatch(
       changes,
       {
         scrollIntoView: true,
-        userEvent: forward ? "delete.forward" : "delete.backward",
-      },
+        userEvent: forward ? 'delete.forward' : 'delete.backward'
+      }
     );
   }
 
   return true;
 }
 
-const deleteToTableCellTextStart: Command = (view) =>
-  deleteToTableCellLineBoundary(view, "start");
-const deleteToTableCellTextEnd: Command = (view) =>
-  deleteToTableCellLineBoundary(view, "end");
+const deleteToTableCellTextStart: Command = ( view ) =>
+  deleteToTableCellLineBoundary( view, 'start' );
+const deleteToTableCellTextEnd: Command = ( view ) =>
+  deleteToTableCellLineBoundary( view, 'end' );
 
 function moveAcrossTableCellBoundary(
   view: EditorView,
-  direction: "left" | "right",
+  direction: 'left' | 'right'
 ): boolean {
-  if (view.composing || view.state.selection.ranges.length !== 1) {
+  if ( view.composing || view.state.selection.ranges.length !== 1 ) {
     return false;
   }
 
   const selection = view.state.selection.main;
-  if (!selection.empty) {
+  if ( !selection.empty ) {
     return false;
   }
 
   const value = view.state.doc.toString();
   const target = moveAcrossLiveMarkdownTableCellBoundary(
     value,
-    liveMarkdownDocumentModel(view.state).tables,
+    liveMarkdownDocumentModel( view.state ).tables,
     selection.head,
-    direction,
+    direction
   );
-  if (!target) {
+  if ( !target ) {
     return false;
   }
 
   view.dispatch({
     selection: EditorSelection.create([
-      EditorSelection.cursor(target.position, target.assoc),
+      EditorSelection.cursor( target.position, target.assoc )
     ]),
     scrollIntoView: true,
-    userEvent: "select.table",
+    userEvent: 'select.table'
   });
 
   return true;
 }
 
-const moveAcrossTableCellLeft: Command = (view) =>
-  moveAcrossTableCellBoundary(view, "left");
-const moveAcrossTableCellRight: Command = (view) =>
-  moveAcrossTableCellBoundary(view, "right");
+const moveAcrossTableCellLeft: Command = ( view ) =>
+  moveAcrossTableCellBoundary( view, 'left' );
+const moveAcrossTableCellRight: Command = ( view ) =>
+  moveAcrossTableCellBoundary( view, 'right' );
 
 function setTableCellTextBoundary(
   view: EditorView,
-  boundary: "end" | "start",
-  extend: boolean,
+  boundary: 'end' | 'start',
+  extend: boolean
 ): boolean {
-  if (view.composing) {
+  if ( view.composing ) {
     return false;
   }
 
-  const tables = liveMarkdownDocumentModel(view.state).tables;
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
   const ranges: SelectionRange[] = [];
-  for (const range of view.state.selection.ranges) {
-    const bounds = liveMarkdownTableCellTextBounds(tables, range.head);
-    if (!bounds) {
+  for ( const range of view.state.selection.ranges ) {
+    const bounds = liveMarkdownTableCellTextBounds( tables, range.head );
+    if ( !bounds ) {
       return false;
     }
-    if (extend) {
+    if ( extend ) {
       const anchorBounds = liveMarkdownTableCellTextBounds(
         tables,
-        range.anchor,
+        range.anchor
       );
       if (
         !anchorBounds ||
@@ -643,113 +643,113 @@ function setTableCellTextBoundary(
       }
     }
 
-    const forward = boundary === "end";
-    const line = view.lineBlockAt(range.head);
+    const forward = boundary === 'end';
+    const line = view.lineBlockAt( range.head );
     // Keep any native boundary inside rendered cell content, but clamp raw
     // row boundaries so hidden table syntax never enters the selection.
-    let nativeTarget = view.moveToLineBoundary(range, forward);
+    let nativeTarget = view.moveToLineBoundary( range, forward );
     if (
       nativeTarget.head === range.head &&
-      nativeTarget.head !== (forward ? line.to : line.from)
+      nativeTarget.head !== ( forward ? line.to : line.from )
     ) {
-      nativeTarget = view.moveToLineBoundary(range, forward, false);
+      nativeTarget = view.moveToLineBoundary( range, forward, false );
     }
 
     const position = Math.max(
       bounds.from,
-      Math.min(nativeTarget.head, bounds.to),
+      Math.min( nativeTarget.head, bounds.to )
     );
     let assoc = nativeTarget.assoc;
-    if (bounds.from === bounds.to) {
+    if ( bounds.from === bounds.to ) {
       assoc = forward ? -1 : 1;
-    } else if (position === bounds.from) {
+    } else if ( position === bounds.from ) {
       assoc = 1;
-    } else if (position === bounds.to) {
+    } else if ( position === bounds.to ) {
       assoc = -1;
     }
 
-    ranges.push(extend
+    ranges.push( extend
       ? EditorSelection.range(
         range.anchor,
         position,
         nativeTarget.goalColumn,
         nativeTarget.bidiLevel ?? undefined,
-        assoc,
+        assoc
       )
-      : EditorSelection.cursor(position, assoc));
+      : EditorSelection.cursor( position, assoc ) );
   }
 
   const selection = EditorSelection.create(
     ranges,
-    view.state.selection.mainIndex,
+    view.state.selection.mainIndex
   );
-  if (!selection.eq(view.state.selection, true)) {
+  if ( !selection.eq( view.state.selection, true ) ) {
     view.dispatch({
       selection,
       scrollIntoView: true,
-      userEvent: "select.table",
+      userEvent: 'select.table'
     });
   }
 
   return true;
 }
 
-const moveToTableCellTextStart: Command = (view) =>
-  setTableCellTextBoundary(view, "start", false);
-const selectToTableCellTextStart: Command = (view) =>
-  setTableCellTextBoundary(view, "start", true);
-const moveToTableCellTextEnd: Command = (view) =>
-  setTableCellTextBoundary(view, "end", false);
-const selectToTableCellTextEnd: Command = (view) =>
-  setTableCellTextBoundary(view, "end", true);
+const moveToTableCellTextStart: Command = ( view ) =>
+  setTableCellTextBoundary( view, 'start', false );
+const selectToTableCellTextStart: Command = ( view ) =>
+  setTableCellTextBoundary( view, 'start', true );
+const moveToTableCellTextEnd: Command = ( view ) =>
+  setTableCellTextBoundary( view, 'end', false );
+const selectToTableCellTextEnd: Command = ( view ) =>
+  setTableCellTextBoundary( view, 'end', true );
 
 function setTableCellHorizontalBoundary(
   view: EditorView,
-  direction: "left" | "right",
-  extend: boolean,
+  direction: 'left' | 'right',
+  extend: boolean
 ): boolean {
   const leftToStart = view.textDirectionAt(
-    view.state.selection.main.head,
+    view.state.selection.main.head
   ) === Direction.LTR;
-  const boundary = (direction === "left") === leftToStart ? "start" : "end";
+  const boundary = ( direction === 'left' ) === leftToStart ? 'start' : 'end';
 
-  return setTableCellTextBoundary(view, boundary, extend);
+  return setTableCellTextBoundary( view, boundary, extend );
 }
 
-const moveToTableCellTextLeft: Command = (view) =>
-  setTableCellHorizontalBoundary(view, "left", false);
-const selectToTableCellTextLeft: Command = (view) =>
-  setTableCellHorizontalBoundary(view, "left", true);
-const moveToTableCellTextRight: Command = (view) =>
-  setTableCellHorizontalBoundary(view, "right", false);
-const selectToTableCellTextRight: Command = (view) =>
-  setTableCellHorizontalBoundary(view, "right", true);
+const moveToTableCellTextLeft: Command = ( view ) =>
+  setTableCellHorizontalBoundary( view, 'left', false );
+const selectToTableCellTextLeft: Command = ( view ) =>
+  setTableCellHorizontalBoundary( view, 'left', true );
+const moveToTableCellTextRight: Command = ( view ) =>
+  setTableCellHorizontalBoundary( view, 'right', false );
+const selectToTableCellTextRight: Command = ( view ) =>
+  setTableCellHorizontalBoundary( view, 'right', true );
 
-const toggleBold: Command = (view) => toggleSelectionFormatting(view, "**", ["__"]);
-const toggleItalic: Command = (view) => toggleSelectionFormatting(view, "*", ["_"]);
-const toggleStrikethrough: Command = (view) => toggleSelectionFormatting(view, "~~");
-const insertLiteralHyphen: Command = (view) => {
-  if (view.composing) {
+const toggleBold: Command = ( view ) => toggleSelectionFormatting( view, '**', [ '__' ]);
+const toggleItalic: Command = ( view ) => toggleSelectionFormatting( view, '*', [ '_' ]);
+const toggleStrikethrough: Command = ( view ) => toggleSelectionFormatting( view, '~~' );
+const insertLiteralHyphen: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
   view.dispatch(
-    view.state.replaceSelection("-"),
+    view.state.replaceSelection( '-' ),
     {
       scrollIntoView: true,
-      userEvent: "input.type",
-    },
+      userEvent: 'input.type'
+    }
   );
 
   return true;
 };
-const wrapSelectionAsInlineCode: Command = (view) => {
-  if (view.composing) {
+const wrapSelectionAsInlineCode: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
   const selection = view.state.selection.main;
-  if (selection.empty) {
+  if ( selection.empty ) {
     return false;
   }
 
@@ -758,12 +758,12 @@ const wrapSelectionAsInlineCode: Command = (view) => {
     wrapInlineCode(
       view.state.doc.toString(),
       selection.from,
-      selection.to,
-    ),
+      selection.to
+    )
   );
 };
-const wrapSelectionAsMarkdownLink: Command = (view) => {
-  if (view.composing) {
+const wrapSelectionAsMarkdownLink: Command = ( view ) => {
+  if ( view.composing ) {
     return false;
   }
 
@@ -774,38 +774,38 @@ const wrapSelectionAsMarkdownLink: Command = (view) => {
     wrapMarkdownLink(
       view.state.doc.toString(),
       selection.from,
-      selection.to,
-    ),
+      selection.to
+    )
   );
 };
 
-const moveToRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, false);
-const selectRenderedListTextStart: Command = (view) => setRenderedListTextStart(view, true);
-const revealRenderedListSourceFromRight: Command = (view) => {
-  if (view.composing || view.state.selection.ranges.length !== 1) {
+const moveToRenderedListTextStart: Command = ( view ) => setRenderedListTextStart( view, false );
+const selectRenderedListTextStart: Command = ( view ) => setRenderedListTextStart( view, true );
+const revealRenderedListSourceFromRight: Command = ( view ) => {
+  if ( view.composing || view.state.selection.ranges.length !== 1 ) {
     return false;
   }
 
   const selection = view.state.selection.main;
-  if (!selection.empty) {
+  if ( !selection.empty ) {
     return false;
   }
 
-  const line = view.state.doc.lineAt(selection.head);
-  const textOffset = renderedListTextOffset(line.text);
-  if (textOffset === undefined) {
+  const line = view.state.doc.lineAt( selection.head );
+  const textOffset = renderedListTextOffset( line.text );
+  if ( textOffset === undefined ) {
     return false;
   }
 
   const textStart = line.from + textOffset;
-  if (selection.head !== textStart || textStart <= line.from) {
+  if ( selection.head !== textStart || textStart <= line.from ) {
     return false;
   }
 
   view.dispatch({
-    selection: EditorSelection.cursor(textStart - 1),
+    selection: EditorSelection.cursor( textStart - 1 ),
     scrollIntoView: true,
-    userEvent: "select",
+    userEvent: 'select'
   });
 
   return true;
@@ -813,93 +813,93 @@ const revealRenderedListSourceFromRight: Command = (view) => {
 
 function setRenderedListTextStart(
   view: EditorView,
-  extendSelection: boolean,
+  extendSelection: boolean
 ): boolean {
-  if (view.composing || view.state.selection.ranges.length !== 1) {
+  if ( view.composing || view.state.selection.ranges.length !== 1 ) {
     return false;
   }
 
   const selection = view.state.selection.main;
-  const line = view.state.doc.lineAt(selection.head);
-  const textOffset = renderedListTextOffset(line.text);
-  if (textOffset === undefined) {
+  const line = view.state.doc.lineAt( selection.head );
+  const textOffset = renderedListTextOffset( line.text );
+  if ( textOffset === undefined ) {
     return false;
   }
 
   const textStart = line.from + textOffset;
-  if (selection.head < textStart) {
+  if ( selection.head < textStart ) {
     return false;
   }
   if (
     selection.head > textStart
-    && previousLineBoundary(view, selection) > textStart
+    && previousLineBoundary( view, selection ) > textStart
   ) {
     return false;
   }
   if (
     selection.head === textStart
-    && (extendSelection || selection.empty)
+    && ( extendSelection || selection.empty )
   ) {
     return true;
   }
 
   view.dispatch({
     selection: extendSelection
-      ? EditorSelection.range(selection.anchor, textStart)
-      : EditorSelection.cursor(textStart),
+      ? EditorSelection.range( selection.anchor, textStart )
+      : EditorSelection.cursor( textStart ),
     scrollIntoView: true,
-    userEvent: "select",
+    userEvent: 'select'
   });
 
   return true;
 }
 
 async function resolveLiveMarkdownImageSource(
-  image: ParsedMarkdownImage,
+  image: ParsedMarkdownImage
 ): Promise<string | undefined> {
-  const source = sanitizeImageUrl(image.destination);
-  if (!source) {
+  const source = sanitizeImageUrl( image.destination );
+  if ( !source ) {
     return undefined;
   }
   if (
     !isTauri()
     || !props.vaultPath
-    || /^[a-z][a-z0-9+.-]*:/i.test(source)
-    || source.startsWith("//")
+    || /^[a-z][a-z0-9+.-]*:/i.test( source )
+    || source.startsWith( '//' )
   ) {
     return source;
   }
 
   const generation = imageResolverGeneration;
-  const cacheKey = `${generation}\u0000${props.vaultPath}\u0000${props.noteRelativePath}\u0000${
-    image.assetId ?? ""
-  }\u0000${image.destination}`;
-  const cached = imageSourcePromises.get(cacheKey);
-  if (cached) {
+  const cacheKey = `${ generation }\u0000${ props.vaultPath }\u0000${ props.noteRelativePath }\u0000${
+    image.assetId ?? ''
+  }\u0000${ image.destination }`;
+  const cached = imageSourcePromises.get( cacheKey );
+  if ( cached ) {
     return cached;
   }
 
-  const pending = (async () => {
+  const pending = ( async () => {
     const bytes = await readWorkspaceImage(
       props.vaultPath!,
       props.noteRelativePath,
-      decodeMarkdownImageDestination(image.destination),
-      image.assetId,
+      decodeMarkdownImageDestination( image.destination ),
+      image.assetId
     );
-    if (imageResolverDisposed || generation !== imageResolverGeneration) {
-      throw new Error("The image changed before it finished loading.");
+    if ( imageResolverDisposed || generation !== imageResolverGeneration ) {
+      throw new Error( 'The image changed before it finished loading.' );
     }
-    const mediaType = props.embeddedImages.find((asset) => asset.id === image.assetId)?.mediaType
-      ?? imageMediaTypeForPath(image.destination);
-    const url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
-    imageObjectUrls.add(url);
+    const mediaType = props.embeddedImages.find( ( asset ) => asset.id === image.assetId )?.mediaType
+      ?? imageMediaTypeForPath( image.destination );
+    const url = URL.createObjectURL( new Blob([ bytes.slice().buffer ], { type: mediaType }) );
+    imageObjectUrls.add( url );
 
     return url;
   })();
-  imageSourcePromises.set(cacheKey, pending);
-  pending.catch(() => {
-    if (imageSourcePromises.get(cacheKey) === pending) {
-      imageSourcePromises.delete(cacheKey);
+  imageSourcePromises.set( cacheKey, pending );
+  pending.catch( () => {
+    if ( imageSourcePromises.get( cacheKey ) === pending ) {
+      imageSourcePromises.delete( cacheKey );
     }
   });
 
@@ -909,55 +909,55 @@ async function resolveLiveMarkdownImageSource(
 function clearLiveMarkdownImageSources(): void {
   imageResolverGeneration += 1;
   imageSourcePromises.clear();
-  for (const url of imageObjectUrls) {
-    URL.revokeObjectURL(url);
+  for ( const url of imageObjectUrls ) {
+    URL.revokeObjectURL( url );
   }
   imageObjectUrls.clear();
 }
 
-onMounted(() => {
+onMounted( () => {
   const host = editorHost.value;
-  if (!host) {
+  if ( !host ) {
     return;
   }
 
   const editableDocument = projectEditableDocument(
-    normalizeDocumentText(props.modelValue),
-    props.showFrontmatter,
+    normalizeDocumentText( props.modelValue ),
+    props.showFrontmatter
   );
   frontmatterLineOffset = editableDocument.lineNumberOffset;
   frontmatterPrefix = editableDocument.prefix;
   const initialPosition = normalizeInitialPosition(
     props.initialPosition,
     editableDocument.body.length,
-    editableDocument.bodyStart,
+    editableDocument.bodyStart
   );
   const extensions: Extension[] = [
-    lineNumbersCompartment.of(editorLineNumbers(frontmatterLineOffset)),
+    lineNumbersCompartment.of( editorLineNumbers( frontmatterLineOffset ) ),
     highlightSpecialChars(),
-    historyCompartment.of(history()),
+    historyCompartment.of( history() ),
     drawSelection(),
     dropCursor(),
-    EditorState.tabSize.of(4),
+    EditorState.tabSize.of( 4 ),
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({
-      "aria-label": "Markdown source",
-      autocapitalize: "sentences",
-      class: "source-textarea",
-      spellcheck: "true",
+      'aria-label': 'Markdown source',
+      autocapitalize: 'sentences',
+      class: 'source-textarea',
+      spellcheck: 'true'
     }),
     markdown({
       addKeymap: false,
       base: markdownLanguage,
       completeHTMLTags: false,
-      pasteURLAsLink: false,
+      pasteURLAsLink: false
     }),
     literalApostropheExtension,
     tableDelimiterHyphenExtension,
     liveMarkdownExtension({
       acceptExtensionlessAttachment: isKnownExtensionlessAttachment,
       activateAttachment: activateLiveMarkdownAttachment,
-      documentId: `${props.vaultId}\u0000${props.noteId}`,
+      documentId: `${ props.vaultId }\u0000${ props.noteId }`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
       renameAttachment: props.renameAttachment,
@@ -965,163 +965,163 @@ onMounted(() => {
       resolveAttachmentMetadata: resolveLiveMarkdownAttachmentMetadata,
       resolveImageSource: resolveLiveMarkdownImageSource,
       showAttachmentInFolder: showLiveMarkdownAttachmentInFolder,
-      wikiLinkIsResolved: inlineWikiLinkIsResolved,
+      wikiLinkIsResolved: inlineWikiLinkIsResolved
     }),
     codeMirrorDocumentSearchExtension,
-    Prec.high(keymap.of([
-      { key: "ArrowDown", run: suggestionDown },
-      { key: "ArrowUp", run: suggestionUp },
-      { key: "ArrowDown", run: handleTableArrowDown },
-      { key: "ArrowUp", run: handleTableArrowUp },
-      { key: "Enter", run: acceptSuggestion },
-      { key: "Escape", run: closeSuggestions },
-      { key: "Shift-Enter", run: handleShiftEnter },
-      { key: "Enter", run: handleEnter },
-      { key: "Tab", run: handleTab },
-      { key: "Shift-Tab", run: handleShiftTab },
-      { key: "Backspace", run: deleteEmptyTableRow },
-      { key: "Backspace", run: protectTableCellStart },
-      { key: "Delete", run: protectTableCellEnd },
+    Prec.high( keymap.of([
+      { key: 'ArrowDown', run: suggestionDown },
+      { key: 'ArrowUp', run: suggestionUp },
+      { key: 'ArrowDown', run: handleTableArrowDown },
+      { key: 'ArrowUp', run: handleTableArrowUp },
+      { key: 'Enter', run: acceptSuggestion },
+      { key: 'Escape', run: closeSuggestions },
+      { key: 'Shift-Enter', run: handleShiftEnter },
+      { key: 'Enter', run: handleEnter },
+      { key: 'Tab', run: handleTab },
+      { key: 'Shift-Tab', run: handleShiftTab },
+      { key: 'Backspace', run: deleteEmptyTableRow },
+      { key: 'Backspace', run: protectTableCellStart },
+      { key: 'Delete', run: protectTableCellEnd },
       {
-        key: "Mod-Backspace",
-        mac: "Alt-Backspace",
-        run: protectTableCellStart,
+        key: 'Mod-Backspace',
+        mac: 'Alt-Backspace',
+        run: protectTableCellStart
       },
       {
-        key: "Mod-Delete",
-        mac: "Alt-Delete",
-        run: protectTableCellEnd,
+        key: 'Mod-Delete',
+        mac: 'Alt-Delete',
+        run: protectTableCellEnd
       },
-      { mac: "Mod-Backspace", run: deleteToTableCellTextStart },
-      { mac: "Mod-Delete", run: deleteToTableCellTextEnd },
+      { mac: 'Mod-Backspace', run: deleteToTableCellTextStart },
+      { mac: 'Mod-Delete', run: deleteToTableCellTextEnd },
       {
-        key: "ArrowLeft",
+        key: 'ArrowLeft',
         run: moveAcrossTableCellLeft,
-        shift: protectTableCellSelectionLeft,
+        shift: protectTableCellSelectionLeft
       },
       {
-        key: "ArrowRight",
+        key: 'ArrowRight',
         run: moveAcrossTableCellRight,
-        shift: protectTableCellSelectionRight,
+        shift: protectTableCellSelectionRight
       },
       {
-        key: "Home",
+        key: 'Home',
         run: moveToTableCellTextStart,
-        shift: selectToTableCellTextStart,
+        shift: selectToTableCellTextStart
       },
       {
-        key: "End",
+        key: 'End',
         run: moveToTableCellTextEnd,
-        shift: selectToTableCellTextEnd,
+        shift: selectToTableCellTextEnd
       },
       {
-        mac: "Cmd-ArrowLeft",
+        mac: 'Cmd-ArrowLeft',
         run: moveToTableCellTextLeft,
-        shift: selectToTableCellTextLeft,
+        shift: selectToTableCellTextLeft
       },
       {
-        mac: "Cmd-ArrowRight",
+        mac: 'Cmd-ArrowRight',
         run: moveToTableCellTextRight,
-        shift: selectToTableCellTextRight,
+        shift: selectToTableCellTextRight
       },
-      { key: "Mod-b", run: toggleBold },
-      { key: "Mod-Shift-a", run: requestAttachmentEmbed },
-      { key: "Mod-Shift-i", run: requestImageEmbed },
-      { key: "Mod-i", run: toggleItalic },
-      { key: "Mod-k", run: wrapSelectionAsMarkdownLink },
-      { key: "Mod-Shift-x", run: toggleStrikethrough },
+      { key: 'Mod-b', run: toggleBold },
+      { key: 'Mod-Shift-a', run: requestAttachmentEmbed },
+      { key: 'Mod-Shift-i', run: requestImageEmbed },
+      { key: 'Mod-i', run: toggleItalic },
+      { key: 'Mod-k', run: wrapSelectionAsMarkdownLink },
+      { key: 'Mod-Shift-x', run: toggleStrikethrough },
       { key: "'", run: insertLiteralApostrophe },
-      { key: "-", run: insertLiteralHyphen },
-      { key: "`", run: wrapSelectionAsInlineCode },
-      { key: "ArrowLeft", run: revealRenderedListSourceFromRight },
+      { key: '-', run: insertLiteralHyphen },
+      { key: '`', run: wrapSelectionAsInlineCode },
+      { key: 'ArrowLeft', run: revealRenderedListSourceFromRight },
       {
-        key: "Home",
+        key: 'Home',
         run: moveToRenderedListTextStart,
-        shift: selectRenderedListTextStart,
+        shift: selectRenderedListTextStart
       },
       {
-        mac: "Cmd-ArrowLeft",
+        mac: 'Cmd-ArrowLeft',
         run: moveToRenderedListTextStart,
-        shift: selectRenderedListTextStart,
-      },
-    ])),
-    keymap.of([...defaultKeymap, ...historyKeymap]),
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) {
-        for (const insertion of pendingImageInsertions.values()) {
+        shift: selectRenderedListTextStart
+      }
+    ]) ),
+    keymap.of([ ...defaultKeymap, ...historyKeymap ]),
+    EditorView.updateListener.of( ( update ) => {
+      if ( update.docChanged ) {
+        for ( const insertion of pendingImageInsertions.values() ) {
           const empty = insertion.from === insertion.to;
-          insertion.from = update.changes.mapPos(insertion.from, -1);
-          insertion.to = update.changes.mapPos(insertion.to, empty ? -1 : 1);
+          insertion.from = update.changes.mapPos( insertion.from, -1 );
+          insertion.to = update.changes.mapPos( insertion.to, empty ? -1 : 1 );
         }
       }
       const localDocumentChange = update.docChanged && update.transactions.some(
-        (transaction) => transaction.docChanged && !transaction.annotation(externalUpdate),
+        ( transaction ) => transaction.docChanged && !transaction.annotation( externalUpdate )
       );
-      if (localDocumentChange) {
+      if ( localDocumentChange ) {
         if (
           props.showFrontmatter
-          && changeTouchesLeadingFrontmatter(update)
+          && changeTouchesLeadingFrontmatter( update )
         ) {
           frontmatterHistoryChanged = true;
         }
         emit(
-          "update:modelValue",
+          'update:modelValue',
           restoreLineEndings(
             joinLeadingFrontmatter(
               frontmatterPrefix,
-              update.state.doc.toString(),
+              update.state.doc.toString()
             ),
-            outputLineEnding,
-          ),
+            outputLineEnding
+          )
         );
         refreshDocumentSearch();
       }
-      if (update.docChanged || update.selectionSet) {
-        updateSuggestions(update.view);
-        schedulePositionCapture(update.view);
+      if ( update.docChanged || update.selectionSet ) {
+        updateSuggestions( update.view );
+        schedulePositionCapture( update.view );
       }
-      scheduleEditorRenderReady(update.view);
-    }),
+      scheduleEditorRenderReady( update.view );
+    })
   ];
   const historySession = openNoteEditorHistory(
     props.vaultId,
-    props.noteId,
+    props.noteId
   );
   closeEditorHistory = historySession.close;
   const savedState = restorableEditorHistory(
     historySession.snapshot,
-    normalizeDocumentText(props.modelValue),
-    editableDocument,
+    normalizeDocumentText( props.modelValue ),
+    editableDocument
   );
-  if (historySession.snapshot && !savedState) {
+  if ( historySession.snapshot && !savedState ) {
     historySession.discard();
   }
   let state = savedState
     ? EditorState.fromJSON(
-        savedState,
-        { extensions },
-        { history: historyField },
-      )
+      savedState,
+      { extensions },
+      { history: historyField }
+    )
     : EditorState.create({
-        doc: editableDocument.body,
-        selection: initialPosition
-          ? EditorSelection.range(initialPosition.selection.anchor, initialPosition.selection.head)
-          : undefined,
-        extensions,
-      });
-  if (savedState && savedState.doc !== editableDocument.body) {
-    const currentBodyStart = markdownBodyStart(savedState.prefix, savedState.doc);
+      doc: editableDocument.body,
+      selection: initialPosition
+        ? EditorSelection.range( initialPosition.selection.anchor, initialPosition.selection.head )
+        : undefined,
+      extensions
+    });
+  if ( savedState && savedState.doc !== editableDocument.body ) {
+    const currentBodyStart = markdownBodyStart( savedState.prefix, savedState.doc );
     state = state.update({
       annotations: [
-        externalUpdate.of(true),
-        Transaction.addToHistory.of(false),
+        externalUpdate.of( true ),
+        Transaction.addToHistory.of( false )
       ],
-      changes: minimalDocumentChange(savedState.doc, editableDocument.body),
+      changes: minimalDocumentChange( savedState.doc, editableDocument.body ),
       selection: frontmatterVisibilitySelection(
         state.selection.main,
         currentBodyStart,
-        editableDocument,
-      ),
+        editableDocument
+      )
     }).state;
   }
   frontmatterHistoryChanged = savedState?.frontmatterHistoryChanged ?? false;
@@ -1129,28 +1129,28 @@ onMounted(() => {
     parent: host,
     state,
     scrollTo: initialPosition
-      ? EditorView.scrollIntoView(initialPosition.viewport.anchor, { x: "start", y: "start" })
-      : undefined,
+      ? EditorView.scrollIntoView( initialPosition.viewport.anchor, { x: 'start', y: 'start' })
+      : undefined
   });
   editorView.value = view;
   removePositionCapture = registerNoteEditorPositionCapture(
     props.vaultId,
     props.noteId,
-    () => positionCaptureEnabled ? captureEditorPosition(view) : undefined,
+    () => positionCaptureEnabled ? captureEditorPosition( view ) : undefined
   );
-  view.scrollDOM.addEventListener("scroll", handleEditorScroll, { passive: true });
-  updateSuggestions(view);
+  view.scrollDOM.addEventListener( 'scroll', handleEditorScroll, { passive: true });
+  updateSuggestions( view );
   view.focus();
 
-  if (initialPosition) {
-    scheduleViewportRestore(view, initialPosition);
+  if ( initialPosition ) {
+    scheduleViewportRestore( view, initialPosition );
   } else {
     positionCaptureEnabled = true;
-    schedulePositionCapture(view);
-    scheduleEditorRenderReady(view);
+    schedulePositionCapture( view );
+    scheduleEditorRenderReady( view );
   }
-  window.requestAnimationFrame(() => {
-    if (editorView.value !== view || !view.dom.isConnected) {
+  window.requestAnimationFrame( () => {
+    if ( editorView.value !== view || !view.dom.isConnected ) {
       return;
     }
 
@@ -1162,21 +1162,21 @@ onMounted(() => {
   });
 });
 
-onBeforeUnmount(() => {
+onBeforeUnmount( () => {
   imageResolverDisposed = true;
   pendingImageInsertions.clear();
   clearLiveMarkdownImageSources();
   const view = editorView.value;
   const captureWasActive = removePositionCapture?.() ?? false;
   removePositionCapture = undefined;
-  if (viewportRestoreFrame !== undefined) {
-    window.cancelAnimationFrame(viewportRestoreFrame);
+  if ( viewportRestoreFrame !== undefined ) {
+    window.cancelAnimationFrame( viewportRestoreFrame );
     viewportRestoreFrame = undefined;
   }
-  if (view) {
-    view.scrollDOM.removeEventListener("scroll", handleEditorScroll);
-    if (positionCaptureEnabled && captureWasActive) {
-      emitEditorPosition(captureEditorPosition(view));
+  if ( view ) {
+    view.scrollDOM.removeEventListener( 'scroll', handleEditorScroll );
+    if ( positionCaptureEnabled && captureWasActive ) {
+      emitEditorPosition( captureEditorPosition( view ) );
     }
     const serializedState = view.state.toJSON({ history: historyField });
     closeEditorHistory?.({
@@ -1184,7 +1184,7 @@ onBeforeUnmount(() => {
       frontmatterHistoryChanged,
       history: serializedState.history,
       prefix: frontmatterPrefix,
-      selection: serializedState.selection,
+      selection: serializedState.selection
     });
     closeEditorHistory = undefined;
     view.destroy();
@@ -1193,27 +1193,27 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  [() => props.modelValue, () => props.showFrontmatter],
-  ([value, showFrontmatter], [, previouslyShowingFrontmatter]) => {
+  [ () => props.modelValue, () => props.showFrontmatter ],
+  ([ value, showFrontmatter ], [ , previouslyShowingFrontmatter ]) => {
     const view = editorView.value;
-    outputLineEnding = preferredLineEnding(value);
+    outputLineEnding = preferredLineEnding( value );
     const visibilityChanged = showFrontmatter !== previouslyShowingFrontmatter;
     const normalizedValue = visibilityChanged && view
       ? joinLeadingFrontmatter(
-          frontmatterPrefix,
-          view.state.doc.toString(),
-        )
-      : normalizeDocumentText(value);
+        frontmatterPrefix,
+        view.state.doc.toString()
+      )
+      : normalizeDocumentText( value );
 
     const editableDocument = projectEditableDocument(
       normalizedValue,
-      showFrontmatter,
+      showFrontmatter
     );
     const prefixChanged = editableDocument.prefix !== frontmatterPrefix;
     const lineOffsetChanged = (
       editableDocument.lineNumberOffset !== frontmatterLineOffset
     );
-    if (!view) {
+    if ( !view ) {
       frontmatterPrefix = editableDocument.prefix;
       frontmatterLineOffset = editableDocument.lineNumberOffset;
 
@@ -1221,77 +1221,77 @@ watch(
     }
 
     const currentBody = view.state.doc.toString();
-    const currentBodyStart = markdownBodyStart(frontmatterPrefix, currentBody);
+    const currentBodyStart = markdownBodyStart( frontmatterPrefix, currentBody );
     const bodyChanged = editableDocument.body !== currentBody;
     const coordinateSpaceChanged = bodyChanged
       && editableDocument.bodyStart !== currentBodyStart;
     const resetHistory = coordinateSpaceChanged && (
       !visibilityChanged
-      || (previouslyShowingFrontmatter && frontmatterHistoryChanged)
+      || ( previouslyShowingFrontmatter && frontmatterHistoryChanged )
     );
     const selection = visibilityChanged
       ? frontmatterVisibilitySelection(
-          view.state.selection.main,
-          currentBodyStart,
-          editableDocument,
-        )
+        view.state.selection.main,
+        currentBodyStart,
+        editableDocument
+      )
       : undefined;
     frontmatterPrefix = editableDocument.prefix;
     frontmatterLineOffset = editableDocument.lineNumberOffset;
-    if (resetHistory) {
+    if ( resetHistory ) {
       // Projection changes invalidate history entries that target the hidden prefix
       view.dispatch({
-        effects: historyCompartment.reconfigure([]),
+        effects: historyCompartment.reconfigure([])
       });
     }
-    if (bodyChanged || lineOffsetChanged) {
+    if ( bodyChanged || lineOffsetChanged ) {
       view.dispatch({
-        ...(bodyChanged
+        ...( bodyChanged
           ? {
-              changes: minimalDocumentChange(currentBody, editableDocument.body),
-              annotations: [
-                externalUpdate.of(true),
-                Transaction.addToHistory.of(false),
-              ],
-            }
+            changes: minimalDocumentChange( currentBody, editableDocument.body ),
+            annotations: [
+              externalUpdate.of( true ),
+              Transaction.addToHistory.of( false )
+            ]
+          }
           : {}),
-        ...(lineOffsetChanged
+        ...( lineOffsetChanged
           ? {
-              effects: lineNumbersCompartment.reconfigure(
-                editorLineNumbers(frontmatterLineOffset),
-              ),
-            }
+            effects: lineNumbersCompartment.reconfigure(
+              editorLineNumbers( frontmatterLineOffset )
+            )
+          }
           : {}),
-        ...(selection ? { selection } : {}),
-        scrollIntoView: visibilityChanged,
+        ...( selection ? { selection } : {}),
+        scrollIntoView: visibilityChanged
       });
     }
-    if (bodyChanged) {
+    if ( bodyChanged ) {
       refreshDocumentSearch();
     }
-    if (prefixChanged) {
-      schedulePositionCapture(view);
+    if ( prefixChanged ) {
+      schedulePositionCapture( view );
     }
-    if (resetHistory) {
+    if ( resetHistory ) {
       view.dispatch({
-        effects: historyCompartment.reconfigure(history()),
+        effects: historyCompartment.reconfigure( history() )
       });
     }
-    if (visibilityChanged) {
+    if ( visibilityChanged ) {
       frontmatterHistoryChanged = false;
       view.focus();
     }
-  },
+  }
 );
 
 watch(
   () => props.noteTitles,
   () => {
     editorView.value?.dispatch({
-      effects: refreshLiveMarkdownEffect.of(null),
+      effects: refreshLiveMarkdownEffect.of( null )
     });
   },
-  { deep: true },
+  { deep: true }
 );
 
 watch(
@@ -1299,203 +1299,203 @@ watch(
   () => {
     clearLiveMarkdownImageSources();
     editorView.value?.dispatch({
-      effects: refreshLiveMarkdownEffect.of(null),
+      effects: refreshLiveMarkdownEffect.of( null )
     });
-  },
+  }
 );
 
 watch(
   () => props.attachmentRefreshToken,
   () => {
     editorView.value?.dispatch({
-      effects: refreshLiveMarkdownEffect.of(null),
+      effects: refreshLiveMarkdownEffect.of( null )
     });
-  },
+  }
 );
 
-function openLiveMarkdownLink(href: string): void {
-  emit("openLink", href);
+function openLiveMarkdownLink( href: string ): void {
+  emit( 'openLink', href );
 }
 
-function openLiveMarkdownWikiLink(target: string, heading?: string): void {
-  emit("openWiki", target, heading);
+function openLiveMarkdownWikiLink( target: string, heading?: string ): void {
+  emit( 'openWiki', target, heading );
 }
 
-const attachmentPathKeys = computed(() => new Set(
-  props.attachmentFiles.map((attachment) => attachment.relativePath.toLocaleLowerCase()),
-));
+const attachmentPathKeys = computed( () => new Set(
+  props.attachmentFiles.map( ( attachment ) => attachment.relativePath.toLocaleLowerCase() )
+) );
 
-function isKnownExtensionlessAttachment(destination: string): boolean {
-  const relativePath = resolveMarkdownImagePath(props.noteRelativePath, destination);
+function isKnownExtensionlessAttachment( destination: string ): boolean {
+  const relativePath = resolveMarkdownImagePath( props.noteRelativePath, destination );
 
   return Boolean(
     relativePath
-    && attachmentPathKeys.value.has(relativePath.toLocaleLowerCase()),
+    && attachmentPathKeys.value.has( relativePath.toLocaleLowerCase() )
   );
 }
 
 function resolveLiveMarkdownAttachmentMetadata(
-  attachment: ParsedMarkdownAttachment,
+  attachment: ParsedMarkdownAttachment
 ): MarkdownAttachmentMetadata | undefined {
   const tracked = attachment.assetId
-    ? props.embeddedAttachments.find((asset) => asset.id === attachment.assetId)
+    ? props.embeddedAttachments.find( ( asset ) => asset.id === attachment.assetId )
     : undefined;
   const relativePath = tracked?.relativePath
-    ?? resolveMarkdownImagePath(props.noteRelativePath, attachment.destination);
-  if (!relativePath) {
+    ?? resolveMarkdownImagePath( props.noteRelativePath, attachment.destination );
+  if ( !relativePath ) {
     return undefined;
   }
   const portablePath = relativePath.toLocaleLowerCase();
   const matches = attachment.assetId
-    ? props.attachmentFiles.filter((candidate) =>
+    ? props.attachmentFiles.filter( ( candidate ) =>
       candidate.assetId === attachment.assetId
     )
-    : props.attachmentFiles.filter((candidate) =>
+    : props.attachmentFiles.filter( ( candidate ) =>
       candidate.relativePath.toLocaleLowerCase() === portablePath
     );
-  const file = matches.length === 1 ? matches[0] : undefined;
+  const file = matches.length === 1 ? matches[ 0 ] : undefined;
   const renameTarget = file && props.vaultPath && isTauri()
     ? {
-        ...(file.assetId ? { assetId: file.assetId } : {}),
-        relativePath: file.relativePath,
-      }
+      ...( file.assetId ? { assetId: file.assetId } : {}),
+      relativePath: file.relativePath
+    }
     : undefined;
 
   return {
     byteLength: tracked?.byteLength ?? file?.byteLength,
     mediaType: tracked?.mediaType ?? file?.mediaType,
     openingDisabled: tracked?.openingDisabled ?? file?.openingDisabled,
-    ...(renameTarget ? { renameTarget } : {}),
-    relativePath: tracked?.relativePath ?? file?.relativePath ?? relativePath,
+    ...( renameTarget ? { renameTarget } : {}),
+    relativePath: tracked?.relativePath ?? file?.relativePath ?? relativePath
   };
 }
 
 function activateLiveMarkdownAttachment(
   attachment: ParsedMarkdownAttachment,
-  metadata: MarkdownAttachmentMetadata | null | undefined,
+  metadata: MarkdownAttachmentMetadata | null | undefined
 ): void {
   const relativePath = metadata?.relativePath
-    ?? resolveMarkdownImagePath(props.noteRelativePath, attachment.destination);
-  if (relativePath) {
+    ?? resolveMarkdownImagePath( props.noteRelativePath, attachment.destination );
+  if ( relativePath ) {
     emit(
-      "activateAttachment",
+      'activateAttachment',
       attachment.assetId,
       relativePath,
       metadata?.mediaType,
-      metadata?.openingDisabled,
+      metadata?.openingDisabled
     );
   }
 }
 
 function revealLiveMarkdownAttachmentInTree(
   attachment: ParsedMarkdownAttachment,
-  metadata: MarkdownAttachmentMetadata | null | undefined,
+  metadata: MarkdownAttachmentMetadata | null | undefined
 ): void {
-  emitLiveMarkdownAttachmentLocation("revealAttachmentInTree", attachment, metadata);
+  emitLiveMarkdownAttachmentLocation( 'revealAttachmentInTree', attachment, metadata );
 }
 
 function showLiveMarkdownAttachmentInFolder(
   attachment: ParsedMarkdownAttachment,
-  metadata: MarkdownAttachmentMetadata | null | undefined,
+  metadata: MarkdownAttachmentMetadata | null | undefined
 ): void {
-  emitLiveMarkdownAttachmentLocation("showAttachmentInFolder", attachment, metadata);
+  emitLiveMarkdownAttachmentLocation( 'showAttachmentInFolder', attachment, metadata );
 }
 
 function emitLiveMarkdownAttachmentLocation(
-  event: "revealAttachmentInTree" | "showAttachmentInFolder",
+  event: 'revealAttachmentInTree' | 'showAttachmentInFolder',
   attachment: ParsedMarkdownAttachment,
-  metadata: MarkdownAttachmentMetadata | null | undefined,
+  metadata: MarkdownAttachmentMetadata | null | undefined
 ): void {
   const relativePath = metadata?.relativePath
-    ?? resolveMarkdownImagePath(props.noteRelativePath, attachment.destination);
-  if (!relativePath) {
+    ?? resolveMarkdownImagePath( props.noteRelativePath, attachment.destination );
+  if ( !relativePath ) {
     return;
   }
   const assetId = metadata?.renameTarget?.assetId;
-  if (event === "revealAttachmentInTree") {
-    emit("revealAttachmentInTree", assetId, relativePath);
+  if ( event === 'revealAttachmentInTree' ) {
+    emit( 'revealAttachmentInTree', assetId, relativePath );
   } else {
-    emit("showAttachmentInFolder", assetId, relativePath);
+    emit( 'showAttachmentInFolder', assetId, relativePath );
   }
 }
 
-function focusDocumentOffset(offset: number): boolean {
+function focusDocumentOffset( offset: number ): boolean {
   const view = editorView.value;
-  if (!view || !Number.isFinite(offset)) {
+  if ( !view || !Number.isFinite( offset ) ) {
     return false;
   }
 
-  if (viewportRestoreFrame !== undefined) {
-    window.cancelAnimationFrame(viewportRestoreFrame);
+  if ( viewportRestoreFrame !== undefined ) {
+    window.cancelAnimationFrame( viewportRestoreFrame );
     viewportRestoreFrame = undefined;
   }
 
   const bodyStart = markdownBodyStart(
     frontmatterPrefix,
-    view.state.doc.toString(),
+    view.state.doc.toString()
   );
   const position = Math.min(
     view.state.doc.length,
-    Math.max(0, Math.trunc(offset) - bodyStart),
+    Math.max( 0, Math.trunc( offset ) - bodyStart )
   );
 
   positionCaptureEnabled = true;
   view.dispatch({
-    selection: EditorSelection.cursor(position),
-    effects: EditorView.scrollIntoView(position, {
-      y: "start",
-      yMargin: VIEWPORT_ANCHOR_MARGIN,
+    selection: EditorSelection.cursor( position ),
+    effects: EditorView.scrollIntoView( position, {
+      y: 'start',
+      yMargin: VIEWPORT_ANCHOR_MARGIN
     }),
-    userEvent: "select",
+    userEvent: 'select'
   });
   view.focus();
-  schedulePositionCapture(view);
+  schedulePositionCapture( view );
 
   return true;
 }
 
 function captureImageInsertion(
-  view = editorView.value,
+  view = editorView.value
 ): ImageInsertionCapture | undefined {
-  if (!view || view.state.selection.ranges.length !== 1) {
+  if ( !view || view.state.selection.ranges.length !== 1 ) {
     return undefined;
   }
 
   const selection = view.state.selection.main;
-  const inTable = liveMarkdownDocumentModel(view.state).tables.some((table) =>
+  const inTable = liveMarkdownDocumentModel( view.state ).tables.some( ( table ) =>
     selection.from >= table.from && selection.to <= table.to
   );
   imageInsertionSequence += 1;
-  const token = `${Date.now().toString(36)}-${imageInsertionSequence.toString(36)}`;
+  const token = `${ Date.now().toString( 36 ) }-${ imageInsertionSequence.toString( 36 ) }`;
   const insertion: PendingImageInsertion = {
     from: selection.from,
     inTable,
     noteId: props.noteId,
-    selectedText: view.state.sliceDoc(selection.from, selection.to),
+    selectedText: view.state.sliceDoc( selection.from, selection.to ),
     to: selection.to,
-    token,
+    token
   };
-  pendingImageInsertions.set(token, insertion);
+  pendingImageInsertions.set( token, insertion );
 
   return {
     inTable: insertion.inTable,
     noteId: insertion.noteId,
     selectedText: insertion.selectedText,
-    token: insertion.token,
+    token: insertion.token
   };
 }
 
-function cancelImageInsertion(capture: ImageInsertionCapture): void {
-  pendingImageInsertions.delete(capture.token);
+function cancelImageInsertion( capture: ImageInsertionCapture ): void {
+  pendingImageInsertions.delete( capture.token );
 }
 
 function insertEmbeddedImage(
   capture: ImageInsertionCapture,
-  markdownImage: string,
+  markdownImage: string
 ): boolean {
   const view = editorView.value;
-  const insertion = pendingImageInsertions.get(capture.token);
-  pendingImageInsertions.delete(capture.token);
+  const insertion = pendingImageInsertions.get( capture.token );
+  pendingImageInsertions.delete( capture.token );
   if (
     !view
     || !insertion
@@ -1503,7 +1503,7 @@ function insertEmbeddedImage(
     || insertion.from < 0
     || insertion.to < insertion.from
     || insertion.to > view.state.doc.length
-    || view.state.sliceDoc(insertion.from, insertion.to) !== insertion.selectedText
+    || view.state.sliceDoc( insertion.from, insertion.to ) !== insertion.selectedText
   ) {
     return false;
   }
@@ -1513,50 +1513,50 @@ function insertEmbeddedImage(
     changes: {
       from: insertion.from,
       to: insertion.to,
-      insert: markdownImage,
+      insert: markdownImage
     },
-    selection: EditorSelection.cursor(cursor),
+    selection: EditorSelection.cursor( cursor ),
     scrollIntoView: true,
-    userEvent: "input",
+    userEvent: 'input'
   });
   view.focus();
 
   return true;
 }
 
-function requestImageEmbed(view: EditorView): boolean {
-  const capture = captureImageInsertion(view);
-  if (!capture) {
+function requestImageEmbed( view: EditorView ): boolean {
+  const capture = captureImageInsertion( view );
+  if ( !capture ) {
     return false;
   }
-  emit("requestEmbedImage", capture);
+  emit( 'requestEmbedImage', capture );
 
   return true;
 }
 
 function captureAttachmentInsertion(
-  view = editorView.value,
+  view = editorView.value
 ): AttachmentInsertionCapture | undefined {
-  return captureImageInsertion(view);
+  return captureImageInsertion( view );
 }
 
-function cancelAttachmentInsertion(capture: AttachmentInsertionCapture): void {
-  cancelImageInsertion(capture);
+function cancelAttachmentInsertion( capture: AttachmentInsertionCapture ): void {
+  cancelImageInsertion( capture );
 }
 
 function insertEmbeddedAttachment(
   capture: AttachmentInsertionCapture,
-  markdownAttachment: string,
+  markdownAttachment: string
 ): boolean {
-  return insertEmbeddedImage(capture, markdownAttachment);
+  return insertEmbeddedImage( capture, markdownAttachment );
 }
 
-function requestAttachmentEmbed(view: EditorView): boolean {
-  const capture = captureAttachmentInsertion(view);
-  if (!capture) {
+function requestAttachmentEmbed( view: EditorView ): boolean {
+  const capture = captureAttachmentInsertion( view );
+  if ( !capture ) {
     return false;
   }
-  emit("requestEmbedAttachment", capture);
+  emit( 'requestEmbedAttachment', capture );
 
   return true;
 }
@@ -1568,57 +1568,57 @@ defineExpose({
   captureImageInsertion,
   focusDocumentOffset,
   insertEmbeddedAttachment,
-  insertEmbeddedImage,
+  insertEmbeddedImage
 });
 
-function normalizeInlineLinkTarget(value: string): string {
-  return normalizeWikiTarget(value)
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+function normalizeInlineLinkTarget( value: string ): string {
+  return normalizeWikiTarget( value )
+    .normalize( 'NFKD' )
+    .replace( /[\u0300-\u036f]/g, '' )
     .toLocaleLowerCase()
-    .replace(/\s+/g, " ")
+    .replace( /\s+/g, ' ' )
     .trim();
 }
 
-function inlineWikiLinkIsResolved(target: string): boolean {
-  if (!target) {
+function inlineWikiLinkIsResolved( target: string ): boolean {
+  if ( !target ) {
     return true;
   }
 
-  return normalizedNoteTitles.value.has(normalizeInlineLinkTarget(target)) ||
-    normalizedNoteTitles.value.has(normalizeInlineLinkTarget(wikiTargetTitle(target)));
+  return normalizedNoteTitles.value.has( normalizeInlineLinkTarget( target ) ) ||
+    normalizedNoteTitles.value.has( normalizeInlineLinkTarget( wikiTargetTitle( target ) ) );
 }
 
-function updateSuggestions(view: EditorView): void {
+function updateSuggestions( view: EditorView ): void {
   const selection = view.state.selection.main;
-  if (!selection.empty) {
+  if ( !selection.empty ) {
     suggestionQuery.value = null;
 
     return;
   }
 
-  const line = view.state.doc.lineAt(selection.head);
-  const beforeCursor = view.state.doc.sliceString(line.from, selection.head);
-  const match = beforeCursor.match(/\[\[([^\]\n|#]*)$/);
-  suggestionQuery.value = match ? match[1] ?? "" : null;
+  const line = view.state.doc.lineAt( selection.head );
+  const beforeCursor = view.state.doc.sliceString( line.from, selection.head );
+  const match = beforeCursor.match( /\[\[([^\]\n|#]*)$/ );
+  suggestionQuery.value = match ? match[ 1 ] ?? '' : null;
   suggestionIndex.value = 0;
 }
 
-function insertSuggestion(title: string): void {
+function insertSuggestion( title: string ): void {
   const view = editorView.value;
-  if (!view || suggestionQuery.value === null) {
+  if ( !view || suggestionQuery.value === null ) {
     return;
   }
 
   const cursor = view.state.selection.main.head;
   const start = cursor - suggestionQuery.value.length;
-  const replacement = `${title}]]`;
+  const replacement = `${ title }]]`;
   suggestionQuery.value = null;
   view.dispatch({
     changes: { from: start, to: cursor, insert: replacement },
-    selection: EditorSelection.cursor(start + replacement.length),
+    selection: EditorSelection.cursor( start + replacement.length ),
     scrollIntoView: true,
-    userEvent: "input.complete",
+    userEvent: 'input.complete'
   });
   view.focus();
 }
@@ -1626,9 +1626,9 @@ function insertSuggestion(title: string): void {
 function toggleSelectionFormatting(
   view: EditorView,
   marker: string,
-  alternatives: string[] = [],
+  alternatives: string[] = []
 ): boolean {
-  if (view.composing) {
+  if ( view.composing ) {
     return false;
   }
 
@@ -1641,29 +1641,29 @@ function toggleSelectionFormatting(
       selection.from,
       selection.to,
       marker,
-      alternatives,
-    ),
+      alternatives
+    )
   );
 }
 
 function applyMarkdownSelectionEdit(
   view: EditorView,
-  edit: MarkdownSelectionEdit,
+  edit: MarkdownSelectionEdit
 ): boolean {
   const value = view.state.doc.toString();
-  if (edit.value === value) {
+  if ( edit.value === value ) {
     return true;
   }
 
-  const change = minimalDocumentChange(value, edit.value);
+  const change = minimalDocumentChange( value, edit.value );
   const backward = view.state.selection.main.anchor > view.state.selection.main.head;
   view.dispatch({
     changes: change,
     selection: backward
-      ? EditorSelection.range(edit.selectionEnd, edit.selectionStart)
-      : EditorSelection.range(edit.selectionStart, edit.selectionEnd),
+      ? EditorSelection.range( edit.selectionEnd, edit.selectionStart )
+      : EditorSelection.range( edit.selectionStart, edit.selectionEnd ),
     scrollIntoView: true,
-    userEvent: "input.format",
+    userEvent: 'input.format'
   });
 
   return true;
@@ -1674,23 +1674,23 @@ function applyFullDocumentEdit(
   value: string,
   selectionStart: number,
   selectionEnd = selectionStart,
-  userEvent = "input",
+  userEvent = 'input'
 ): void {
   view.dispatch({
-    changes: minimalDocumentChange(view.state.doc.toString(), value),
-    selection: EditorSelection.range(selectionStart, selectionEnd),
+    changes: minimalDocumentChange( view.state.doc.toString(), value ),
+    selection: EditorSelection.range( selectionStart, selectionEnd ),
     scrollIntoView: true,
-    userEvent,
+    userEvent
   });
 }
 
 function minimalDocumentChange(
   current: string,
-  next: string,
+  next: string
 ): { from: number; to: number; insert: string } {
   let from = 0;
-  const sharedLength = Math.min(current.length, next.length);
-  while (from < sharedLength && current[from] === next[from]) {
+  const sharedLength = Math.min( current.length, next.length );
+  while ( from < sharedLength && current[ from ] === next[ from ]) {
     from += 1;
   }
 
@@ -1699,7 +1699,7 @@ function minimalDocumentChange(
   while (
     currentTo > from &&
     nextTo > from &&
-    current[currentTo - 1] === next[nextTo - 1]
+    current[ currentTo - 1 ] === next[ nextTo - 1 ]
   ) {
     currentTo -= 1;
     nextTo -= 1;
@@ -1708,54 +1708,54 @@ function minimalDocumentChange(
   return {
     from,
     to: currentTo,
-    insert: next.slice(from, nextTo),
+    insert: next.slice( from, nextTo )
   };
 }
 
-function preferredLineEnding(value: string): "\n" | "\r" | "\r\n" {
-  const lineEnding = value.match(/\r\n|\r|\n/)?.[0];
+function preferredLineEnding( value: string ): '\n' | '\r' | '\r\n' {
+  const lineEnding = value.match( /\r\n|\r|\n/ )?.[ 0 ];
 
-  return lineEnding === "\r\n" || lineEnding === "\r"
+  return lineEnding === '\r\n' || lineEnding === '\r'
     ? lineEnding
-    : "\n";
+    : '\n';
 }
 
-function normalizeDocumentText(value: string): string {
-  return value.replace(/\r\n|\r/g, "\n");
+function normalizeDocumentText( value: string ): string {
+  return value.replace( /\r\n|\r/g, '\n' );
 }
 
 function projectEditableDocument(
   normalizedMarkdown: string,
-  showFrontmatter: boolean,
+  showFrontmatter: boolean
 ) {
-  if (!showFrontmatter) {
-    return splitLeadingFrontmatter(normalizedMarkdown);
+  if ( !showFrontmatter ) {
+    return splitLeadingFrontmatter( normalizedMarkdown );
   }
 
   return {
     body: normalizedMarkdown,
     bodyStart: 0,
     lineNumberOffset: 0,
-    prefix: "",
+    prefix: ''
   };
 }
 
 function restorableEditorHistory(
   snapshot: NoteEditorHistorySnapshot | undefined,
   normalizedMarkdown: string,
-  editableDocument: ReturnType<typeof projectEditableDocument>,
+  editableDocument: ReturnType<typeof projectEditableDocument>
 ): NoteEditorHistorySnapshot | undefined {
-  if (!snapshot) {
+  if ( !snapshot ) {
     return undefined;
   }
-  if (snapshot.doc === editableDocument.body) {
+  if ( snapshot.doc === editableDocument.body ) {
     return snapshot;
   }
-  const savedMarkdown = joinLeadingFrontmatter(snapshot.prefix, snapshot.doc);
-  if (savedMarkdown !== normalizedMarkdown) {
+  const savedMarkdown = joinLeadingFrontmatter( snapshot.prefix, snapshot.doc );
+  if ( savedMarkdown !== normalizedMarkdown ) {
     return undefined;
   }
-  const savedBodyStart = markdownBodyStart(snapshot.prefix, snapshot.doc);
+  const savedBodyStart = markdownBodyStart( snapshot.prefix, snapshot.doc );
   const hidingEditedFrontmatter = savedBodyStart === 0
     && editableDocument.bodyStart > 0
     && snapshot.frontmatterHistoryChanged;
@@ -1766,25 +1766,25 @@ function restorableEditorHistory(
 function frontmatterVisibilitySelection(
   selection: SelectionRange,
   currentBodyStart: number,
-  editableDocument: ReturnType<typeof projectEditableDocument>,
+  editableDocument: ReturnType<typeof projectEditableDocument>
 ): SelectionRange {
-  const clamp = (position: number): number => Math.min(
+  const clamp = ( position: number ): number => Math.min(
     editableDocument.body.length,
-    Math.max(0, position + currentBodyStart - editableDocument.bodyStart),
+    Math.max( 0, position + currentBodyStart - editableDocument.bodyStart )
   );
 
   return EditorSelection.range(
-    clamp(selection.anchor),
-    clamp(selection.head),
+    clamp( selection.anchor ),
+    clamp( selection.head )
   );
 }
 
-function changeTouchesLeadingFrontmatter(update: ViewUpdate): boolean {
-  const previousEnd = leadingFrontmatterEnd(update.startState.doc.toString()) ?? 0;
-  const nextEnd = leadingFrontmatterEnd(update.state.doc.toString()) ?? 0;
+function changeTouchesLeadingFrontmatter( update: ViewUpdate ): boolean {
+  const previousEnd = leadingFrontmatterEnd( update.startState.doc.toString() ) ?? 0;
+  const nextEnd = leadingFrontmatterEnd( update.state.doc.toString() ) ?? 0;
   let touchesFrontmatter = previousEnd !== nextEnd;
-  update.changes.iterChangedRanges((fromA, _toA, fromB) => {
-    if (fromA < previousEnd || fromB < nextEnd) {
+  update.changes.iterChangedRanges( ( fromA, _toA, fromB ) => {
+    if ( fromA < previousEnd || fromB < nextEnd ) {
       touchesFrontmatter = true;
     }
   });
@@ -1795,51 +1795,51 @@ function changeTouchesLeadingFrontmatter(update: ViewUpdate): boolean {
 function normalizeInitialPosition(
   position: NoteEditorPosition | undefined,
   documentLength: number,
-  bodyStart: number,
+  bodyStart: number
 ): NoteEditorPosition | undefined {
-  if (!position) {
+  if ( !position ) {
     return undefined;
   }
 
-  const clamp = (value: number): number => Math.min(
+  const clamp = ( value: number ): number => Math.min(
     documentLength,
-    Math.max(0, Math.trunc(value) - bodyStart),
+    Math.max( 0, Math.trunc( value ) - bodyStart )
   );
 
   return {
     selection: {
-      anchor: clamp(position.selection.anchor),
-      head: clamp(position.selection.head),
+      anchor: clamp( position.selection.anchor ),
+      head: clamp( position.selection.head )
     },
     viewport: {
-      anchor: clamp(position.viewport.anchor),
+      anchor: clamp( position.viewport.anchor ),
       offset: position.viewport.offset,
-      left: Math.max(0, position.viewport.left),
-    },
+      left: Math.max( 0, position.viewport.left )
+    }
   };
 }
 
 function handleEditorScroll(): void {
   const view = editorView.value;
-  if (view) {
-    schedulePositionCapture(view);
+  if ( view ) {
+    schedulePositionCapture( view );
   }
 }
 
-function schedulePositionCapture(view: EditorView): void {
-  if (!positionCaptureEnabled) {
+function schedulePositionCapture( view: EditorView ): void {
+  if ( !positionCaptureEnabled ) {
     return;
   }
 
   view.requestMeasure({
     key: positionCaptureKey,
     read: captureEditorPosition,
-    write: emitEditorPosition,
+    write: emitEditorPosition
   });
 }
 
-function scheduleEditorRenderReady(view: EditorView): void {
-  if (editorRenderReady.value || !positionCaptureEnabled) {
+function scheduleEditorRenderReady( view: EditorView ): void {
+  if ( editorRenderReady.value || !positionCaptureEnabled ) {
     return;
   }
 
@@ -1847,31 +1847,31 @@ function scheduleEditorRenderReady(view: EditorView): void {
   // restored viewport, then expose the completed rendering in a single frame.
   view.requestMeasure({
     key: renderReadyKey,
-    read: (measuredView) => syntaxTreeAvailable(
+    read: ( measuredView ) => syntaxTreeAvailable(
       measuredView.state,
-      measuredView.viewport.to,
+      measuredView.viewport.to
     ),
-    write: (ready, measuredView) => {
-      if (ready && editorView.value === measuredView) {
+    write: ( ready, measuredView ) => {
+      if ( ready && editorView.value === measuredView ) {
         const scrollLeft = measuredView.scrollDOM.scrollLeft;
         const scrollTop = measuredView.scrollDOM.scrollTop;
         editorRenderReady.value = true;
         measuredView.scrollDOM.scrollLeft = scrollLeft;
         measuredView.scrollDOM.scrollTop = scrollTop;
       }
-    },
+    }
   });
 }
 
-function captureEditorPosition(view: EditorView): NoteEditorPosition {
+function captureEditorPosition( view: EditorView ): NoteEditorPosition {
   const selection = view.state.selection.main;
   const bodyStart = markdownBodyStart(
     frontmatterPrefix,
-    view.state.doc.toString(),
+    view.state.doc.toString()
   );
   const scrollTop = view.scrollDOM.scrollTop;
-  const candidate = view.lineBlockAtHeight(scrollTop + VIEWPORT_ANCHOR_MARGIN);
-  const firstVisibleBlock = view.viewportLineBlocks[0];
+  const candidate = view.lineBlockAtHeight( scrollTop + VIEWPORT_ANCHOR_MARGIN );
+  const firstVisibleBlock = view.viewportLineBlocks[ 0 ];
   const viewportBlock = candidate.from >= view.viewport.from
     || !firstVisibleBlock
     || firstVisibleBlock.top - scrollTop > VIRTUALIZED_VIEWPORT_THRESHOLD
@@ -1881,192 +1881,192 @@ function captureEditorPosition(view: EditorView): NoteEditorPosition {
   return {
     selection: {
       anchor: selection.anchor + bodyStart,
-      head: selection.head + bodyStart,
+      head: selection.head + bodyStart
     },
     viewport: {
       anchor: viewportBlock.from + bodyStart,
       offset: viewportBlock.top - scrollTop,
-      left: view.scrollDOM.scrollLeft,
-    },
+      left: view.scrollDOM.scrollLeft
+    }
   };
 }
 
-function editorLineNumbers(offset: number): Extension {
+function editorLineNumbers( offset: number ): Extension {
   return lineNumbers({
-    formatNumber: (lineNumber) => String(lineNumber + offset),
+    formatNumber: ( lineNumber ) => String( lineNumber + offset )
   });
 }
 
-function emitEditorPosition(position: NoteEditorPosition): void {
-  emit("editorPosition", props.vaultId, props.noteId, position);
+function emitEditorPosition( position: NoteEditorPosition ): void {
+  emit( 'editorPosition', props.vaultId, props.noteId, position );
 }
 
 function scheduleViewportRestore(
   view: EditorView,
-  position: NoteEditorPosition,
+  position: NoteEditorPosition
 ): void {
-  viewportRestoreFrame = window.requestAnimationFrame(() => {
+  viewportRestoreFrame = window.requestAnimationFrame( () => {
     viewportRestoreFrame = undefined;
-    if (editorView.value !== view) {
+    if ( editorView.value !== view ) {
       return;
     }
 
     view.requestMeasure({
       key: viewportRestoreKey,
-      read: (measuredView) => {
-        const viewportBlock = measuredView.lineBlockAt(position.viewport.anchor);
+      read: ( measuredView ) => {
+        const viewportBlock = measuredView.lineBlockAt( position.viewport.anchor );
         const maximumTop = Math.max(
           0,
-          measuredView.scrollDOM.scrollHeight - measuredView.scrollDOM.clientHeight,
+          measuredView.scrollDOM.scrollHeight - measuredView.scrollDOM.clientHeight
         );
         const maximumLeft = Math.max(
           0,
-          measuredView.scrollDOM.scrollWidth - measuredView.scrollDOM.clientWidth,
+          measuredView.scrollDOM.scrollWidth - measuredView.scrollDOM.clientWidth
         );
 
         return {
-          left: Math.min(maximumLeft, position.viewport.left),
+          left: Math.min( maximumLeft, position.viewport.left ),
           top: Math.min(
             maximumTop,
-            Math.max(0, viewportBlock.top - position.viewport.offset),
-          ),
+            Math.max( 0, viewportBlock.top - position.viewport.offset )
+          )
         };
       },
-      write: ({ left, top }, measuredView) => {
+      write: ({ left, top }, measuredView ) => {
         measuredView.scrollDOM.scrollLeft = left;
         measuredView.scrollDOM.scrollTop = top;
         positionCaptureEnabled = true;
-        schedulePositionCapture(measuredView);
-        scheduleEditorRenderReady(measuredView);
-      },
+        schedulePositionCapture( measuredView );
+        scheduleEditorRenderReady( measuredView );
+      }
     });
   });
 }
 
 function restoreLineEndings(
   value: string,
-  lineEnding: "\n" | "\r" | "\r\n",
+  lineEnding: '\n' | '\r' | '\r\n'
 ): string {
-  return lineEnding === "\n" ? value : value.replace(/\n/g, lineEnding);
+  return lineEnding === '\n' ? value : value.replace( /\n/g, lineEnding );
 }
 
-function handleSmartEnter(view: EditorView): boolean {
+function handleSmartEnter( view: EditorView ): boolean {
   const selection = view.state.selection.main;
-  if (!selection.empty) {
+  if ( !selection.empty ) {
     return false;
   }
 
   const value = view.state.doc.toString();
   const position = selection.head;
-  const line = view.state.doc.lineAt(position);
+  const line = view.state.doc.lineAt( position );
   const source = line.text;
-  const openingFence = source.match(/^([ \t]*)(`{3,}|~{3,})([^\n]*)$/);
+  const openingFence = source.match( /^([ \t]*)(`{3,}|~{3,})([^\n]*)$/ );
   if (
     openingFence &&
     position === line.to &&
-    !activeFenceBefore(value, line.from)
+    !activeFenceBefore( value, line.from )
   ) {
-    const indent = openingFence[1]!;
-    const marker = openingFence[2]!;
+    const indent = openingFence[ 1 ]!;
+    const marker = openingFence[ 2 ]!;
     const followingLineStart = line.to < value.length ? line.to + 1 : value.length;
-    const followingLine = view.state.doc.lineAt(followingLineStart).text;
-    const existingClosing = followingLine.match(/^([ \t]*)(`+|~+)\s*$/);
-    const closesFence = Boolean(existingClosing
-      && existingClosing[2]![0] === marker[0]
-      && existingClosing[2]!.length >= marker.length);
+    const followingLine = view.state.doc.lineAt( followingLineStart ).text;
+    const existingClosing = followingLine.match( /^([ \t]*)(`+|~+)\s*$/ );
+    const closesFence = Boolean( existingClosing
+      && existingClosing[ 2 ]![ 0 ] === marker[ 0 ]
+      && existingClosing[ 2 ]!.length >= marker.length );
     const insertion = closesFence
-      ? `\n${indent}`
-      : `\n${indent}\n${indent}${marker}`;
+      ? `\n${ indent }`
+      : `\n${ indent }\n${ indent }${ marker }`;
     view.dispatch({
       changes: { from: position, insert: insertion },
-      selection: EditorSelection.cursor(position + 1 + indent.length),
+      selection: EditorSelection.cursor( position + 1 + indent.length ),
       scrollIntoView: true,
-      userEvent: "input",
+      userEvent: 'input'
     });
 
     return true;
   }
 
-  if (activeFenceBefore(value, line.from)) {
+  if ( activeFenceBefore( value, line.from ) ) {
     return false;
   }
 
-  const item = matchEditableListLine(source);
-  if (!item) {
+  const item = matchEditableListLine( source );
+  if ( !item ) {
     return false;
   }
 
   const contentStart = line.from + item.contentOffset;
-  const insertionPosition = Math.max(position, contentStart);
-  const bodyBefore = value.slice(contentStart, insertionPosition);
-  const bodyAfter = value.slice(insertionPosition, line.to);
-  const fullBody = `${bodyBefore}${bodyAfter}`;
+  const insertionPosition = Math.max( position, contentStart );
+  const bodyBefore = value.slice( contentStart, insertionPosition );
+  const bodyAfter = value.slice( insertionPosition, line.to );
+  const fullBody = `${ bodyBefore }${ bodyAfter }`;
 
-  if (!fullBody.trim() && insertionPosition === line.to) {
+  if ( !fullBody.trim() && insertionPosition === line.to ) {
     const replacement = item.indent;
     view.dispatch({
       changes: { from: line.from, to: line.to, insert: replacement },
-      selection: EditorSelection.cursor(line.from + replacement.length),
+      selection: EditorSelection.cursor( line.from + replacement.length ),
       scrollIntoView: true,
-      userEvent: "input",
+      userEvent: 'input'
     });
 
     return true;
   }
 
   const marker = item.ordered
-    ? `${item.number >= 999_999_999 ? 1 : item.number + 1}${item.delimiter}`
+    ? `${ item.number >= 999_999_999 ? 1 : item.number + 1 }${ item.delimiter }`
     : item.bullet;
-  const taskPrefix = item.task ? "[ ] " : "";
-  const continuation = `${item.indent}${marker}${item.spacing}${taskPrefix}`;
-  const separatorLength = bodyAfter.match(/^[ \t]+/)?.[0].length ?? 0;
-  const next = `${value.slice(0, insertionPosition)}\n${continuation}${value.slice(
-    insertionPosition + separatorLength,
-  )}`;
+  const taskPrefix = item.task ? '[ ] ' : '';
+  const continuation = `${ item.indent }${ marker }${ item.spacing }${ taskPrefix }`;
+  const separatorLength = bodyAfter.match( /^[ \t]+/ )?.[ 0 ].length ?? 0;
+  const next = `${ value.slice( 0, insertionPosition ) }\n${ continuation }${ value.slice(
+    insertionPosition + separatorLength
+  ) }`;
   const cursor = insertionPosition + 1 + continuation.length;
   const normalized = item.ordered
-    ? normalizeOrderedListMarkers(next)
+    ? normalizeOrderedListMarkers( next )
     : { edits: [], value: next };
   const normalizedCursor = mapPositionThroughLiveMarkdownEdits(
     cursor,
-    normalized.edits,
+    normalized.edits
   );
   applyFullDocumentEdit(
     view,
     normalized.value,
     normalizedCursor,
-    normalizedCursor,
+    normalizedCursor
   );
 
   return true;
 }
 
-function matchEditableListLine(line: string): ListLine | undefined {
-  const match = line.match(/^([ \t]*)(?:(\d{1,9})([.)])|([-+*]))([ \t]+)(.*)$/);
-  if (!match) {
+function matchEditableListLine( line: string ): ListLine | undefined {
+  const match = line.match( /^([ \t]*)(?:(\d{1,9})([.)])|([-+*]))([ \t]+)(.*)$/ );
+  if ( !match ) {
     return undefined;
   }
-  const ordered = Boolean(match[2]);
-  const markerLength = ordered ? match[2]!.length + 1 : 1;
-  const spacing = match[5]!;
-  const listPrefixLength = match[1]!.length + markerLength + spacing.length;
-  const taskPrefix = match[6]!.match(/^\[[ xX]\][ \t]+/)?.[0];
+  const ordered = Boolean( match[ 2 ]);
+  const markerLength = ordered ? match[ 2 ]!.length + 1 : 1;
+  const spacing = match[ 5 ]!;
+  const listPrefixLength = match[ 1 ]!.length + markerLength + spacing.length;
+  const taskPrefix = match[ 6 ]!.match( /^\[[ xX]\][ \t]+/ )?.[ 0 ];
 
   return {
-    indent: match[1]!,
+    indent: match[ 1 ]!,
     ordered,
-    number: ordered ? Number.parseInt(match[2]!, 10) : 1,
-    delimiter: ordered ? match[3]! as "." | ")" : ".",
-    bullet: ordered ? "-" : match[4]! as "-" | "+" | "*",
+    number: ordered ? Number.parseInt( match[ 2 ]!, 10 ) : 1,
+    delimiter: ordered ? match[ 3 ]! as '.' | ')' : '.',
+    bullet: ordered ? '-' : match[ 4 ]! as '-' | '+' | '*',
     spacing,
-    contentOffset: listPrefixLength + (taskPrefix?.length ?? 0),
-    task: Boolean(taskPrefix),
+    contentOffset: listPrefixLength + ( taskPrefix?.length ?? 0 ),
+    task: Boolean( taskPrefix )
   };
 }
 
-function renderedListTextOffset(line: string): number | undefined {
-  const item = matchEditableListLine(line);
-  if (!item) {
+function renderedListTextOffset( line: string ): number | undefined {
+  const item = matchEditableListLine( line );
+  if ( !item ) {
     return undefined;
   }
 
@@ -2075,12 +2075,12 @@ function renderedListTextOffset(line: string): number | undefined {
 
 function previousLineBoundary(
   view: EditorView,
-  selection: SelectionRange,
+  selection: SelectionRange
 ): number {
-  const line = view.lineBlockAt(selection.head);
-  let boundary = view.moveToLineBoundary(selection, false);
-  if (boundary.head === selection.head && boundary.head !== line.from) {
-    boundary = view.moveToLineBoundary(selection, false, false);
+  const line = view.lineBlockAt( selection.head );
+  let boundary = view.moveToLineBoundary( selection, false );
+  if ( boundary.head === selection.head && boundary.head !== line.from ) {
+    boundary = view.moveToLineBoundary( selection, false, false );
   }
 
   return boundary.head;
@@ -2088,27 +2088,27 @@ function previousLineBoundary(
 
 function activeFenceBefore(
   value: string,
-  position: number,
+  position: number
 ): { marker: string; length: number } | undefined {
-  const lines = value.slice(0, position).split("\n");
+  const lines = value.slice( 0, position ).split( '\n' );
   lines.pop();
   let active: { marker: string; length: number } | undefined;
 
-  for (const line of lines) {
-    if (!active) {
-      const opening = line.match(/^[ \t]*(`{3,}|~{3,})[^\n]*$/);
-      if (opening) {
-        active = { marker: opening[1]![0]!, length: opening[1]!.length };
+  for ( const line of lines ) {
+    if ( !active ) {
+      const opening = line.match( /^[ \t]*(`{3,}|~{3,})[^\n]*$/ );
+      if ( opening ) {
+        active = { marker: opening[ 1 ]![ 0 ]!, length: opening[ 1 ]!.length };
       }
 
       continue;
     }
 
-    const closing = line.match(/^[ \t]*(`+|~+)\s*$/);
+    const closing = line.match( /^[ \t]*(`+|~+)\s*$/ );
     if (
       closing &&
-      closing[1]![0] === active.marker &&
-      closing[1]!.length >= active.length
+      closing[ 1 ]![ 0 ] === active.marker &&
+      closing[ 1 ]!.length >= active.length
     ) {
       active = undefined;
     }
@@ -2117,88 +2117,88 @@ function activeFenceBefore(
   return active;
 }
 
-function adjustSelectedLines(view: EditorView, outdent: boolean): boolean {
+function adjustSelectedLines( view: EditorView, outdent: boolean ): boolean {
   const value = view.state.doc.toString();
   const selection = view.state.selection.main;
   const selectionStart = selection.from;
   const selectionEnd = selection.to;
   const hasSelection = !selection.empty;
-  const firstLine = view.state.doc.lineAt(selectionStart);
+  const firstLine = view.state.doc.lineAt( selectionStart );
 
-  if (!hasSelection && !matchEditableListLine(firstLine.text)) {
-    if (!outdent || !/^[ \t]/.test(firstLine.text)) {
+  if ( !hasSelection && !matchEditableListLine( firstLine.text ) ) {
+    if ( !outdent || !/^[ \t]/.test( firstLine.text ) ) {
       return false;
     }
   }
 
   const selectionEndsAtLineStart = hasSelection
     && selectionEnd > 0
-    && value[selectionEnd - 1] === "\n";
+    && value[ selectionEnd - 1 ] === '\n';
   const effectiveEnd = selectionEndsAtLineStart ? selectionEnd - 1 : selectionEnd;
-  const lastLine = view.state.doc.lineAt(effectiveEnd);
-  const block = value.slice(firstLine.from, lastLine.to);
-  const lines = block.split("\n");
-  const orderedListChanged = lines.some((line) =>
-    matchEditableListLine(line)?.ordered
+  const lastLine = view.state.doc.lineAt( effectiveEnd );
+  const block = value.slice( firstLine.from, lastLine.to );
+  const lines = block.split( '\n' );
+  const orderedListChanged = lines.some( ( line ) =>
+    matchEditableListLine( line )?.ordered
   );
   const edits: TextEdit[] = [];
   let sourceOffset = firstLine.from;
 
-  const transformed = lines.map((line) => {
-    if (!outdent) {
+  const transformed = lines.map( ( line ) => {
+    if ( !outdent ) {
       edits.push({ start: sourceOffset, removed: 0, added: INDENT.length });
       sourceOffset += line.length + 1;
 
-      return `${INDENT}${line}`;
+      return `${ INDENT }${ line }`;
     }
 
-    const removable = line.startsWith("\t") ? 1 : line.match(/^ {1,2}/)?.[0].length ?? 0;
-    if (removable) {
+    const removable = line.startsWith( '\t' ) ? 1 : line.match( /^ {1,2}/ )?.[ 0 ].length ?? 0;
+    if ( removable ) {
       edits.push({ start: sourceOffset, removed: removable, added: 0 });
     }
     sourceOffset += line.length + 1;
 
-    return line.slice(removable);
-  }).join("\n");
+    return line.slice( removable );
+  }).join( '\n' );
 
-  if (!edits.length) {
+  if ( !edits.length ) {
     return true;
   }
 
-  const adjusted = `${value.slice(0, firstLine.from)}${transformed}${value.slice(lastLine.to)}`;
-  const mappedStart = mapPositionThroughEdits(selectionStart, edits);
-  const mappedEnd = mapPositionThroughEdits(selectionEnd, edits);
+  const adjusted = `${ value.slice( 0, firstLine.from ) }${ transformed }${ value.slice( lastLine.to ) }`;
+  const mappedStart = mapPositionThroughEdits( selectionStart, edits );
+  const mappedEnd = mapPositionThroughEdits( selectionEnd, edits );
   const normalized = orderedListChanged
-    ? normalizeOrderedListMarkers(adjusted)
+    ? normalizeOrderedListMarkers( adjusted )
     : { edits: [], value: adjusted };
   const normalizedStart = mapPositionThroughLiveMarkdownEdits(
     mappedStart,
-    normalized.edits,
+    normalized.edits
   );
   const normalizedEnd = mapPositionThroughLiveMarkdownEdits(
     mappedEnd,
-    normalized.edits,
+    normalized.edits
   );
   const backward = selection.anchor > selection.head;
   view.dispatch({
-    changes: minimalDocumentChange(value, normalized.value),
+    changes: minimalDocumentChange( value, normalized.value ),
     selection: backward
-      ? EditorSelection.range(normalizedEnd, normalizedStart)
-      : EditorSelection.range(normalizedStart, normalizedEnd),
+      ? EditorSelection.range( normalizedEnd, normalizedStart )
+      : EditorSelection.range( normalizedStart, normalizedEnd ),
     scrollIntoView: true,
-    userEvent: "input.indent",
+    userEvent: 'input.indent'
   });
 
   return true;
 }
 
-function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
+function mapPositionThroughEdits( position: number, edits: TextEdit[]): number {
   let delta = 0;
-  for (const edit of edits) {
-    if (position < edit.start) {
+  for ( const edit of edits ) {
+    if ( position < edit.start ) {
       break;
     }
-    if (position <= edit.start + edit.removed) {
+    if ( position <= edit.start + edit.removed ) {
       return edit.start + delta + edit.added;
     }
     delta += edit.added - edit.removed;
@@ -2209,62 +2209,62 @@ function mapPositionThroughEdits(position: number, edits: TextEdit[]): number {
 
 function mapPositionThroughLiveMarkdownEdits(
   position: number,
-  edits: readonly LiveMarkdownTextEdit[],
+  edits: readonly LiveMarkdownTextEdit[]
 ): number {
   return mapPositionThroughEdits(
     position,
-    edits.map((edit) => ({
+    edits.map( ( edit ) => ({
       start: edit.from,
       removed: edit.to - edit.from,
-      added: edit.insert.length,
-    })),
+      added: edit.insert.length
+    }) )
   );
 }
 
-function blockPendingEditorInteraction(event: Event): void {
-  if (!editorRenderReady.value) {
+function blockPendingEditorInteraction( event: Event ): void {
+  if ( !editorRenderReady.value ) {
     event.preventDefault();
     event.stopImmediatePropagation();
   }
 }
 
-function handleSourceEditorPaste(event: ClipboardEvent): void {
-  if (!editorRenderReady.value) {
-    blockPendingEditorInteraction(event);
+function handleSourceEditorPaste( event: ClipboardEvent ): void {
+  if ( !editorRenderReady.value ) {
+    blockPendingEditorInteraction( event );
 
     return;
   }
 
   const clipboard = event.clipboardData;
-  if (!clipboard) {
+  if ( !clipboard ) {
     return;
   }
-  const imageItem = Array.from(clipboard.items).find((item) =>
-    item.kind === "file" && item.type.toLocaleLowerCase().startsWith("image/")
+  const imageItem = Array.from( clipboard.items ).find( ( item ) =>
+    item.kind === 'file' && item.type.toLocaleLowerCase().startsWith( 'image/' )
   );
-  const imageSignaled = Boolean(imageItem)
-    || Array.from(clipboard.types).some((type) =>
-      type === "Files" || type.toLocaleLowerCase().startsWith("image/")
+  const imageSignaled = Boolean( imageItem )
+    || Array.from( clipboard.types ).some( ( type ) =>
+      type === 'Files' || type.toLocaleLowerCase().startsWith( 'image/' )
     );
-  if (!imageSignaled) {
+  if ( !imageSignaled ) {
     return;
   }
 
   const capture = captureImageInsertion();
-  if (!capture) {
+  if ( !capture ) {
     return;
   }
   event.preventDefault();
   event.stopImmediatePropagation();
-  emit("pasteImage", capture, imageItem?.getAsFile() ?? undefined);
+  emit( 'pasteImage', capture, imageItem?.getAsFile() ?? undefined );
 }
 
-function isExternalFileDrag(event: DragEvent): boolean {
-  const types = Array.from(event.dataTransfer?.types ?? []);
-  return types.includes("Files")
-    && !types.includes(NOTE_IMAGE_DRAG_MIME)
-    && !types.includes(VAULT_IMAGE_DRAG_MIME)
-    && !types.includes(VAULT_ATTACHMENT_DRAG_MIME);
+function isExternalFileDrag( event: DragEvent ): boolean {
+  const types = Array.from( event.dataTransfer?.types ?? []);
+  return types.includes( 'Files' )
+    && !types.includes( NOTE_IMAGE_DRAG_MIME )
+    && !types.includes( VAULT_IMAGE_DRAG_MIME )
+    && !types.includes( VAULT_ATTACHMENT_DRAG_MIME );
 }
 
 function clearExternalFileDrag(): void {
@@ -2272,8 +2272,8 @@ function clearExternalFileDrag(): void {
   externalFileDragActive.value = false;
 }
 
-function handleSourceEditorDragEnter(event: DragEvent): void {
-  if (!editorRenderReady.value || !isExternalFileDrag(event)) {
+function handleSourceEditorDragEnter( event: DragEvent ): void {
+  if ( !editorRenderReady.value || !isExternalFileDrag( event ) ) {
     return;
   }
   externalFileDragDepth += 1;
@@ -2281,21 +2281,21 @@ function handleSourceEditorDragEnter(event: DragEvent): void {
 }
 
 function handleSourceEditorDragLeave(): void {
-  if (!externalFileDragActive.value) {
+  if ( !externalFileDragActive.value ) {
     return;
   }
-  externalFileDragDepth = Math.max(0, externalFileDragDepth - 1);
-  if (!externalFileDragDepth) {
+  externalFileDragDepth = Math.max( 0, externalFileDragDepth - 1 );
+  if ( !externalFileDragDepth ) {
     externalFileDragActive.value = false;
   }
 }
 
-function handleSourceEditorDragOver(event: DragEvent): void {
-  const types = Array.from(event.dataTransfer?.types ?? []);
-  const movingWithinNote = types.includes(NOTE_IMAGE_DRAG_MIME);
-  const vaultImage = types.includes(VAULT_IMAGE_DRAG_MIME);
-  const vaultAttachment = types.includes(VAULT_ATTACHMENT_DRAG_MIME);
-  const externalFiles = isExternalFileDrag(event);
+function handleSourceEditorDragOver( event: DragEvent ): void {
+  const types = Array.from( event.dataTransfer?.types ?? []);
+  const movingWithinNote = types.includes( NOTE_IMAGE_DRAG_MIME );
+  const vaultImage = types.includes( VAULT_IMAGE_DRAG_MIME );
+  const vaultAttachment = types.includes( VAULT_ATTACHMENT_DRAG_MIME );
+  const externalFiles = isExternalFileDrag( event );
   if (
     !movingWithinNote
     && !vaultImage
@@ -2306,27 +2306,27 @@ function handleSourceEditorDragOver(event: DragEvent): void {
   }
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (externalFiles && editorRenderReady.value) {
+  if ( externalFiles && editorRenderReady.value ) {
     externalFileDragActive.value = true;
   }
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = movingWithinNote ? "move" : "copy";
+  if ( event.dataTransfer ) {
+    event.dataTransfer.dropEffect = movingWithinNote ? 'move' : 'copy';
   }
 }
 
-function handleSourceEditorDrop(event: DragEvent): void {
+function handleSourceEditorDrop( event: DragEvent ): void {
   clearExternalFileDrag();
   const transfer = event.dataTransfer;
-  const internalImage = parseInternalImageDrag(transfer?.getData(NOTE_IMAGE_DRAG_MIME));
-  const relativePath = transfer?.getData(VAULT_IMAGE_DRAG_MIME).trim() ?? "";
+  const internalImage = parseInternalImageDrag( transfer?.getData( NOTE_IMAGE_DRAG_MIME ) );
+  const relativePath = transfer?.getData( VAULT_IMAGE_DRAG_MIME ).trim() ?? '';
   const attachmentRelativePath = transfer
-    ?.getData(VAULT_ATTACHMENT_DRAG_MIME)
-    .trim() ?? "";
-  const types = Array.from(transfer?.types ?? []);
+    ?.getData( VAULT_ATTACHMENT_DRAG_MIME )
+    .trim() ?? '';
+  const types = Array.from( transfer?.types ?? []);
   const externalFiles = !internalImage
     && !relativePath
     && !attachmentRelativePath
-    && types.includes("Files");
+    && types.includes( 'Files' );
   const view = editorView.value;
   if (
     !internalImage
@@ -2338,41 +2338,41 @@ function handleSourceEditorDrop(event: DragEvent): void {
   }
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (!view || !editorRenderReady.value) {
+  if ( !view || !editorRenderReady.value ) {
     return;
   }
-  const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
+  const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false )
     ?? view.state.selection.main.head;
-  if (internalImage) {
-    moveImageReferenceWithinNote(view, internalImage.from, internalImage.to, position);
+  if ( internalImage ) {
+    moveImageReferenceWithinNote( view, internalImage.from, internalImage.to, position );
 
     return;
   }
   view.dispatch({
-    selection: EditorSelection.cursor(position),
+    selection: EditorSelection.cursor( position ),
     scrollIntoView: true,
-    userEvent: "select.pointer",
+    userEvent: 'select.pointer'
   });
-  if (externalFiles && transfer) {
-    const dropped = collectExternalDroppedFiles(transfer);
-    const capture = captureAttachmentInsertion(view);
-    if (capture) {
-      emit("externalFileDrop", capture, dropped.files, dropped.rejectedCount);
+  if ( externalFiles && transfer ) {
+    const dropped = collectExternalDroppedFiles( transfer );
+    const capture = captureAttachmentInsertion( view );
+    if ( capture ) {
+      emit( 'externalFileDrop', capture, dropped.files, dropped.rejectedCount );
     }
 
     return;
   }
-  if (attachmentRelativePath) {
-    const capture = captureAttachmentInsertion(view);
-    if (capture) {
-      emit("vaultAttachmentDrop", capture, attachmentRelativePath);
+  if ( attachmentRelativePath ) {
+    const capture = captureAttachmentInsertion( view );
+    if ( capture ) {
+      emit( 'vaultAttachmentDrop', capture, attachmentRelativePath );
     }
   } else {
-    const capture = captureImageInsertion(view);
-    if (!capture) {
+    const capture = captureImageInsertion( view );
+    if ( !capture ) {
       return;
     }
-    emit("vaultImageDrop", capture, relativePath);
+    emit( 'vaultImageDrop', capture, relativePath );
   }
 }
 
@@ -2381,47 +2381,47 @@ interface ExternalFileSystemEntry {
   isFile: boolean;
 }
 
-function isAmbiguousExternalDroppedFile(file: File): boolean {
+function isAmbiguousExternalDroppedFile( file: File ): boolean {
   // Without entry metadata, WebKit can represent an unavailable folder this way.
   return file.size === 0 && !file.type.trim();
 }
 
 function collectExternalDroppedFiles(
-  transfer: DataTransfer,
+  transfer: DataTransfer
 ): { files: File[]; rejectedCount: number } {
-  const items = Array.from(transfer.items).filter((item) => item.kind === "file");
+  const items = Array.from( transfer.items ).filter( ( item ) => item.kind === 'file' );
   const files: File[] = [];
   let rejectedCount = 0;
-  if (items.length) {
-    for (const item of items) {
-      const entry = (item as DataTransferItem & {
+  if ( items.length ) {
+    for ( const item of items ) {
+      const entry = ( item as DataTransferItem & {
         webkitGetAsEntry?: () => ExternalFileSystemEntry | null;
       }).webkitGetAsEntry?.();
-      const file = entry?.isDirectory || (entry && !entry.isFile)
+      const file = entry?.isDirectory || ( entry && !entry.isFile )
         ? null
         : item.getAsFile();
       if (
         !file
-        || (!entry && isAmbiguousExternalDroppedFile(file))
+        || ( !entry && isAmbiguousExternalDroppedFile( file ) )
         || files.length >= MAX_EXTERNAL_DROP_FILES
       ) {
         rejectedCount += 1;
       } else {
-        files.push(file);
+        files.push( file );
       }
     }
 
     return { files, rejectedCount };
   }
 
-  for (const file of Array.from(transfer.files)) {
+  for ( const file of Array.from( transfer.files ) ) {
     if (
-      isAmbiguousExternalDroppedFile(file)
+      isAmbiguousExternalDroppedFile( file )
       || files.length >= MAX_EXTERNAL_DROP_FILES
     ) {
       rejectedCount += 1;
     } else {
-      files.push(file);
+      files.push( file );
     }
   }
 
@@ -2429,18 +2429,18 @@ function collectExternalDroppedFiles(
 }
 
 function parseInternalImageDrag(
-  value: string | undefined,
+  value: string | undefined
 ): { from: number; to: number } | undefined {
-  if (!value) {
+  if ( !value ) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(value) as { from?: unknown; to?: unknown };
+    const parsed = JSON.parse( value ) as { from?: unknown; to?: unknown };
     if (
-      Number.isSafeInteger(parsed.from)
-      && Number.isSafeInteger(parsed.to)
-      && (parsed.from as number) >= 0
-      && (parsed.to as number) > (parsed.from as number)
+      Number.isSafeInteger( parsed.from )
+      && Number.isSafeInteger( parsed.to )
+      && ( parsed.from as number ) >= 0
+      && ( parsed.to as number ) > ( parsed.from as number )
     ) {
       return { from: parsed.from as number, to: parsed.to as number };
     }
@@ -2455,46 +2455,46 @@ function moveImageReferenceWithinNote(
   view: EditorView,
   from: number,
   to: number,
-  position: number,
+  position: number
 ): void {
   if (
     from < 0
     || to > view.state.doc.length
     || from >= to
-    || (position >= from && position <= to)
+    || ( position >= from && position <= to )
   ) {
     view.focus();
 
     return;
   }
-  const source = view.state.sliceDoc(from, to);
-  const image = parseMarkdownImageAt(source, 0);
-  if (!image || image.end + 1 !== source.length) {
+  const source = view.state.sliceDoc( from, to );
+  const image = parseMarkdownImageAt( source, 0 );
+  if ( !image || image.end + 1 !== source.length ) {
     view.focus();
 
     return;
   }
-  const insertionStart = position < from ? position : position - (to - from);
+  const insertionStart = position < from ? position : position - ( to - from );
   const changes = position < from
-    ? [{ from: position, insert: source }, { from, to, insert: "" }]
-    : [{ from, to, insert: "" }, { from: position, insert: source }];
+    ? [{ from: position, insert: source }, { from, to, insert: '' }]
+    : [{ from, to, insert: '' }, { from: position, insert: source }];
   view.dispatch({
     changes,
-    selection: EditorSelection.cursor(insertionStart + source.length),
+    selection: EditorSelection.cursor( insertionStart + source.length ),
     scrollIntoView: true,
-    userEvent: "input.move",
+    userEvent: 'input.move'
   });
   view.focus();
 }
 
-function handleSourceEditorKeydown(event: KeyboardEvent): void {
-  if (!editorRenderReady.value) {
-    blockPendingEditorInteraction(event);
+function handleSourceEditorKeydown( event: KeyboardEvent ): void {
+  if ( !editorRenderReady.value ) {
+    blockPendingEditorInteraction( event );
 
     return;
   }
 
-  handleDocumentSearchKeydown(event);
+  handleDocumentSearchKeydown( event );
 }
 </script>
 
@@ -2526,7 +2526,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
         data-ui-region="document-search"
         role="search"
         aria-label="Find in note"
-        @submit.prevent="moveToDocumentSearchMatch('next')"
+        @submit.prevent="moveToDocumentSearchMatch( 'next' )"
       >
         <label class="document-search-field">
           <AppIcon name="search" :size="14" />
@@ -2541,7 +2541,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
             autocapitalize="none"
             spellcheck="false"
             @keydown="handleDocumentSearchInputKeydown"
-          />
+          >
         </label>
         <span
           id="document-search-status"
@@ -2558,7 +2558,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
           aria-keyshortcuts="Shift+Tab Shift+F3"
           title="Previous match (Shift+Tab)"
           @mousedown.prevent
-          @click="moveToDocumentSearchMatch('previous')"
+          @click="moveToDocumentSearchMatch( 'previous' )"
         >
           <AppIcon name="chevron-down" :size="13" />
         </button>
@@ -2570,7 +2570,7 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
           aria-keyshortcuts="Tab F3"
           title="Next match (Tab)"
           @mousedown.prevent
-          @click="moveToDocumentSearchMatch('next')"
+          @click="moveToDocumentSearchMatch( 'next' )"
         >
           <AppIcon name="chevron-down" :size="13" />
         </button>
@@ -2600,23 +2600,35 @@ function handleSourceEditorKeydown(event: KeyboardEvent): void {
     </Transition>
 
     <Transition name="popover-fade">
-      <div v-if="suggestions.length" class="wiki-suggestions" role="listbox">
-        <div class="suggestion-kicker">Link a note</div>
+      <div
+        v-if="suggestions.length"
+        class="wiki-suggestions"
+        role="listbox"
+      >
+        <div class="suggestion-kicker">
+          Link a note
+        </div>
         <button
-          v-for="(title, index) in suggestions"
+          v-for="( title, index ) in suggestions"
           :key="title"
           type="button"
           class="wiki-suggestion"
           :class="{ active: index === suggestionIndex }"
-          @mousedown.prevent="insertSuggestion(title)"
+          @mousedown.prevent="insertSuggestion( title )"
         >
           <span class="suggestion-icon"><AppIcon name="link" :size="14" /></span>
           <span>{{ title }}</span>
-          <AppIcon v-if="index === suggestionIndex" name="enter" :size="13" />
+          <AppIcon
+            v-if="index === suggestionIndex"
+            name="enter"
+            :size="13"
+          />
         </button>
       </div>
     </Transition>
 
-    <div class="editor-language-pill">MD</div>
+    <div class="editor-language-pill">
+      MD
+    </div>
   </div>
 </template>

@@ -1,7 +1,7 @@
-import { normalizeNoteEditorPosition } from "../stores/editorPositions";
-import type { Note, RecentlyDeletedNote, VaultData } from "../types";
+import { normalizeNoteEditorPosition } from '../stores/editorPositions';
+import type { Note, RecentlyDeletedNote, VaultData } from '../types';
 
-const STORAGE_KEY = "obsidian-at-home.vault.v1";
+const STORAGE_KEY = 'obsidian-at-home.vault.v1';
 const WORKSPACE_VERSION = 2;
 
 export const RECENTLY_DELETED_LIMIT = 100_000;
@@ -15,126 +15,128 @@ export interface StoredBrowserWorkspace {
 }
 
 export function readBrowserWorkspace(
-  normalizeVault: (vault: Partial<VaultData>) => VaultData,
+  normalizeVault: ( vault: Partial<VaultData> ) => VaultData
 ): StoredBrowserWorkspace | null {
   const raw = readCriticalStorage();
-  if (!raw) {
+  if ( !raw ) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (isRecord(parsed) && "version" in parsed) {
-      if (parsed.version !== WORKSPACE_VERSION) {
+    const parsed = JSON.parse( raw ) as unknown;
+    if ( isRecord( parsed ) && 'version' in parsed ) {
+      if ( parsed.version !== WORKSPACE_VERSION ) {
         throw new Error(
-          `Saved browser notes use unsupported version ${String(parsed.version)}.`,
+          `Saved browser notes use unsupported version ${ String( parsed.version ) }.`
         );
       }
-      if (!isRecord(parsed.vault)) {
-        throw new Error("Saved browser notes contain an invalid vault.");
+      if ( !isRecord( parsed.vault ) ) {
+        throw new Error( 'Saved browser notes contain an invalid vault.' );
       }
 
       const parsedVault = parsed.vault as Partial<VaultData>;
-      if (!Array.isArray(parsedVault.notes) || !Array.isArray(parsedVault.folders)) {
-        throw new Error("Saved browser notes contain an invalid vault.");
+      if ( !Array.isArray( parsedVault.notes ) || !Array.isArray( parsedVault.folders ) ) {
+        throw new Error( 'Saved browser notes contain an invalid vault.' );
       }
-      const vault = normalizeVault(parsedVault);
+      const vault = normalizeVault( parsedVault );
 
       return {
         vault,
-        recentlyDeletedNotes: parseRecentlyDeletedNotes(parsed.recentlyDeletedNotes),
-        migrationFingerprint: storageFingerprint(JSON.stringify(vault)),
+        recentlyDeletedNotes: parseRecentlyDeletedNotes( parsed.recentlyDeletedNotes ),
+        migrationFingerprint: storageFingerprint( JSON.stringify( vault ) ),
         needsRewrite: parsedVault.selectedFolderId !== vault.selectedFolderId
-          || !stringArraysMatch(parsedVault.recentNoteIds, vault.recentNoteIds)
+          || !stringArraysMatch( parsedVault.recentNoteIds, vault.recentNoteIds )
           || !embedSettingsMatch(
             parsedVault.imageEmbedSettings,
-            vault.imageEmbedSettings,
+            vault.imageEmbedSettings
           )
           || !embedSettingsMatch(
             parsedVault.attachmentEmbedSettings,
-            vault.attachmentEmbedSettings,
-          ),
+            vault.attachmentEmbedSettings
+          )
       };
     }
 
-    if (!isRecord(parsed) || !Array.isArray(parsed.notes) || !Array.isArray(parsed.folders)) {
-      throw new Error("Saved browser notes have an invalid format.");
+    if ( !isRecord( parsed ) || !Array.isArray( parsed.notes ) || !Array.isArray( parsed.folders ) ) {
+      throw new Error( 'Saved browser notes have an invalid format.' );
     }
-    const vault = normalizeVault(parsed as Partial<VaultData>);
+    const vault = normalizeVault( parsed as Partial<VaultData> );
 
     return {
       vault,
       recentlyDeletedNotes: [],
-      migrationFingerprint: storageFingerprint(JSON.stringify(vault)),
-      needsRewrite: true,
+      migrationFingerprint: storageFingerprint( JSON.stringify( vault ) ),
+      needsRewrite: true
     };
-  } catch (error) {
+  } catch ( error ) {
+    // Intentionally replace storage-parser details with a safe user-facing error.
+    // eslint-disable-next-line preserve-caught-error
     throw new Error(
-      error instanceof Error && error.message.startsWith("Saved browser notes")
+      error instanceof Error && error.message.startsWith( 'Saved browser notes' )
         ? error.message
-        : "Saved browser notes could not be parsed safely.",
+        : 'Saved browser notes could not be parsed safely.'
     );
   }
 }
 
 export function writeBrowserWorkspace(
   vault: VaultData,
-  recentlyDeletedNotes: RecentlyDeletedNote[],
+  recentlyDeletedNotes: RecentlyDeletedNote[]
 ): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+  localStorage.setItem( STORAGE_KEY, JSON.stringify({
     version: WORKSPACE_VERSION,
     vault,
-    recentlyDeletedNotes,
-  }));
+    recentlyDeletedNotes
+  }) );
 }
 
 export function compareRecentlyDeletedNotes(
   first: RecentlyDeletedNote,
-  second: RecentlyDeletedNote,
+  second: RecentlyDeletedNote
 ): number {
-  return second.deletedAt - first.deletedAt || second.id.localeCompare(first.id);
+  return second.deletedAt - first.deletedAt || second.id.localeCompare( first.id );
 }
 
-function parseRecentlyDeletedNotes(value: unknown): RecentlyDeletedNote[] {
-  if (!Array.isArray(value) || value.length > RECENTLY_DELETED_LIMIT) {
-    throw new Error("Saved browser notes contain an invalid Recently Deleted collection.");
+function parseRecentlyDeletedNotes( value: unknown ): RecentlyDeletedNote[] {
+  if ( !Array.isArray( value ) || value.length > RECENTLY_DELETED_LIMIT ) {
+    throw new Error( 'Saved browser notes contain an invalid Recently Deleted collection.' );
   }
 
   const ids = new Set<string>();
-  const notes = value.map((entry) => parseRecentlyDeletedNote(entry));
-  for (const entry of notes) {
-    if (ids.has(entry.id)) {
-      throw new Error("Saved browser notes contain duplicate Recently Deleted entries.");
+  const notes = value.map( ( entry ) => parseRecentlyDeletedNote( entry ) );
+  for ( const entry of notes ) {
+    if ( ids.has( entry.id ) ) {
+      throw new Error( 'Saved browser notes contain duplicate Recently Deleted entries.' );
     }
-    ids.add(entry.id);
+    ids.add( entry.id );
   }
 
-  return notes.sort(compareRecentlyDeletedNotes);
+  return notes.sort( compareRecentlyDeletedNotes );
 }
 
-function parseRecentlyDeletedNote(value: unknown): RecentlyDeletedNote {
+function parseRecentlyDeletedNote( value: unknown ): RecentlyDeletedNote {
   if (
-    !isRecord(value)
-    || typeof value.id !== "string"
-    || !/^[A-Za-z0-9_-]{1,180}$/u.test(value.id)
-    || typeof value.originalFolderPath !== "string"
-    || !isSafeRelativePath(value.originalFolderPath, true)
-    || !isSafeTimestamp(value.deletedAt)
-    || !isSafeTimestamp(value.expiresAt)
+    !isRecord( value )
+    || typeof value.id !== 'string'
+    || !/^[A-Za-z0-9_-]{1,180}$/u.test( value.id )
+    || typeof value.originalFolderPath !== 'string'
+    || !isSafeRelativePath( value.originalFolderPath, true )
+    || !isSafeTimestamp( value.deletedAt )
+    || !isSafeTimestamp( value.expiresAt )
     || value.expiresAt !== value.deletedAt + RECENTLY_DELETED_RETENTION
   ) {
-    throw new Error("Saved browser notes contain invalid Recently Deleted metadata.");
+    throw new Error( 'Saved browser notes contain invalid Recently Deleted metadata.' );
   }
 
-  const note = parseDeletedNote(value.note);
+  const note = parseDeletedNote( value.note );
   const editorPosition = value.editorPosition === undefined
     ? undefined
     : normalizeNoteEditorPosition(
-        value.editorPosition,
-        note.content.replace(/\r\n|\r/g, "\n").length,
-      );
-  if (value.editorPosition !== undefined && !editorPosition) {
-    throw new Error("Saved browser notes contain an invalid editor position.");
+      value.editorPosition,
+      note.content.replace( /\r\n|\r/g, '\n' ).length
+    );
+  if ( value.editorPosition !== undefined && !editorPosition ) {
+    throw new Error( 'Saved browser notes contain an invalid editor position.' );
   }
 
   return {
@@ -143,27 +145,27 @@ function parseRecentlyDeletedNote(value: unknown): RecentlyDeletedNote {
     originalFolderPath: value.originalFolderPath,
     deletedAt: value.deletedAt,
     expiresAt: value.expiresAt,
-    ...(editorPosition ? { editorPosition } : {}),
+    ...( editorPosition ? { editorPosition } : {})
   };
 }
 
-function parseDeletedNote(value: unknown): Note {
+function parseDeletedNote( value: unknown ): Note {
   if (
-    !isRecord(value)
-    || typeof value.id !== "string"
+    !isRecord( value )
+    || typeof value.id !== 'string'
     || !value.id.trim()
-    || typeof value.title !== "string"
-    || typeof value.content !== "string"
-    || typeof value.relativePath !== "string"
-    || !isSafeRelativePath(value.relativePath, true)
-    || (value.folderId !== null && typeof value.folderId !== "string")
-    || !Array.isArray(value.tags)
-    || value.tags.some((tag) => typeof tag !== "string")
-    || typeof value.pinned !== "boolean"
-    || !isSafeTimestamp(value.createdAt)
-    || !isSafeTimestamp(value.updatedAt)
+    || typeof value.title !== 'string'
+    || typeof value.content !== 'string'
+    || typeof value.relativePath !== 'string'
+    || !isSafeRelativePath( value.relativePath, true )
+    || ( value.folderId !== null && typeof value.folderId !== 'string' )
+    || !Array.isArray( value.tags )
+    || value.tags.some( ( tag ) => typeof tag !== 'string' )
+    || typeof value.pinned !== 'boolean'
+    || !isSafeTimestamp( value.createdAt )
+    || !isSafeTimestamp( value.updatedAt )
   ) {
-    throw new Error("Saved browser notes contain an invalid deleted note.");
+    throw new Error( 'Saved browser notes contain an invalid deleted note.' );
   }
 
   return {
@@ -172,70 +174,70 @@ function parseDeletedNote(value: unknown): Note {
     content: value.content,
     relativePath: value.relativePath,
     folderId: value.folderId,
-    tags: [...value.tags] as string[],
+    tags: [ ...value.tags ] as string[],
     pinned: value.pinned,
     createdAt: value.createdAt,
-    updatedAt: value.updatedAt,
+    updatedAt: value.updatedAt
   };
 }
 
 function readCriticalStorage(): string | null {
-  if (typeof localStorage === "undefined") {
-    throw new Error("Saved browser notes are unavailable in this environment.");
+  if ( typeof localStorage === 'undefined' ) {
+    throw new Error( 'Saved browser notes are unavailable in this environment.' );
   }
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    return localStorage.getItem( STORAGE_KEY );
   } catch {
-    throw new Error("Saved browser notes could not be read from browser storage.");
+    throw new Error( 'Saved browser notes could not be read from browser storage.' );
   }
 }
 
-function isSafeRelativePath(value: string, allowEmpty: boolean): boolean {
-  if (!value) {
+function isSafeRelativePath( value: string, allowEmpty: boolean ): boolean {
+  if ( !value ) {
     return allowEmpty;
   }
   if (
-    value.startsWith("/")
-    || value.includes("\\")
-    || /[\u0000-\u001f\u007f]/u.test(value)
+    value.startsWith( '/' )
+    || value.includes( '\\' )
+    || /[\u0000-\u001f\u007f]/u.test( value )
   ) {
     return false;
   }
 
-  return value.split("/").every((part) => part && part !== "." && part !== "..");
+  return value.split( '/' ).every( ( part ) => part && part !== '.' && part !== '..' );
 }
 
-function isSafeTimestamp(value: unknown): value is number {
-  return typeof value === "number"
-    && Number.isSafeInteger(value)
+function isSafeTimestamp( value: unknown ): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger( value )
     && value >= 0;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isRecord( value: unknown ): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray( value );
 }
 
-function stringArraysMatch(value: unknown, expected: string[]): boolean {
-  return Array.isArray(value)
+function stringArraysMatch( value: unknown, expected: string[]): boolean {
+  return Array.isArray( value )
     && value.length === expected.length
-    && value.every((item, index) => item === expected[index]);
+    && value.every( ( item, index ) => item === expected[ index ]);
 }
 
 function embedSettingsMatch(
   value: unknown,
-  expected: VaultData["imageEmbedSettings"],
+  expected: VaultData[ 'imageEmbedSettings' ]
 ): boolean {
-  return isRecord(value)
+  return isRecord( value )
     && value.location === expected.location
     && value.folderPath === expected.folderPath;
 }
 
-function storageFingerprint(value: string): string {
+function storageFingerprint( value: string ): string {
   let hash = 2_166_136_261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
+  for ( let index = 0; index < value.length; index += 1 ) {
+    hash ^= value.charCodeAt( index );
+    hash = Math.imul( hash, 16_777_619 );
   }
 
-  return `v1-${value.length}-${(hash >>> 0).toString(16)}`;
+  return `v1-${ value.length }-${ ( hash >>> 0 ).toString( 16 ) }`;
 }
