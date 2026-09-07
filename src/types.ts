@@ -141,6 +141,7 @@ export interface VaultDescriptor {
 export interface WorkspaceLoad {
   vault: VaultData;
   descriptor: VaultDescriptor;
+  access: WorkspaceAccess;
   recentlyDeletedNotes: RecentlyDeletedNote[];
   editorPositions: Record<string, NoteEditorPosition>;
   editorPositionsRevision: string | null;
@@ -148,6 +149,10 @@ export interface WorkspaceLoad {
   revision: number;
   warnings: string[];
 }
+
+export type WorkspaceAccess =
+  | { mode: 'read-write' }
+  | { mode: 'read-only'; reason: string };
 
 export interface WorkspaceBootstrap {
   workspace: WorkspaceLoad | null;
@@ -216,6 +221,7 @@ export interface WorkspaceAttachmentCopyResult {
 
 export interface VaultSessionState {
   phase: 'loading' | 'needs-vault' | 'ready' | 'error';
+  access: WorkspaceAccess;
   backend: 'native' | 'browser';
   path: string | null;
   recentVaults: VaultDescriptor[];

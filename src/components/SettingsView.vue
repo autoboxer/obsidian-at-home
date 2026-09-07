@@ -25,6 +25,7 @@ import {
 } from '../stores/appearance';
 import {
   buildExportPayload,
+  canEditVault,
   clearVault,
   forgetCurrentVault,
   mergeImportedVault,
@@ -158,6 +159,9 @@ function updateNoteFontSize( event: Event ): void {
 }
 
 function updateImageEmbedLocation( event: Event ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const location = ( event.currentTarget as HTMLSelectElement ).value as ImageEmbedLocation;
   imageFolderError.value = '';
   if ( location === 'specified-folder' ) {
@@ -175,6 +179,9 @@ function updateImageEmbedLocation( event: Event ): void {
 }
 
 function saveImageFolderPath(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const validated = validateAssetFolderPath( imageFolderDraft.value );
   if ( validated.error ) {
     imageFolderError.value = validated.error;
@@ -191,6 +198,9 @@ function saveImageFolderPath(): void {
 }
 
 function updateAttachmentEmbedLocation( event: Event ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const location = ( event.currentTarget as HTMLSelectElement ).value as AttachmentEmbedLocation;
   attachmentFolderError.value = '';
   if ( location === 'specified-folder' ) {
@@ -210,6 +220,9 @@ function updateAttachmentEmbedLocation( event: Event ): void {
 }
 
 function saveAttachmentFolderPath(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const validated = validateAssetFolderPath( attachmentFolderDraft.value );
   if ( validated.error ) {
     attachmentFolderError.value = validated.error;
@@ -252,6 +265,9 @@ function errorMessage( error: unknown, fallback: string ): string {
 }
 
 async function chooseVaultToImport(): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( !nativeAvailable || activeTask.value ) {
     return;
   }
@@ -312,6 +328,9 @@ function cancelImportReview(): void {
 }
 
 async function applyImport( replace: boolean ): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( activeTask.value ) {
     return;
   }
@@ -453,6 +472,9 @@ function manageVaults(): void {
 }
 
 async function clearCurrentVault(): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( activeTask.value ) {
     return;
   }
@@ -760,7 +782,7 @@ async function forgetVault(): Promise<void> {
           <select
             id="settings-image-location"
             :value="vaultState.imageEmbedSettings.location"
-            :disabled="!nativeAvailable || !vaultSession.path"
+            :disabled="!canEditVault || !nativeAvailable || !vaultSession.path"
             aria-describedby="settings-image-location-help"
             @change="updateImageEmbedLocation"
           >
@@ -781,6 +803,7 @@ async function forgetVault(): Promise<void> {
             <span>Vault-relative folder</span>
             <input
               v-model="imageFolderDraft"
+              :readonly="!canEditVault"
               type="text"
               autocomplete="off"
               autocapitalize="none"
@@ -816,7 +839,7 @@ async function forgetVault(): Promise<void> {
           <select
             id="settings-attachment-location"
             :value="vaultState.attachmentEmbedSettings.location"
-            :disabled="!nativeAvailable || !vaultSession.path"
+            :disabled="!canEditVault || !nativeAvailable || !vaultSession.path"
             aria-describedby="settings-attachment-location-help"
             @change="updateAttachmentEmbedLocation"
           >
@@ -837,6 +860,7 @@ async function forgetVault(): Promise<void> {
             <span>Vault-relative folder</span>
             <input
               v-model="attachmentFolderDraft"
+              :readonly="!canEditVault"
               type="text"
               autocomplete="off"
               autocapitalize="none"
@@ -983,7 +1007,7 @@ async function forgetVault(): Promise<void> {
           <button
             type="button"
             class="settings-button settings-button--primary settings-button--full"
-            :disabled="!nativeAvailable || activeTask !== null"
+            :disabled="!canEditVault || !nativeAvailable || activeTask !== null"
             @click="chooseVaultToImport"
           >
             <AppIcon :name="activeTask === 'import' ? 'refresh' : 'folder-open'" :size="17" />
@@ -1143,7 +1167,7 @@ async function forgetVault(): Promise<void> {
               <button
                 type="button"
                 class="settings-button settings-button--primary"
-                :disabled="activeTask !== null"
+                :disabled="!canEditVault || activeTask !== null"
                 @click="applyImport( false )"
               >
                 <AppIcon name="plus" :size="16" />
@@ -1152,7 +1176,7 @@ async function forgetVault(): Promise<void> {
               <button
                 type="button"
                 class="settings-button settings-button--danger-ghost"
-                :disabled="activeTask !== null"
+                :disabled="!canEditVault || activeTask !== null"
                 @click="replaceConfirming = true"
               >
                 <AppIcon name="refresh" :size="16" />
@@ -1178,7 +1202,7 @@ async function forgetVault(): Promise<void> {
                 <button
                   type="button"
                   class="settings-button settings-button--danger"
-                  :disabled="activeTask !== null"
+                  :disabled="!canEditVault || activeTask !== null"
                   @click="applyImport( true )"
                 >
                   Yes, replace
@@ -1218,7 +1242,7 @@ async function forgetVault(): Promise<void> {
         <button
           type="button"
           class="settings-button settings-button--danger-ghost"
-          :disabled="activeTask !== null || vaultSession.busy"
+          :disabled="!canEditVault || activeTask !== null || vaultSession.busy"
           @click="clearConfirming = true; forgetConfirming = false"
         >
           Clear vault
@@ -1248,7 +1272,7 @@ async function forgetVault(): Promise<void> {
             <button
               type="button"
               class="settings-button settings-button--danger"
-              :disabled="activeTask !== null"
+              :disabled="!canEditVault || activeTask !== null"
               @click="clearCurrentVault"
             >
               {{ activeTask === "clear" ? "Clearing…" : "Yes, clear vault" }}

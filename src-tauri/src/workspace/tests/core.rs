@@ -745,6 +745,358 @@ fn load_snapshot_preserves_unsupported_metadata() {
     }
 }
 
+const READ_ONLY_METADATA: [&[u8]; 2] =
+    [b"{\"version\":999,\"name\":\"Future vault\"}", b"not JSON"];
+
+fn read_only_file_snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            // Commands may acquire advisory locks even when rejecting a write.
+            entry.path() != root.join(STATE_DIRECTORY).join(WORKSPACE_LOCK_FILE)
+                && entry.path() != root.join(STATE_DIRECTORY).join(EDITOR_POSITIONS_LOCK_FILE)
+        })
+        .map(|entry| {
+            let bytes = entry
+                .file_type()
+                .is_file()
+                .then(|| fs::read(entry.path()).unwrap());
+            (
+                entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                bytes,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn read_only_access_is_reported_without_rewriting_metadata() {
+    for bytes in READ_ONLY_METADATA {
+        let workspace = TestWorkspace::new("read-only-access");
+        let note = test_note("# Still readable\n");
+        write_saved_note(&workspace, &note);
+        write_editor_positions(
+            &workspace.root,
+            &BTreeMap::from([(note.id.clone(), editor_position(7))]),
+        )
+        .unwrap();
+        let positions_path = editor_positions_path(&workspace.root);
+        let positions_before = fs::read(&positions_path).unwrap();
+        let state_path = workspace_state_path(&workspace.root);
+        fs::write(&state_path, bytes).unwrap();
+        let recoveries = ensure_recently_deleted_directory(&workspace.root).unwrap();
+        fs::write(
+            recoveries.join("deleted-orphan.snapshot"),
+            b"preserve orphan",
+        )
+        .unwrap();
+        let transactions = workspace
+            .root
+            .join(STATE_DIRECTORY)
+            .join(TRANSACTIONS_DIRECTORY);
+        fs::create_dir_all(transactions.join("pending")).unwrap();
+        fs::write(
+            transactions.join("pending/manifest.json"),
+            b"preserve transaction",
+        )
+        .unwrap();
+        let files_before = read_only_file_snapshot(&workspace.root);
+        let before = revision_for_root(&workspace.root).unwrap();
+        let loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+        let json = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(json["access"]["mode"], "read-only");
+        assert!(!json["access"]["reason"].as_str().unwrap().is_empty());
+        assert_eq!(loaded.vault.notes[0].content, note.content);
+        assert_eq!(loaded.revision, before);
+        assert_eq!(fs::read(state_path).unwrap(), bytes);
+        assert_eq!(fs::read(positions_path).unwrap(), positions_before);
+        assert!(!loaded.editor_positions_writable);
+        assert_eq!(read_only_file_snapshot(&workspace.root), files_before);
+    }
+}
+
+#[test]
+fn read_only_access_returns_to_read_write_when_supported_metadata_opens() {
+    let workspace = TestWorkspace::new("read-only-reopen");
+    let loaded = load_workspace(&workspace.root, &empty_vault("New vault")).unwrap();
+    assert_eq!(loaded.access, WorkspaceAccess::ReadWrite);
+    assert_eq!(
+        serde_json::to_value(&loaded).unwrap()["access"],
+        serde_json::json!({"mode": "read-write"})
+    );
+    let note = test_note("before");
+    let mut state = write_saved_note(&workspace, &note);
+    for version in [1, STATE_VERSION] {
+        fs::write(workspace_state_path(&workspace.root), READ_ONLY_METADATA[0]).unwrap();
+        let blocked = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+        assert!(matches!(blocked.access, WorkspaceAccess::ReadOnly { .. }));
+        state.version = version;
+        write_workspace_state(&workspace.root, &state).unwrap();
+        let mut reopened = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+        assert_eq!(reopened.access, WorkspaceAccess::ReadWrite);
+        reopened.vault.notes[0].content = format!("after version {version}");
+        save_workspace_files(&workspace.root, &reopened.vault, reopened.revision).unwrap();
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+            reopened.vault.notes[0].content
+        );
+    }
+}
+
+#[test]
+fn read_only_access_keeps_editor_position_compatibility_separate() {
+    let workspace = TestWorkspace::new("read-only-positions-only");
+    write_saved_note(&workspace, &test_note("before"));
+    let path = editor_positions_path(&workspace.root);
+    let bytes = format!(
+        "{{\"version\":{},\"positions\":{{}}}}",
+        EDITOR_POSITIONS_VERSION + 1
+    );
+    fs::write(&path, &bytes).unwrap();
+    let mut loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+    assert_eq!(loaded.access, WorkspaceAccess::ReadWrite);
+    assert!(!loaded.editor_positions_writable);
+    loaded.vault.notes[0].content = "can still edit notes".to_owned();
+    save_workspace_files(&workspace.root, &loaded.vault, loaded.revision).unwrap();
+    assert_eq!(fs::read_to_string(path).unwrap(), bytes);
+}
+
+#[test]
+fn read_only_access_rejects_vault_mutations_after_open() {
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage";
+    for bytes in READ_ONLY_METADATA {
+        let workspace = TestWorkspace::new("read-only-mutations");
+        let note = test_note("keep this note");
+        write_saved_note(&workspace, &note);
+        fs::write(workspace.root.join("Photo.png"), PNG).unwrap();
+        let attachment = workspace.root.join("Report.pdf");
+        fs::write(&attachment, b"keep this attachment").unwrap();
+        let mut loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+        assert_eq!(loaded.access, WorkspaceAccess::ReadWrite);
+        // The previously loaded access mode must not authorize later native writes.
+        fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
+        let revision = revision_for_root(&workspace.root).unwrap();
+        let files_before = read_only_file_snapshot(&workspace.root);
+        let assert_blocked = |result: Result<(), String>| {
+            let error = result.expect_err("unreadable metadata must block mutation");
+            assert!(
+                error.contains("metadata") || error.contains("state.json"),
+                "{error}"
+            );
+            assert_eq!(read_only_file_snapshot(&workspace.root), files_before);
+            assert_eq!(revision_for_root(&workspace.root).unwrap(), revision);
+        };
+        loaded.vault.notes[0].content = "unsavable edit".to_owned();
+        assert_blocked(save_workspace_files(&workspace.root, &loaded.vault, revision).map(|_| ()));
+        assert_blocked(
+            save_workspace_files_with_archive(
+                &workspace.root,
+                &loaded.vault,
+                revision,
+                Some(PendingNoteArchive {
+                    note: note.clone(),
+                    original_folder_path: String::new(),
+                    editor_position: None,
+                }),
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            read_recovery_for_restore(&workspace.root, "deleted-note", revision).map(|_| ()),
+        );
+        assert_blocked(
+            remove_recently_deleted_notes(
+                &workspace.root,
+                vec!["deleted-note".to_owned()],
+                revision,
+                false,
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            remove_recently_deleted_notes(&workspace.root, Vec::new(), revision, true).map(|_| ()),
+        );
+        assert_blocked(
+            save_editor_positions(
+                &workspace.root,
+                BTreeMap::from([(note.id.clone(), editor_position(2))]),
+                None,
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            embed_workspace_image(
+                &workspace.root,
+                &note.relative_path,
+                ImageEmbedSettings::default(),
+                "New.png",
+                PNG,
+                None,
+                revision,
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            embed_workspace_attachment(
+                &workspace.root,
+                &note.relative_path,
+                AttachmentEmbedSettings::default(),
+                &attachment,
+                None,
+                revision,
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            relocate_workspace_image(
+                &workspace.root,
+                "Photo.png",
+                "Moved.png",
+                "image-id",
+                &[],
+                revision,
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            relocate_workspace_attachment(
+                &workspace.root,
+                "Report.pdf",
+                "Moved.pdf",
+                "attachment-id",
+                &[],
+                revision,
+            )
+            .map(|_| ()),
+        );
+        assert_blocked(
+            discard_workspace_external_asset(
+                &workspace.root,
+                "attachment-id",
+                "Report.pdf",
+                revision,
+            )
+            .map(|_| ()),
+        );
+    }
+}
+
+#[test]
+fn read_only_access_preserves_attachment_copy_and_path_navigation() {
+    for bytes in READ_ONLY_METADATA {
+        let workspace = TestWorkspace::new("read-only-attachment");
+        let destination = TestWorkspace::new("read-only-copy-destination");
+        let note = test_note("# Read and copy\n");
+        write_saved_note(&workspace, &note);
+        fs::write(workspace.root.join("Report.pdf"), b"copy this report").unwrap();
+        fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
+        let before = read_only_file_snapshot(&workspace.root);
+        let (_, source) =
+            resolve_attachment_action_source(&workspace.root, "Report.pdf", None).unwrap();
+        copy_attachment_file_for_transfer_impl(&source, &destination.root.join("Copy.pdf"))
+            .unwrap();
+        assert_eq!(
+            fs::read(destination.root.join("Copy.pdf")).unwrap(),
+            b"copy this report"
+        );
+        for (kind, path) in [
+            (WorkspaceVaultItemKind::Note, note.relative_path.as_str()),
+            (WorkspaceVaultItemKind::Attachment, "Report.pdf"),
+        ] {
+            let (relative, resolved) =
+                locate_workspace_vault_item(&workspace.root, kind, path, None).unwrap();
+            assert_eq!(relative, path);
+            assert_eq!(resolved, workspace.root.join(path).canonicalize().unwrap());
+        }
+        // A supplied stable ID still requires readable metadata; do not silently
+        // open a potentially different file using its old path.
+        assert!(resolve_attachment_action_source(
+            &workspace.root,
+            "Report.pdf",
+            Some("attachment-id")
+        )
+        .is_err());
+        assert_eq!(read_only_file_snapshot(&workspace.root), before);
+    }
+}
+
+#[test]
+fn read_only_access_rejects_asset_import_before_staging() {
+    let source = TestWorkspace::new("read-only-import-source");
+    fs::write(source.root.join("Photo.png"), b"\x89PNG\r\n\x1a\nimage").unwrap();
+    fs::write(source.root.join("Report.pdf"), b"report").unwrap();
+    for bytes in READ_ONLY_METADATA {
+        let workspace = TestWorkspace::new("read-only-import");
+        write_saved_note(&workspace, &test_note("keep"));
+        fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
+        let before = revision_for_root(&workspace.root).unwrap();
+        let result = begin_workspace_asset_import(
+            &workspace.root,
+            &source.root,
+            &["Photo.png".to_owned()],
+            &["Report.pdf".to_owned()],
+            before,
+        );
+        assert!(
+            result.is_err(),
+            "read-only vaults must reject asset imports"
+        );
+        assert_eq!(revision_for_root(&workspace.root).unwrap(), before);
+        assert!(!workspace.root.join("Photo.png").exists());
+        assert!(!workspace.root.join("Report.pdf").exists());
+        assert!(!workspace
+            .root
+            .join(STATE_DIRECTORY)
+            .join(TRANSACTIONS_DIRECTORY)
+            .exists());
+    }
+}
+
+#[test]
+fn read_only_access_rejects_external_upload_before_staging() {
+    for bytes in READ_ONLY_METADATA {
+        let workspace = TestWorkspace::new("read-only-upload");
+        let staging = TestWorkspace::new("read-only-upload-cache");
+        write_saved_note(&workspace, &test_note("keep"));
+        fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
+        let result = begin_external_file_upload(
+            &staging.root,
+            "Report.pdf".to_owned(),
+            4,
+            ExternalFileUploadKind::Attachment,
+            workspace.root.clone(),
+            "First note.md".to_owned(),
+        );
+        if let Ok(upload) = &result {
+            cancel_external_file_upload(&upload.id).unwrap();
+        }
+        assert!(result.is_err(), "read-only vaults must reject new uploads");
+        assert_eq!(fs::read_dir(&staging.root).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn read_only_access_preserves_path_based_image_reading() {
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nreadable-image";
+    for bytes in READ_ONLY_METADATA {
+        let workspace = TestWorkspace::new("read-only-image");
+        write_saved_note(&workspace, &test_note("![Photo](Photo.png)"));
+        fs::write(workspace.root.join("Photo.png"), PNG).unwrap();
+        fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
+        let before = revision_for_root(&workspace.root).unwrap();
+        assert_eq!(
+            read_workspace_image(&workspace.root, None, "First note.md", "Photo.png").unwrap(),
+            PNG
+        );
+        assert!(
+            read_workspace_image(&workspace.root, None, "First note.md", "../Photo.png").is_err()
+        );
+        assert_eq!(revision_for_root(&workspace.root).unwrap(), before);
+    }
+}
+
 #[test]
 fn unchanged_load_preserves_metadata_bytes_mtime_and_revision() {
     for content in [None, Some("before")] {

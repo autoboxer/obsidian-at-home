@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue';
 import {
+  canEditVault,
   deleteNote,
   NOTE_DRAG_MIME,
   selectNote,
@@ -19,6 +20,11 @@ const noteButton = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 
 function startDrag( event: DragEvent ): void {
+  if ( !canEditVault.value ) {
+    event.preventDefault();
+
+    return;
+  }
   if ( !event.dataTransfer ) {
     return;
   }
@@ -48,7 +54,7 @@ function openContextMenu( event: MouseEvent ): void {
     y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
   };
   menuOpen.value = true;
-  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button' )?.focus() );
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
 }
 
 function closeMenu( restoreFocus = false ): void {
@@ -75,6 +81,9 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
 }
 
 function requestDelete(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   const title = props.note.title || 'Untitled note';
   if ( window.confirm( `Delete “${ title }”? It will remain in Recently Deleted for seven days.` ) ) {
@@ -107,7 +116,7 @@ function showInFolder(): void {
       ref="noteButton"
       type="button"
       class="vault-tree-note-main"
-      draggable="true"
+      :draggable="canEditVault"
       @click="selectNote( note.id )"
       @dragstart="startDrag"
       @dragend="finishDrag"
@@ -129,6 +138,7 @@ function showInFolder(): void {
     </button>
 
     <button
+      :disabled="!canEditVault"
       type="button"
       class="vault-tree-note-delete"
       :aria-label="`Delete ${note.title || 'Untitled note'}`"
@@ -157,6 +167,7 @@ function showInFolder(): void {
             <AppIcon name="folder-open" :size="14" /> Show in folder
           </button>
           <button
+            :disabled="!canEditVault"
             type="button"
             class="danger"
             role="menuitem"

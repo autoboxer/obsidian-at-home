@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import {
+  canEditVault,
   createFolder,
   createNote,
   deleteFolder,
@@ -200,6 +201,9 @@ function branchContainsFolder( folderId: string ): boolean {
 }
 
 function isTreeDrag( event: DragEvent ): boolean {
+  if ( !canEditVault.value ) {
+    return false;
+  }
   const types = Array.from( event.dataTransfer?.types ?? []);
 
   return Boolean(
@@ -215,6 +219,11 @@ function isTreeDrag( event: DragEvent ): boolean {
 }
 
 function startFolderDrag( event: DragEvent ): void {
+  if ( !canEditVault.value ) {
+    event.preventDefault();
+
+    return;
+  }
   if ( !event.dataTransfer ) {
     return;
   }
@@ -287,7 +296,8 @@ function isInvalidAttachmentTarget(): boolean {
 }
 
 function isInvalidDropTarget(): boolean {
-  return isInvalidFolderTarget()
+  return !canEditVault.value
+    || isInvalidFolderTarget()
     || isInvalidImageTarget()
     || isInvalidAttachmentTarget();
 }
@@ -444,7 +454,7 @@ function toggleMenu(): void {
   }
   menuPosition.value = undefined;
   menuOpen.value = true;
-  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button' )?.focus() );
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
 }
 
 function openContextMenu( event: MouseEvent ): void {
@@ -462,7 +472,7 @@ function openContextMenu( event: MouseEvent ): void {
     y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
   };
   menuOpen.value = true;
-  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button' )?.focus() );
+  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
 }
 
 function closeMenu( restoreFocus = false ): void {
@@ -474,6 +484,9 @@ function closeMenu( restoreFocus = false ): void {
 }
 
 function openMovePicker(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   moveTarget.value = props.folder.parentId ?? '';
   movePickerOpen.value = true;
@@ -542,6 +555,9 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
 }
 
 function beginRename(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   editValue.value = props.folder.name;
   editing.value = true;
@@ -566,6 +582,9 @@ function cancelRename(): void {
 }
 
 function openSubfolderInput(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   subfolderInputOpen.value = true;
   expanded.value = true;
@@ -592,6 +611,9 @@ function addNoteInside(): void {
 }
 
 function removeFolder(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   if ( window.confirm( `Remove the folder “${ props.folder.name }”? Its contents will move up one level.` ) ) {
     deleteFolder( props.folder.id );
@@ -628,7 +650,7 @@ function showInFolder(): void {
         v-if="!editing"
         type="button"
         class="vault-tree-folder-main"
-        draggable="true"
+        :draggable="canEditVault"
         :aria-expanded="canExpand ? expanded : undefined"
         @click="toggleExpanded"
         @keydown="handleDisclosureKeydown"
@@ -653,6 +675,7 @@ function showInFolder(): void {
         <input
           ref="renameInput"
           v-model="editValue"
+          :disabled="!canEditVault"
           type="text"
           maxlength="120"
           aria-label="Folder name"
@@ -663,6 +686,7 @@ function showInFolder(): void {
 
       <button
         v-if="!editing"
+        :disabled="!canEditVault"
         type="button"
         class="vault-tree-folder-add"
         :aria-label="`New folder inside ${folder.name}`"
@@ -707,6 +731,7 @@ function showInFolder(): void {
               <AppIcon name="folder-open" :size="14" /> Show in folder
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="beginRename"
@@ -714,6 +739,7 @@ function showInFolder(): void {
               <AppIcon name="edit" :size="14" /> Rename
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="addNoteInside"
@@ -721,6 +747,7 @@ function showInFolder(): void {
               <AppIcon name="file-plus" :size="14" /> New note inside
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="openSubfolderInput"
@@ -728,6 +755,7 @@ function showInFolder(): void {
               <AppIcon name="folder-plus" :size="14" /> New folder inside
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="openMovePicker"
@@ -735,6 +763,7 @@ function showInFolder(): void {
               <AppIcon name="arrow" :size="14" /> Move folder…
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               class="danger"
               role="menuitem"
@@ -758,6 +787,7 @@ function showInFolder(): void {
               <select
                 ref="moveSelect"
                 v-model="moveTarget"
+                :disabled="!canEditVault"
                 aria-label="Move folder to"
               >
                 <option value="">Vault root</option>
@@ -774,7 +804,7 @@ function showInFolder(): void {
               <button type="button" @click="closeMovePicker( true )">
                 Cancel
               </button>
-              <button type="submit" :disabled="moveTarget === ( folder.parentId ?? '' )">
+              <button type="submit" :disabled="!canEditVault || moveTarget === ( folder.parentId ?? '' )">
                 Move
               </button>
             </div>
@@ -796,6 +826,7 @@ function showInFolder(): void {
             <input
               ref="subfolderInput"
               v-model="subfolderName"
+              :disabled="!canEditVault"
               type="text"
               maxlength="120"
               autocomplete="off"

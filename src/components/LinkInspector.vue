@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import {
   activeNote,
   backlinks,
+  canEditVault,
   createLinkedNote,
   folderPath,
   outgoingLinks,
@@ -99,13 +100,14 @@ function formatDate( timestamp?: number ): string {
               :key="`${item.link.target}-${item.link.index}`"
               type="button"
               class="connection-card outgoing-card"
+              :disabled="!item.note && !canEditVault"
               :class="{ unresolved: !item.note }"
               @click="openOutgoing( item.link.target, item.note?.id )"
             >
               <span class="connection-node"><AppIcon :name="item.note ? 'file-text' : 'plus'" :size="14" /></span>
               <span>
                 <strong>{{ item.link.display || item.link.target }}</strong>
-                <small>{{ item.note ? ( item.note.folderId ? folderPath( item.note.folderId ) : 'Vault root' ) : 'Create this note' }}</small>
+                <small>{{ item.note ? ( item.note.folderId ? folderPath( item.note.folderId ) : 'Vault root' ) : ( canEditVault ? 'Create this note' : 'Note not found' ) }}</small>
               </span>
               <AppIcon name="chevron" :size="13" />
             </button>

@@ -96,8 +96,9 @@ impl Default for WorkspaceState {
 pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, String> {
     let root = validate_workspace_root_path(root)?;
     let mut warnings = WarningCollector::default();
-    let (stored_state, state_file_was_present, state_fingerprint) =
-        read_workspace_state_with_fingerprint(&root, &mut warnings);
+    let state_read = read_workspace_state_snapshot(&root, &mut warnings);
+    let access = state_read.access();
+    let (stored_state, state_file_was_present, state_fingerprint) = state_read.into_parts();
     let state_was_present = stored_state.is_some();
     if state_was_present || !state_file_was_present {
         recover_workspace_transactions(&root, stored_state.as_ref(), &mut warnings)?;
@@ -386,6 +387,7 @@ pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<Worksp
             path: path_string(&root)?,
             last_opened_at: opened_at,
         },
+        access,
         recently_deleted_notes,
         editor_positions,
         editor_positions_revision,
@@ -1415,47 +1417,104 @@ pub(super) fn read_workspace_state_with_fingerprint(
     root: &Path,
     warnings: &mut WarningCollector,
 ) -> (Option<WorkspaceState>, bool, Option<FileFingerprint>) {
+    read_workspace_state_snapshot(root, warnings).into_parts()
+}
+
+struct WorkspaceStateRead {
+    state: Result<Option<WorkspaceState>, String>,
+    fingerprint: Option<FileFingerprint>,
+}
+
+impl WorkspaceStateRead {
+    fn access(&self) -> WorkspaceAccess {
+        match &self.state {
+            Ok(_) => WorkspaceAccess::ReadWrite,
+            Err(reason) => WorkspaceAccess::ReadOnly {
+                reason: reason.clone(),
+            },
+        }
+    }
+
+    fn into_parts(self) -> (Option<WorkspaceState>, bool, Option<FileFingerprint>) {
+        match self.state {
+            Ok(state) => {
+                let present = state.is_some();
+                (state, present, self.fingerprint)
+            }
+            Err(_) => (None, true, self.fingerprint),
+        }
+    }
+}
+
+pub(super) fn require_workspace_write_access(root: &Path) -> Result<(), String> {
+    // Re-read native metadata rather than trusting a previously loaded access
+    // mode: another app may have changed it since this window opened.
+    match read_workspace_state_snapshot(root, &mut WarningCollector::default()).access() {
+        WorkspaceAccess::ReadWrite => Ok(()),
+        WorkspaceAccess::ReadOnly { reason } => Err(format!("This vault is read-only. {reason}")),
+    }
+}
+
+fn read_workspace_state_snapshot(
+    root: &Path,
+    warnings: &mut WarningCollector,
+) -> WorkspaceStateRead {
+    let mut read_only = |reason: String, fingerprint| {
+        warnings.push(reason.clone());
+        WorkspaceStateRead {
+            state: Err(reason),
+            fingerprint,
+        }
+    };
     let path = workspace_state_path(root);
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return (None, false, None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return WorkspaceStateRead {
+                state: Ok(None),
+                fingerprint: None,
+            }
+        }
         Err(error) => {
-            warnings.push(format!("Could not inspect workspace metadata: {error}"));
-
-            return (None, true, None);
+            return read_only(
+                format!("Could not inspect workspace metadata: {error}"),
+                None,
+            );
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        warnings.push("Ignored workspace metadata because it is not a regular file.".to_owned());
-
-        return (None, true, None);
+        return read_only(
+            "Ignored workspace metadata because it is not a regular file.".to_owned(),
+            None,
+        );
     }
     if metadata.len() > 64 * 1024 * 1024 {
-        warnings.push("Ignored workspace metadata because it is unexpectedly large.".to_owned());
-
-        return (None, true, None);
+        return read_only(
+            "Ignored workspace metadata because it is unexpectedly large.".to_owned(),
+            None,
+        );
     }
-    let mut fingerprint = None;
-    let result = match fs::read(&path)
-        .map_err(|error| error.to_string())
-        .and_then(|bytes| {
-            fingerprint = Some(fingerprint_bytes(&bytes));
-            serde_json::from_slice::<WorkspaceState>(&bytes).map_err(|error| error.to_string())
-        }) {
-        Ok(state) if state.version <= STATE_VERSION => (Some(state), true),
-        Ok(state) => {
-            warnings.push(format!(
-                "Workspace metadata uses version {}, but this app supports up to version {STATE_VERSION}. It was opened read-only and was not changed.",
-                state.version
-            ));
-            (None, true)
-        }
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(error) => {
-            warnings.push(format!("Ignored invalid workspace metadata: {error}"));
-            (None, true)
+            return read_only(format!("Could not read workspace metadata: {error}"), None)
         }
     };
-    (result.0, result.1, fingerprint)
+    let fingerprint = Some(fingerprint_bytes(&bytes));
+    match serde_json::from_slice::<WorkspaceState>(&bytes) {
+        Ok(state) if state.version <= STATE_VERSION => WorkspaceStateRead {
+            state: Ok(Some(state)),
+            fingerprint,
+        },
+        Ok(state) => read_only(
+            format!(
+                "Workspace metadata uses version {}, but this app supports up to version {STATE_VERSION}. Update the app before editing this vault.",
+                state.version
+            ),
+            fingerprint,
+        ),
+        Err(error) => read_only(format!("Ignored invalid workspace metadata: {error}"), fingerprint),
+    }
 }
 
 pub(super) fn workspace_state_bytes(state: &WorkspaceState) -> Result<Vec<u8>, String> {

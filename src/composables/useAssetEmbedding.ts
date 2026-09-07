@@ -38,6 +38,7 @@ import {
   activateVaultAttachment,
   applyEmbeddedAttachmentResult,
   applyEmbeddedImageResult,
+  canEditVault,
   applyExternalAssetDiscardResult,
   flushVault,
   notify,
@@ -125,7 +126,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       );
     }
     if (
-      signal.aborted
+      !canEditVault.value
+      || signal.aborted
       || vaultSession.path !== context.vaultPath
       || activeNote.value?.id !== context.note.id
       || context.note.relativePath !== context.noteRelativePath
@@ -152,7 +154,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   ): AssetEmbedContext | undefined {
     const note = vaultState.notes.find( ( candidate ) => candidate.id === capture.noteId );
     const vaultPath = vaultSession.backend === 'native' ? vaultSession.path : null;
-    if ( !nativeAvailable || !note || !vaultPath || activeNote.value?.id !== note.id ) {
+    if ( !canEditVault.value || !nativeAvailable || !note || !vaultPath || activeNote.value?.id !== note.id ) {
       return undefined;
     }
 
@@ -181,7 +183,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       );
     }
     if (
-      vaultSession.path !== context.vaultPath
+      !canEditVault.value
+      || vaultSession.path !== context.vaultPath
       || activeNote.value?.id !== context.note.id
     ) {
       throw new Error( 'The note or vault changed before the image could be embedded.' );
@@ -195,7 +198,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
     const result = await embed( context, vaultSession.revision );
     if (
-      vaultSession.path !== context.vaultPath
+      !canEditVault.value
+      || vaultSession.path !== context.vaultPath
       || activeNote.value?.id !== context.note.id
     ) {
       await retainOrDiscardFailedImage( context, result, options );
@@ -285,6 +289,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   async function embedImageFromFile( capture: ImageInsertionCapture ): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     if ( imageEmbedBusy.value || attachmentEmbedBusy.value ) {
       sourceEditor.value?.cancelImageInsertion( capture );
       notify( 'Wait for the current image to finish embedding.', 'warning' );
@@ -308,7 +315,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
         return;
       }
       if (
-        vaultSession.path !== context.vaultPath
+        !canEditVault.value
+        || vaultSession.path !== context.vaultPath
         || activeNote.value?.id !== context.note.id
       ) {
         throw new Error( 'The note or vault changed before the image could be embedded.' );
@@ -334,6 +342,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     capture: ImageInsertionCapture,
     file?: File
   ): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     if ( imageEmbedBusy.value || attachmentEmbedBusy.value ) {
       sourceEditor.value?.cancelImageInsertion( capture );
       notify( 'Wait for the current image to finish embedding.', 'warning' );
@@ -369,6 +380,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     capture: ImageInsertionCapture,
     relativePath: string
   ): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     if ( imageEmbedBusy.value || attachmentEmbedBusy.value ) {
       sourceEditor.value?.cancelImageInsertion( capture );
       notify( 'Wait for the current image to finish embedding.', 'warning' );
@@ -396,6 +410,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   function requestImageFromToolbar(): void {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const capture = sourceEditor.value?.captureImageInsertion();
     if ( capture ) {
       void embedImageFromFile( capture );
@@ -420,7 +437,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       );
     }
     if (
-      vaultSession.path !== context.vaultPath
+      !canEditVault.value
+      || vaultSession.path !== context.vaultPath
       || activeNote.value?.id !== context.note.id
     ) {
       throw new Error( 'The note or vault changed before the file could be embedded.' );
@@ -432,7 +450,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
     const result = await embed( context, vaultSession.revision );
     if (
-      vaultSession.path !== context.vaultPath
+      !canEditVault.value
+      || vaultSession.path !== context.vaultPath
       || activeNote.value?.id !== context.note.id
     ) {
       await retainOrDiscardFailedAttachment( context, result, options );
@@ -531,6 +550,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   async function embedAttachmentFromFile(
     capture: AttachmentInsertionCapture
   ): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     if ( attachmentEmbedBusy.value || imageEmbedBusy.value ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
       notify( 'Wait for the current file to finish embedding.', 'warning' );
@@ -549,7 +571,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
         return;
       }
       if (
-        vaultSession.path !== context.vaultPath
+        !canEditVault.value
+        || vaultSession.path !== context.vaultPath
         || activeNote.value?.id !== context.note.id
       ) {
         throw new Error( 'The note or vault changed before the file could be embedded.' );
@@ -575,6 +598,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     capture: AttachmentInsertionCapture,
     relativePath: string
   ): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     if ( attachmentEmbedBusy.value || imageEmbedBusy.value ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
       notify( 'Wait for the current file to finish embedding.', 'warning' );
@@ -606,6 +632,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     files: File[],
     rejectedCount: number
   ): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     if ( attachmentEmbedBusy.value || imageEmbedBusy.value ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
       notify( 'Wait for the current file to finish embedding.', 'warning' );
@@ -744,6 +773,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   function requestAttachmentFromToolbar(): void {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const capture = sourceEditor.value?.captureAttachmentInsertion();
     if ( capture ) {
       void embedAttachmentFromFile( capture );
@@ -751,6 +783,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   async function insertRequestedVaultImage(): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const relativePath = vaultImageInsertRequest.relativePath;
     await nextTick();
     const capture = sourceEditor.value?.captureImageInsertion();
@@ -763,6 +798,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   async function insertRequestedVaultAttachment(): Promise<void> {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const relativePath = vaultAttachmentInsertRequest.relativePath;
     await nextTick();
     const capture = sourceEditor.value?.captureAttachmentInsertion();
@@ -811,7 +849,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   watch(
-    [ () => vaultSession.path, () => activeNote.value?.id ],
+    [ () => vaultSession.path, () => activeNote.value?.id, () => canEditVault.value ],
     () => externalFileDropAbort?.abort()
   );
 

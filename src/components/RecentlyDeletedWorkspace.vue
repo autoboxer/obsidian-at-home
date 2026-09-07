@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
 import {
+  canEditVault,
   emptyRecentlyDeletedNotes,
   permanentlyDeleteRecentlyDeletedNote,
   recentlyDeletedNotes,
@@ -28,6 +29,9 @@ const visibleEntries = computed( () =>
 );
 
 async function restore( entry: RecentlyDeletedNote ): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   pendingAction.value = { id: entry.id, type: 'restore' };
   try {
     await restoreRecentlyDeletedNote( entry.id );
@@ -37,6 +41,9 @@ async function restore( entry: RecentlyDeletedNote ): Promise<void> {
 }
 
 async function permanentlyDelete( entry: RecentlyDeletedNote ): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const title = displayTitle( entry );
   const confirmed = window.confirm(
     `Permanently delete “${ title }”? This cannot be undone.`
@@ -66,6 +73,9 @@ async function permanentlyDelete( entry: RecentlyDeletedNote ): Promise<void> {
 }
 
 async function emptyRecentlyDeleted(): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const count = recentlyDeletedNotes.value.length;
   const noun = count === 1 ? 'note' : 'notes';
   const confirmed = window.confirm(
@@ -147,7 +157,7 @@ function loadMore(): void {
           type="button"
           class="secondary-button recently-deleted-empty-button"
           data-recovery-action="empty"
-          :disabled="recentlyDeletedState.busy"
+          :disabled="!canEditVault || recentlyDeletedState.busy"
           @click="emptyRecentlyDeleted"
         >
           <AppIcon name="trash" :size="15" />
@@ -230,7 +240,7 @@ function loadMore(): void {
               <button
                 type="button"
                 class="primary-action-button small"
-                :disabled="recentlyDeletedState.busy"
+                :disabled="!canEditVault || recentlyDeletedState.busy"
                 :aria-label="`Restore ${displayTitle( entry )}`"
                 data-recovery-action="restore"
                 @click="restore( entry )"
@@ -241,7 +251,7 @@ function loadMore(): void {
               <button
                 type="button"
                 class="secondary-button recently-deleted-delete-button"
-                :disabled="recentlyDeletedState.busy"
+                :disabled="!canEditVault || recentlyDeletedState.busy"
                 :aria-label="`Permanently delete ${displayTitle( entry )}`"
                 data-recovery-action="delete"
                 @click="permanentlyDelete( entry )"

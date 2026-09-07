@@ -6,6 +6,7 @@ import {
   VAULT_ATTACHMENT_DRAG_MIME
 } from '../lib/markdownAttachments';
 import {
+  canEditVault,
   activateVaultAttachment,
   renameVaultAttachment,
   requestInsertVaultAttachment,
@@ -50,7 +51,7 @@ const actionLabel = computed( () => {
   return archive.value ? 'Save archive as…' : 'Open file';
 });
 const rowTitle = computed( () =>
-  `${ props.attachment.relativePath } · Press Enter to embed or drag into the editor or onto a folder`
+  !canEditVault.value ? props.attachment.relativePath : `${ props.attachment.relativePath } · Press Enter to embed or drag into the editor or onto a folder`
 );
 const revealed = computed( () => vaultTreeItemIsRevealed({
   assetId: props.attachment.assetId,
@@ -59,6 +60,11 @@ const revealed = computed( () => vaultTreeItemIsRevealed({
 }) );
 
 function startDrag( event: DragEvent ): void {
+  if ( !canEditVault.value ) {
+    event.preventDefault();
+
+    return;
+  }
   if ( !event.dataTransfer ) {
     return;
   }
@@ -101,6 +107,9 @@ function showInFolder(): void {
 }
 
 function beginRename(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   editValue.value = fileName.value;
   editing.value = true;
@@ -182,10 +191,11 @@ function handleMenuFocusOut( event: FocusEvent ): void {
   >
     <template v-if="!editing">
       <button
+        :disabled="!canEditVault"
         type="button"
         class="vault-tree-attachment-main"
         data-vault-item-primary
-        draggable="true"
+        :draggable="canEditVault"
         :aria-current="revealed ? 'true' : undefined"
         :aria-label="`Insert ${fileName} into the active note`"
         @click="insertIntoActiveNote"
@@ -223,6 +233,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
             @keydown.esc.prevent="closeMenu( true )"
           >
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="insertIntoActiveNote"
@@ -240,6 +251,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
               {{ actionLabel }}
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="beginRename"
@@ -268,6 +280,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
       <input
         ref="renameInput"
         v-model="editValue"
+        :disabled="!canEditVault"
         type="text"
         maxlength="180"
         aria-label="Attachment file name"

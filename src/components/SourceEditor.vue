@@ -122,6 +122,7 @@ const props = defineProps<{
     target: MarkdownAttachmentRenameTarget,
     fileName: string
   ) => Promise<boolean>;
+  readOnly: boolean;
   showFrontmatter: boolean;
   vaultId: string;
   vaultPath: string | null;
@@ -286,7 +287,7 @@ const closeSuggestions: Command = ( view ) => {
 };
 
 const handleEnter: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -316,7 +317,7 @@ const handleEnter: Command = ( view ) => {
 };
 
 const handleShiftEnter: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -354,7 +355,7 @@ function applyTableNavigation(
     view.state.selection.main.head,
     navigation
   );
-  if ( !tableEdit ) {
+  if ( !tableEdit || ( view.state.readOnly && tableEdit.value !== value ) ) {
     return false;
   }
 
@@ -370,7 +371,7 @@ function applyTableNavigation(
 }
 
 const handleTab: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -393,7 +394,7 @@ const handleTab: Command = ( view ) => {
 };
 
 const handleShiftTab: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -729,7 +730,7 @@ const toggleBold: Command = ( view ) => toggleSelectionFormatting( view, '**', [
 const toggleItalic: Command = ( view ) => toggleSelectionFormatting( view, '*', [ '_' ]);
 const toggleStrikethrough: Command = ( view ) => toggleSelectionFormatting( view, '~~' );
 const insertLiteralHyphen: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -744,7 +745,7 @@ const insertLiteralHyphen: Command = ( view ) => {
   return true;
 };
 const wrapSelectionAsInlineCode: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -763,7 +764,7 @@ const wrapSelectionAsInlineCode: Command = ( view ) => {
   );
 };
 const wrapSelectionAsMarkdownLink: Command = ( view ) => {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -933,6 +934,14 @@ onMounted( () => {
     editableDocument.bodyStart
   );
   const extensions: Extension[] = [
+    EditorState.readOnly.of( props.readOnly ),
+    EditorView.editable.of( !props.readOnly ),
+    // Hydration and frontmatter visibility may replace the projected document.
+    EditorState.transactionFilter.of( ( transaction ) => (
+      props.readOnly && transaction.docChanged && !transaction.annotation( externalUpdate )
+        ? []
+        : transaction
+    ) ),
     lineNumbersCompartment.of( editorLineNumbers( frontmatterLineOffset ) ),
     highlightSpecialChars(),
     historyCompartment.of( history() ),
@@ -942,6 +951,8 @@ onMounted( () => {
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({
       'aria-label': 'Markdown source',
+      'aria-readonly': String( props.readOnly ),
+      tabindex: '0',
       autocapitalize: 'sentences',
       class: 'source-textarea',
       spellcheck: 'true'
@@ -960,7 +971,9 @@ onMounted( () => {
       documentId: `${ props.vaultId }\u0000${ props.noteId }`,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
-      renameAttachment: props.renameAttachment,
+      renameAttachment: ( target, fileName ) => props.readOnly
+        ? Promise.resolve( false )
+        : props.renameAttachment( target, fileName ),
       revealAttachmentInTree: revealLiveMarkdownAttachmentInTree,
       resolveAttachmentMetadata: resolveLiveMarkdownAttachmentMetadata,
       resolveImageSource: resolveLiveMarkdownImageSource,
@@ -1457,7 +1470,7 @@ function focusDocumentOffset( offset: number ): boolean {
 function captureImageInsertion(
   view = editorView.value
 ): ImageInsertionCapture | undefined {
-  if ( !view || view.state.selection.ranges.length !== 1 ) {
+  if ( props.readOnly || !view || view.state.selection.ranges.length !== 1 ) {
     return undefined;
   }
 
@@ -1497,7 +1510,8 @@ function insertEmbeddedImage(
   const insertion = pendingImageInsertions.get( capture.token );
   pendingImageInsertions.delete( capture.token );
   if (
-    !view
+    props.readOnly
+    || !view
     || !insertion
     || insertion.noteId !== props.noteId
     || insertion.from < 0
@@ -1591,7 +1605,7 @@ function inlineWikiLinkIsResolved( target: string ): boolean {
 
 function updateSuggestions( view: EditorView ): void {
   const selection = view.state.selection.main;
-  if ( !selection.empty ) {
+  if ( props.readOnly || !selection.empty ) {
     suggestionQuery.value = null;
 
     return;
@@ -1606,7 +1620,7 @@ function updateSuggestions( view: EditorView ): void {
 
 function insertSuggestion( title: string ): void {
   const view = editorView.value;
-  if ( !view || suggestionQuery.value === null ) {
+  if ( props.readOnly || !view || suggestionQuery.value === null ) {
     return;
   }
 
@@ -1628,7 +1642,7 @@ function toggleSelectionFormatting(
   marker: string,
   alternatives: string[] = []
 ): boolean {
-  if ( view.composing ) {
+  if ( view.state.readOnly || view.composing ) {
     return false;
   }
 
@@ -1650,6 +1664,9 @@ function applyMarkdownSelectionEdit(
   view: EditorView,
   edit: MarkdownSelectionEdit
 ): boolean {
+  if ( view.state.readOnly ) {
+    return false;
+  }
   const value = view.state.doc.toString();
   if ( edit.value === value ) {
     return true;
@@ -1952,7 +1969,7 @@ function restoreLineEndings(
 
 function handleSmartEnter( view: EditorView ): boolean {
   const selection = view.state.selection.main;
-  if ( !selection.empty ) {
+  if ( props.readOnly || !selection.empty ) {
     return false;
   }
 
@@ -2118,6 +2135,9 @@ function activeFenceBefore(
 }
 
 function adjustSelectedLines( view: EditorView, outdent: boolean ): boolean {
+  if ( view.state.readOnly ) {
+    return false;
+  }
   const value = view.state.doc.toString();
   const selection = view.state.selection.main;
   const selectionStart = selection.from;
@@ -2222,14 +2242,14 @@ function mapPositionThroughLiveMarkdownEdits(
 }
 
 function blockPendingEditorInteraction( event: Event ): void {
-  if ( !editorRenderReady.value ) {
+  if ( !editorRenderReady.value || ( props.readOnly && event.type !== 'keydown' ) ) {
     event.preventDefault();
     event.stopImmediatePropagation();
   }
 }
 
 function handleSourceEditorPaste( event: ClipboardEvent ): void {
-  if ( !editorRenderReady.value ) {
+  if ( props.readOnly || !editorRenderReady.value ) {
     blockPendingEditorInteraction( event );
 
     return;
@@ -2273,7 +2293,7 @@ function clearExternalFileDrag(): void {
 }
 
 function handleSourceEditorDragEnter( event: DragEvent ): void {
-  if ( !editorRenderReady.value || !isExternalFileDrag( event ) ) {
+  if ( props.readOnly || !editorRenderReady.value || !isExternalFileDrag( event ) ) {
     return;
   }
   externalFileDragDepth += 1;
@@ -2306,16 +2326,22 @@ function handleSourceEditorDragOver( event: DragEvent ): void {
   }
   event.preventDefault();
   event.stopImmediatePropagation();
-  if ( externalFiles && editorRenderReady.value ) {
+  if ( externalFiles && editorRenderReady.value && !props.readOnly ) {
     externalFileDragActive.value = true;
   }
   if ( event.dataTransfer ) {
-    event.dataTransfer.dropEffect = movingWithinNote ? 'move' : 'copy';
+    event.dataTransfer.dropEffect = props.readOnly ? 'none' : movingWithinNote ? 'move' : 'copy';
   }
 }
 
 function handleSourceEditorDrop( event: DragEvent ): void {
   clearExternalFileDrag();
+  if ( props.readOnly ) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    return;
+  }
   const transfer = event.dataTransfer;
   const internalImage = parseInternalImageDrag( transfer?.getData( NOTE_IMAGE_DRAG_MIME ) );
   const relativePath = transfer?.getData( VAULT_IMAGE_DRAG_MIME ).trim() ?? '';

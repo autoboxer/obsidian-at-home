@@ -48,6 +48,7 @@ pub(in crate::workspace) fn prepare_workspace_image_import(
     expected_revision: u64,
 ) -> Result<WorkspaceImageImportTransaction, String> {
     let baseline = revision_entries_for_root(root)?;
+    require_workspace_write_access(root)?;
     if revision_for_entries(&baseline) != expected_revision {
         return Err(
             "The vault changed before its assets could be imported. Reload it and try again."
