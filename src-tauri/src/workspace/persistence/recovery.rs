@@ -48,7 +48,7 @@ pub(in crate::workspace) fn prepare_note_archive(
     let original_path = resolve_workspace_file(root, original_relative_path, false)?;
     let stored_content = fs::read_to_string(&original_path)
         .map_err(|error| format!("Could not read the note before archiving it: {error}"))?;
-    let requested_content = content_with_requested_tags(&pending.note, Some(&stored_content))?;
+    let requested_content = content_with_requested_tags(&pending.note, false)?;
     if requested_content.as_bytes() != stored_content.as_bytes() {
         return Err(
             "The note changed before it could be archived. Save it and try again.".to_owned(),

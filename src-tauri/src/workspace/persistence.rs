@@ -1055,7 +1055,9 @@ pub(super) fn build_note_write_plans(
             }
             None => None,
         };
-        let content = content_with_requested_tags(note, old_content.as_deref())?;
+        // Restored snapshots must retain their source even though their files are new.
+        let allow_tag_initialization = old_relative_path.is_none() && preferred_new_path.is_none();
+        let content = content_with_requested_tags(note, allow_tag_initialization)?;
         if content.len() as u64 > MAX_NOTE_BYTES {
             return Err(format!(
                 "The note {:?} is too large after writing its frontmatter.",

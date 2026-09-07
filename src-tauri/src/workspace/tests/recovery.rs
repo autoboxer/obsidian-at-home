@@ -51,9 +51,12 @@ fn archives_and_reloads_a_note_without_scanning_the_snapshot() {
 }
 
 #[test]
-fn restored_snapshot_keeps_updated_time_after_workspace_reload() {
+fn tag_sync_restored_snapshot_keeps_source_and_metadata_after_reload() {
     let workspace = TestWorkspace::new("restore-round-trip");
-    let mut note = test_note("Remember this\n");
+    let mut note = tag_sync_note(
+        "\u{feff}---\r\ntags: [remember] # preserve\r\ncustom: keep\r\n---\r\nRemember this\r\n",
+        &["remember"],
+    );
     note.relative_path = "First note.markdown".to_owned();
     write_saved_note(&workspace, &note);
     let revision =
@@ -120,6 +123,8 @@ fn restored_snapshot_keeps_updated_time_after_workspace_reload() {
         .find(|candidate| candidate.id == restored.restored_note.id)
         .expect("restored note should reopen");
     assert_eq!(reopened_note.updated_at, note.updated_at);
+    assert_eq!(reopened_note.content, note.content);
+    assert_eq!(reopened_note.tags, note.tags);
 }
 
 #[test]
@@ -712,4 +717,57 @@ fn stale_committed_transaction_does_not_recreate_a_removed_snapshot() {
             .expect("snapshot path should be safe")
             .exists()
     );
+}
+
+#[test]
+fn tag_sync_archive_rejects_disagreement_without_rewriting_source() {
+    let workspace = TestWorkspace::new("tag-sync-archive-mismatch");
+    let saved = tag_sync_note("---\ntags:\n  - \"old\"\n---\nBody\n", &["old"]);
+    write_saved_note(&workspace, &saved);
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let state_before = fs::read(workspace_state_path(&workspace.root)).unwrap();
+    let pending = tag_sync_note("---\ntags: [new]\n---\nBody\n", &["old"]);
+
+    let error = save_workspace_files_with_archive(
+        &workspace.root,
+        &empty_vault("Test vault"),
+        revision,
+        Some(PendingNoteArchive {
+            note: pending,
+            original_folder_path: String::new(),
+            editor_position: None,
+        }),
+    )
+    .expect_err("archiving must not hide a mismatched source edit");
+    assert!(error.contains("tags do not match"), "{error}");
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&saved.relative_path)).unwrap(),
+        saved.content
+    );
+    assert_eq!(
+        fs::read(workspace_state_path(&workspace.root)).unwrap(),
+        state_before
+    );
+    assert_eq!(revision_for_root(&workspace.root).unwrap(), revision);
+}
+
+#[test]
+fn tag_sync_restored_note_does_not_initialize_legacy_tags() {
+    let workspace = TestWorkspace::new("tag-sync-restore-mismatch");
+    let note = tag_sync_note("Archived body without frontmatter\n", &["stale"]);
+    let preferred_paths = BTreeMap::from([(note.id.clone(), note.relative_path.clone())]);
+    let mut vault = empty_vault("Test vault");
+    vault.notes.push(note);
+
+    let error = build_note_write_plans(
+        &workspace.root,
+        &vault,
+        &WorkspaceState::default(),
+        &BTreeMap::new(),
+        &preferred_paths,
+    )
+    .err()
+    .expect("restoration must not rewrite a snapshot to resolve stale tags");
+    assert!(error.contains("tags do not match"), "{error}");
+    assert!(!workspace.root.join("First note.md").exists());
 }

@@ -259,3 +259,231 @@ fn recently_deleted_contract_uses_camel_case_and_fixed_retention() {
     );
     assert!(value.get("editorPosition").is_some());
 }
+
+fn tag_sync_note(content: &str, tags: &[&str]) -> Note {
+    let mut note = test_note(content);
+    note.tags = tags.iter().map(|tag| (*tag).to_owned()).collect();
+    note
+}
+
+#[test]
+fn tag_sync_rejects_existing_note_mismatches_before_writes() {
+    let workspace = TestWorkspace::new("tag-sync-rejected-save");
+    let saved = tag_sync_note("---\ntags: [old]\n---\nBody\n", &["old"]);
+    write_saved_note(&workspace, &saved);
+    let state_path = workspace_state_path(&workspace.root);
+    let state_before = fs::read(&state_path).unwrap();
+    let revision = revision_for_root(&workspace.root).unwrap();
+
+    for (content, tags) in [
+        ("---\ntags: [new]\n---\nBody\n", vec!["old"]),
+        ("---\ntags: []\n---\nBody\n", vec!["old"]),
+        ("---\ncustom: keep\n---\nBody\n", vec!["old"]),
+        ("Body without frontmatter\n", vec!["old"]),
+        ("---\ntags: [new]\nUnfinished\n", vec!["old"]),
+        ("---\ntags: [old]\n---\nBody\n", vec!["control"]),
+    ] {
+        let mut changed = tag_sync_note(content, &tags);
+        changed.title = "Renamed note".to_owned();
+        let mut new_note = test_note("A separate valid change\n");
+        new_note.id = "new-note".to_owned();
+        new_note.title = "New note".to_owned();
+        let mut vault = empty_vault("Test vault");
+        vault.notes = vec![new_note, changed];
+
+        let error = save_workspace_files(&workspace.root, &vault, revision)
+            .expect_err("inconsistent tags must reject the entire save");
+        assert!(error.contains("tags do not match"), "{error}");
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&saved.relative_path)).unwrap(),
+            saved.content
+        );
+        assert_eq!(fs::read(&state_path).unwrap(), state_before);
+        assert_eq!(revision_for_root(&workspace.root).unwrap(), revision);
+        assert!(!workspace.root.join("New note.md").exists());
+        assert!(!workspace.root.join("Renamed note.md").exists());
+    }
+}
+
+#[test]
+fn tag_sync_missing_saved_file_does_not_allow_legacy_tag_initialization() {
+    let workspace = TestWorkspace::new("tag-sync-missing-saved-file");
+    let mut note = tag_sync_note("---\ntags: [old]\n---\nBody\n", &["old"]);
+    write_saved_note(&workspace, &note);
+    let note_path = workspace.root.join(&note.relative_path);
+    fs::remove_file(&note_path).unwrap();
+    note.content = "Body without frontmatter\n".to_owned();
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let state_before = fs::read(workspace_state_path(&workspace.root)).unwrap();
+    let mut vault = empty_vault("Test vault");
+    vault.notes.push(note);
+
+    let error = save_workspace_files(&workspace.root, &vault, revision)
+        .expect_err("a known note must not be treated as a new legacy note");
+    assert!(error.contains("tags do not match"), "{error}");
+    assert!(!note_path.exists());
+    assert_eq!(
+        fs::read(workspace_state_path(&workspace.root)).unwrap(),
+        state_before
+    );
+}
+
+#[test]
+fn tag_sync_saves_source_and_control_edits_verbatim() {
+    let workspace = TestWorkspace::new("tag-sync-save-round-trip");
+    let note = tag_sync_note("---\ntags: [old]\n---\nBody\n", &["old"]);
+    write_saved_note(&workspace, &note);
+    let mut loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+
+    for (content, tags) in [
+        (
+            "\u{feff}---\r\n# Keep\r\ntags: [new]\r\ncustom: keep\r\n...\r\nBody\r\n",
+            vec!["new"],
+        ),
+        (
+            "---\ntags:\n  - \"new\"\n  - \"control\"\ncustom: keep\n---\nBody\n",
+            vec!["new", "control"],
+        ),
+        (
+            "---\ntags:\n  - \"control\"\ncustom: keep\n---\nEdited body\n",
+            vec!["control"],
+        ),
+        (
+            "---\ntags: [source] # preserve this comment\n---\nBody\n",
+            vec!["source"],
+        ),
+        ("---\ntags: []\ncustom: keep\n---\nBody\n", vec![]),
+        ("Body without frontmatter\n", vec![]),
+        ("---\ntags: [draft]\nUnfinished frontmatter\n", vec![]),
+        ("---\ntags: [finished]\n---\nBody\n", vec!["finished"]),
+    ] {
+        loaded.vault.notes[0].content = content.to_owned();
+        loaded.vault.notes[0].tags = tags.iter().map(|tag| (*tag).to_owned()).collect();
+        save_workspace_files(&workspace.root, &loaded.vault, loaded.revision)
+            .expect("synchronized source and tags should save");
+        assert_eq!(
+            fs::read(workspace.root.join(&note.relative_path)).unwrap(),
+            content.as_bytes()
+        );
+        loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+        assert_eq!(loaded.vault.notes[0].content, content);
+        assert_eq!(loaded.vault.notes[0].tags, tags);
+    }
+}
+
+#[test]
+fn tag_sync_initializes_legacy_tags_only_when_new_source_has_no_tag_field() {
+    for (content, expected) in [
+        ("# Legacy note\n", "---\ntags:\n  - \"legacy\"\n  - \"second\"\n---\n\n# Legacy note\n"),
+        ("\u{feff}# Legacy note\r\n", "\u{feff}---\r\ntags:\r\n  - \"legacy\"\r\n  - \"second\"\r\n---\r\n\r\n# Legacy note\r\n"),
+        ("---\ncustom: keep\n---\nBody\n", "---\ncustom: keep\ntags:\n  - \"legacy\"\n  - \"second\"\n---\nBody\n"),
+        ("---\ncustom:\n  tags: [nested]\n---\nBody\n", "---\ncustom:\n  tags: [nested]\ntags:\n  - \"legacy\"\n  - \"second\"\n---\nBody\n"),
+    ] {
+        let workspace = TestWorkspace::new("tag-sync-legacy-create");
+        let note = tag_sync_note(content, &["#legacy", "legacy", "second"]);
+        let mut vault = empty_vault("Legacy vault");
+        vault.notes.push(note);
+        save_workspace_files(&workspace.root, &vault, revision_for_root(&workspace.root).unwrap())
+            .expect("new legacy notes should retain metadata-only tags");
+        let loaded = load_workspace(&workspace.root, &vault).unwrap();
+        assert_eq!(loaded.vault.notes[0].content, expected);
+        assert_eq!(loaded.vault.notes[0].tags, vec!["legacy", "second"]);
+        save_workspace_files(&workspace.root, &loaded.vault, loaded.revision)
+            .expect("the initialized note should save again without rewriting");
+        assert_eq!(fs::read_to_string(workspace.root.join("First note.md")).unwrap(), expected);
+    }
+
+    for (content, tags) in [
+        ("---\ntags: [source]\n---\nBody\n", vec!["stale"]),
+        ("---\ntags: [source]\n---\nBody\n", vec![]),
+        ("---\ntags: []\n---\nBody\n", vec!["stale"]),
+        ("---\ntags:\n---\nBody\n", vec!["stale"]),
+        ("---\ntags: []\ntags: []\n---\nBody\n", vec!["stale"]),
+        ("---\nTags: [] # preserve\n---\nBody\n", vec!["stale"]),
+    ] {
+        let workspace = TestWorkspace::new("tag-sync-rejected-create");
+        let mut vault = empty_vault("Test vault");
+        vault.notes.push(tag_sync_note(content, &tags));
+        let error = save_workspace_files(
+            &workspace.root,
+            &vault,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .expect_err("an explicit source field must not be replaced during creation");
+        assert!(error.contains("tags do not match"), "{error}");
+        assert!(!workspace.root.join("First note.md").exists());
+        assert!(!workspace_state_path(&workspace.root).exists());
+    }
+}
+
+#[test]
+fn tag_sync_native_frontmatter_contract_preserves_source() {
+    let fixtures: &[(&str, &str, &[&str])] = &[
+        ("body is not metadata", "# Note\ntags: [body]\n", &[]),
+        (
+            "inline tags normalize and deduplicate",
+            "---\ntags: [old, '#work', old, '']\n---\nBody\n",
+            &["old", "work"],
+        ),
+        (
+            "block list",
+            "---\ntags:\n  - old\n  - 'isn''t'\nother: keep\n---\nBody\n",
+            &["old", "isn't"],
+        ),
+        (
+            "unindented list",
+            "---\ntags:\n- one\n- two\n---\n",
+            &["one", "two"],
+        ),
+        (
+            "scalar",
+            "---\ntags: old # keep this comment\n---\n",
+            &["old"],
+        ),
+        (
+            "quoted punctuation",
+            "---\ntags: ['a,b', 'isn''t', \"say \\\"hi\\\"\", '#work']\n---\n",
+            &["a,b", "isn't", "say \"hi\"", "work"],
+        ),
+        (
+            "BOM and CRLF",
+            "\u{feff}---\r\nTags: [old]\r\n...\r\nBody\r\n",
+            &["old"],
+        ),
+        ("empty list", "---\ntags: []\n---\nBody\n", &[]),
+        ("empty scalar", "---\ntags:\nother: keep\n---\n", &[]),
+        ("unfinished frontmatter", "---\ntags: [new]\nBody\n", &[]),
+        (
+            "nested tags are unrelated",
+            "---\nother:\n  tags: [nested]\ntags: [top]\n---\n",
+            &["top"],
+        ),
+        (
+            "comments in block list",
+            "---\ntags:\n  - one\n# keep\n  - two\n---\n",
+            &["one", "two"],
+        ),
+        (
+            "delimiter at end of file",
+            "---\ntags: [old]\n---",
+            &["old"],
+        ),
+        ("empty frontmatter", "---\n---\nBody\n", &[]),
+        (
+            "duplicate tag fields retain observed values",
+            "---\ntags: [one]\ntags: [two]\n---\n",
+            &["one", "two"],
+        ),
+    ];
+    for (label, content, tags) in fixtures {
+        assert_eq!(parse_frontmatter_tags(content), *tags, "{label}");
+        let note = tag_sync_note(content, tags);
+        for allow_initialization in [false, true] {
+            assert_eq!(
+                content_with_requested_tags(&note, allow_initialization).unwrap(),
+                *content,
+                "{label}"
+            );
+        }
+    }
+}
