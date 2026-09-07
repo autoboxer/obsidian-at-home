@@ -1,4 +1,5 @@
 import { createSeedVault } from '../data/seed';
+import { hasFrontmatterTags, normalizeTags, parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
 import type { Note, VaultData, VaultDescriptor } from '../types';
 import type { SmartFolderSelection } from './vaultState';
 
@@ -9,14 +10,32 @@ const ZOOM_STEP = 0.1;
 export const MIN_ZOOM = 0.7;
 export const MAX_ZOOM = 1.5;
 
+export function normalizeNote( note: Note ): Note {
+  let content = note.content;
+  const storedTags = normalizeTags( Array.isArray( note.tags ) ? note.tags : []);
+  // Older browser notes and seed data stored control edits only in the tag array.
+  // An explicit source field, including an empty one, takes precedence.
+  if ( storedTags.length && !hasFrontmatterTags( content ) ) {
+    try {
+      content = updateFrontmatterTags( content, storedTags );
+    } catch {
+      // Preserve legacy metadata when unfinished frontmatter cannot be migrated.
+      return { ...note, relativePath: note.relativePath ?? '', tags: storedTags };
+    }
+  }
+
+  return {
+    ...note,
+    content,
+    relativePath: typeof note.relativePath === 'string' ? note.relativePath : '',
+    tags: parseFrontmatterTags( content )
+  };
+}
+
 export function normalizeVault( input: Partial<VaultData> ): VaultData {
   const fallback = createSeedVault();
   const rawNotes = Array.isArray( input.notes ) ? input.notes : fallback.notes;
-  const notes: Note[] = rawNotes.map( ( note ) => ({
-    ...note,
-    relativePath: typeof note.relativePath === 'string' ? note.relativePath : '',
-    tags: Array.isArray( note.tags ) ? note.tags : []
-  }) );
+  const notes = rawNotes.map( normalizeNote );
   const folders = Array.isArray( input.folders ) ? input.folders : fallback.folders;
 
   const currentBuiltInSnippets = new Map(
