@@ -735,3 +735,82 @@ fn image_storage_refuses_source_and_destination_symlinks() {
     );
     assert!(!import_target.root.join("Source link 2.png").exists());
 }
+
+#[test]
+fn tag_sync_imported_notes_keep_source_tags_when_saved() {
+    let source = TestWorkspace::new("tag-sync-import-source");
+    let workspace = TestWorkspace::new("tag-sync-import-target");
+    let content = "\u{feff}---\r\ntags:\r\n- one\r\n# Keep\r\n- 'two words'\r\ncustom: keep\r\n...\r\nBody\r\n";
+    fs::write(source.root.join("Imported.md"), content).unwrap();
+    let imported = crate::vault::import_obsidian_vault(source.root.to_string_lossy().into_owned())
+        .expect("the source vault should import");
+    assert_eq!(imported.notes.len(), 1);
+    assert_eq!(imported.notes[0].content, content);
+    assert_eq!(imported.notes[0].tags, vec!["one", "two words"]);
+    let mut note = test_note(&imported.notes[0].content);
+    note.tags = imported.notes[0].tags.clone();
+    let mut vault = empty_vault("Imported vault");
+    vault.notes.push(note);
+    save_workspace_files(
+        &workspace.root,
+        &vault,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .expect("imported tags should agree with the native writer");
+    let loaded = load_workspace(&workspace.root, &vault).unwrap();
+    assert_eq!(loaded.vault.notes[0].content, content);
+    assert_eq!(loaded.vault.notes[0].tags, vec!["one", "two words"]);
+    assert_eq!(
+        fs::read_to_string(source.root.join("Imported.md")).unwrap(),
+        content
+    );
+}
+
+#[test]
+fn tag_sync_failed_note_import_rolls_back_copied_assets() {
+    let source = TestWorkspace::new("tag-sync-import-rollback-source");
+    let workspace = TestWorkspace::new("tag-sync-import-rollback-target");
+    fs::write(source.root.join("Report.pdf"), b"attachment").unwrap();
+    let saved = test_note("Keep the existing note\n");
+    write_saved_note(&workspace, &saved);
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let state_before = fs::read(workspace_state_path(&workspace.root)).unwrap();
+    let imported = begin_workspace_asset_import(
+        &workspace.root,
+        &source.root,
+        &[],
+        &["Report.pdf".to_owned()],
+        revision,
+    )
+    .unwrap();
+    let transaction_id = imported.transaction_id.as_deref().unwrap();
+    let mut mismatched = tag_sync_note("---\ntags: [source]\n---\nBody\n", &["stale"]);
+    mismatched.id = "imported-note".to_owned();
+    mismatched.title = "Imported".to_owned();
+    let mut vault = empty_vault("Imported vault");
+    vault.notes = vec![saved.clone(), mismatched];
+
+    let result = save_workspace_files_with_image_import(
+        &workspace.root,
+        &vault,
+        imported.revision,
+        transaction_id,
+    )
+    .expect("a rejected import should roll back cleanly");
+    assert!(!result.saved);
+    assert!(result
+        .error
+        .is_some_and(|error| error.contains("tags do not match")));
+    assert!(!workspace.root.join("Report.pdf").exists());
+    assert!(!workspace.root.join("Imported.md").exists());
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&saved.relative_path)).unwrap(),
+        saved.content
+    );
+    assert_eq!(
+        fs::read(workspace_state_path(&workspace.root)).unwrap(),
+        state_before
+    );
+    assert_eq!(result.revision, revision);
+    assert!(existing_transaction_root(&workspace.root, transaction_id).is_err());
+}

@@ -668,7 +668,12 @@ fn parse_basic_frontmatter(content: &str) -> BasicFrontmatter {
         }
 
         let is_indented = raw_line.starts_with(' ') || raw_line.starts_with('\t');
-        if reading_tag_list && is_indented {
+        if reading_tag_list
+            && (is_indented
+                || trimmed == "-"
+                || trimmed.starts_with("- ")
+                || trimmed.starts_with("-\t"))
+        {
             if let Some(value) = trimmed.strip_prefix('-') {
                 push_tag(&mut parsed.tags, parse_yaml_scalar(value.trim()));
             }

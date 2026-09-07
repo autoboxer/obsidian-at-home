@@ -1,4 +1,5 @@
 import { resolveWikiLink } from '../lib';
+import { parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
 import type { CssSnippet, Folder, Note, NoteTemplate } from '../types';
 import {
   createId,
@@ -56,6 +57,7 @@ export function createVaultContent(
     if ( content === undefined ) {
       note.content = `# ${ note.title }\n\n`;
     }
+    note.tags = parseFrontmatterTags( note.content );
     vaultState.notes.unshift( note );
     dependencies.selectNote( note.id );
     vaultState.selectedFolderId = 'all';
@@ -87,10 +89,21 @@ export function createVaultContent(
     );
   }
 
-  function updateNote( id: string, patch: NotePatch ): void {
+  function updateNote( id: string, patch: NotePatch ): boolean {
     const note = vaultState.notes.find( ( candidate ) => candidate.id === id );
     if ( !note ) {
-      return;
+      return false;
+    }
+    let content = patch.content ?? note.content;
+    if ( patch.tags !== undefined ) {
+      try {
+        content = updateFrontmatterTags( content, patch.tags );
+      } catch ( error ) {
+        const reason = error instanceof Error ? error.message : 'The tags could not be updated.';
+        dependencies.notify( `${ reason } Edit the tags in Markdown source instead.`, 'warning' );
+
+        return false;
+      }
     }
     const locationChanged = (
       patch.title !== undefined && patch.title !== note.title
@@ -103,19 +116,22 @@ export function createVaultContent(
     if ( patch.title !== undefined ) {
       note.title = patch.title;
     }
-    if ( patch.content !== undefined ) {
-      note.content = patch.content;
+    if ( patch.content !== undefined || patch.tags !== undefined ) {
+      note.content = content;
+      const tags = parseFrontmatterTags( content );
+      if ( tags.length !== note.tags.length || tags.some( ( tag, index ) => tag !== note.tags[ index ]) ) {
+        note.tags = tags;
+      }
     }
     if ( patch.folderId !== undefined ) {
       note.folderId = patch.folderId;
-    }
-    if ( patch.tags !== undefined ) {
-      note.tags = patch.tags;
     }
     if ( patch.pinned !== undefined ) {
       note.pinned = patch.pinned;
     }
     note.updatedAt = Date.now();
+
+    return true;
   }
 
   async function moveNoteToFolder(

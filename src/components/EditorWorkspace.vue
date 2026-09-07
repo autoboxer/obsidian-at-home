@@ -248,7 +248,9 @@ function addTag( suggestedTag?: string ): void {
     ( candidate ) => candidate.toLocaleLowerCase() === tag.toLocaleLowerCase()
   );
   if ( tag && !alreadyApplied ) {
-    updateNote( activeNote.value.id, { tags: [ ...activeNote.value.tags, tag ] });
+    if ( !updateNote( activeNote.value.id, { tags: [ ...activeNote.value.tags, tag ] }) ) {
+      return;
+    }
   }
 
   tagInput.value = '';

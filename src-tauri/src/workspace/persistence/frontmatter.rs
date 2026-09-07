@@ -2,26 +2,38 @@ use super::*;
 
 pub(in crate::workspace) fn content_with_requested_tags(
     note: &Note,
-    old_content: Option<&str>,
+    allow_tag_initialization: bool,
 ) -> Result<String, String> {
     let requested_tags = normalize_tags(&note.tags);
     if parse_frontmatter_tags(&note.content) == requested_tags {
         return Ok(note.content.clone());
     }
 
-    let action = if old_content.is_some() {
-        "update"
-    } else {
-        "write"
-    };
+    // Legacy seed/import notes can carry tags outside their Markdown. Only add
+    // an absent field when creating a note; never resolve conflicting edits by
+    // rewriting existing source, including an explicitly empty tags field.
+    let has_source_tags = frontmatter_bounds(&note.content).is_some_and(|(start, end, _)| {
+        note.content[start..end].lines().any(|line| {
+            !line.starts_with([' ', '\t'])
+                && line
+                    .split_once(':')
+                    .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case("tags"))
+        })
+    });
+    if !allow_tag_initialization || has_source_tags {
+        return Err(format!(
+            "Could not save {:?}: its tags do not match the Markdown source. Edit the tags in Markdown source and try again.",
+            note.title,
+        ));
+    }
     update_frontmatter_tags_conservatively(&note.content, &requested_tags).map_err(|error| {
         format!(
             concat!(
-                "Could not {} tags for {:?}: {} ",
+                "Could not write tags for {:?}: {} ",
                 "Edit the tags in Markdown source instead. ",
                 "If the frontmatter is hidden, reveal it from the note toolbar."
             ),
-            action, note.title, error,
+            note.title, error,
         )
     })
 }

@@ -68,6 +68,7 @@ import {
   errorMessage,
   isRevisionConflict,
   mergeRecentVaults,
+  normalizeNote,
   normalizeVault,
   persistStoredZoom,
   readStoredZoom,
@@ -2607,13 +2608,13 @@ function buildBrowserRestoredNote( deletedNote: RecentlyDeletedNote ): Note {
   const restoredFolderPath = folderId ? folderPath( folderId ) : '';
   const relativePath = `${ restoredFolderPath ? `${ restoredFolderPath }/` : '' }${ safeNoteStem( title ) }.${ originalExtension }`;
 
-  return {
+  return normalizeNote({
     ...cloneValue( deletedNote.note ),
     id: noteExists( deletedNote.note.id ) ? createId( 'note' ) : deletedNote.note.id,
     title,
     relativePath,
     folderId
-  };
+  });
 }
 
 function folderIdForPath( path: string ): string | undefined {
