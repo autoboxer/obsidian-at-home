@@ -32,10 +32,9 @@ fn archives_and_reloads_a_note_without_scanning_the_snapshot() {
     );
     assert!(snapshot_path.is_file());
 
-    let (scanned_notes, _, _, _) =
-        scan_workspace_files(&workspace.root, &mut WarningCollector::default())
-            .expect("workspace should scan");
-    assert!(scanned_notes.is_empty());
+    let scanned = scan_workspace_files(&workspace.root, &mut WarningCollector::default())
+        .expect("workspace should scan");
+    assert!(scanned.notes.is_empty());
 
     let loaded = load_workspace(&workspace.root, &empty_vault("Test vault"))
         .expect("workspace should reopen");

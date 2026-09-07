@@ -96,7 +96,8 @@ impl Default for WorkspaceState {
 pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<WorkspaceLoad, String> {
     let root = validate_workspace_root_path(root)?;
     let mut warnings = WarningCollector::default();
-    let (stored_state, state_file_was_present) = read_workspace_state(&root, &mut warnings);
+    let (stored_state, state_file_was_present, state_fingerprint) =
+        read_workspace_state_with_fingerprint(&root, &mut warnings);
     let state_was_present = stored_state.is_some();
     if state_was_present || !state_file_was_present {
         recover_workspace_transactions(&root, stored_state.as_ref(), &mut warnings)?;
@@ -106,9 +107,22 @@ pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<Worksp
                 .to_owned(),
         );
     }
+    let baseline = revision_entries_for_root(&root)?;
     let mut state = stored_state.unwrap_or_default();
-    let (scanned_notes, scanned_folders, scanned_images, scanned_attachments) =
-        scan_workspace_files(&root, &mut warnings)?;
+    let scanned = scan_workspace_files(&root, &mut warnings)?;
+    verify_workspace_load_reads(
+        &baseline,
+        &scanned,
+        state_fingerprint.as_ref(),
+        state_file_was_present,
+    )?;
+    let ScannedWorkspace {
+        notes: scanned_notes,
+        folders: scanned_folders,
+        images: scanned_images,
+        attachments: scanned_attachments,
+        ..
+    } = scanned;
 
     let mut used_note_ids = HashSet::new();
     let note_id_by_path = reverse_valid_paths(&state.note_paths, "note", &mut warnings);
@@ -342,29 +356,14 @@ pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<Worksp
         last_committed_transaction_id: state.last_committed_transaction_id.clone(),
         last_committed_image_import_id: state.last_committed_image_import_id.clone(),
     };
-    let mut state_was_written = false;
-    if state_was_present || !state_file_was_present {
-        match write_workspace_state(&root, &state) {
-            Ok(()) => state_was_written = true,
-            Err(error) => warnings.push(format!("Could not save workspace metadata: {error}")),
-        }
-    } else {
-        warnings.push(
-            "Workspace metadata was not replaced because the existing file could not be read."
-                .to_owned(),
-        );
-    }
-    if state_was_written {
-        cleanup_orphaned_recovery_snapshots(
-            &root,
-            &state.recently_deleted_notes,
-            &HashSet::new(),
-            &mut warnings,
-        );
-    }
-
+    let revision = persist_loaded_workspace(
+        &root,
+        &state,
+        state_was_present || !state_file_was_present,
+        &baseline,
+        &mut warnings,
+    )?;
     let opened_at = now_millis();
-    let revision = revision_for_root(&root)?;
     Ok(WorkspaceLoad {
         vault: VaultData {
             name: vault_name.clone(),
@@ -394,6 +393,45 @@ pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<Worksp
         warnings: warnings.finish(),
         revision,
     })
+}
+
+pub(super) fn persist_loaded_workspace(
+    root: &Path,
+    state: &WorkspaceState,
+    state_writable: bool,
+    baseline: &[RevisionEntry],
+    warnings: &mut WarningCollector,
+) -> Result<u64, String> {
+    // Check before writing so reconciled metadata cannot replace an external edit.
+    verify_workspace_load_revision(root, baseline, None)?;
+    let mut written_state = None;
+    if state_writable {
+        let bytes = workspace_state_bytes(state)?;
+        match write_loaded_workspace_state_bytes(
+            root,
+            &bytes,
+            workspace_state_revision_fingerprint(baseline).as_ref(),
+        ) {
+            Ok(()) => written_state = Some(fingerprint_bytes(&bytes)),
+            Err(error) => warnings.push(format!("Could not save workspace metadata: {error}")),
+        }
+    } else {
+        warnings.push(
+            "Workspace metadata was not replaced because the existing file could not be read."
+                .to_owned(),
+        );
+    }
+    if written_state.is_some() {
+        cleanup_orphaned_recovery_snapshots(
+            root,
+            &state.recently_deleted_notes,
+            &HashSet::new(),
+            warnings,
+        );
+    }
+
+    // Only the metadata bytes we wrote may differ from the loaded snapshot.
+    verify_workspace_load_revision(root, baseline, written_state.as_ref())
 }
 
 pub(super) fn save_workspace_files(
@@ -1144,20 +1182,26 @@ pub(super) fn build_folder_paths(folders: &[Folder]) -> Result<BTreeMap<String, 
 pub(super) fn scan_workspace_files(
     root: &Path,
     warnings: &mut WarningCollector,
-) -> Result<
-    (
-        Vec<ScannedNote>,
-        Vec<ScannedFolder>,
-        Vec<ScannedImage>,
-        Vec<ScannedAttachment>,
-    ),
-    String,
-> {
-    let mut notes = Vec::new();
-    let mut folders = Vec::new();
-    let mut images = Vec::new();
-    let mut attachments = Vec::new();
+) -> Result<ScannedWorkspace, String> {
+    scan_workspace_files_with_limits(
+        root,
+        warnings,
+        MAX_NOTES,
+        MAX_TOTAL_NOTE_BYTES,
+        MAX_VAULT_ASSETS,
+    )
+}
+
+pub(super) fn scan_workspace_files_with_limits(
+    root: &Path,
+    warnings: &mut WarningCollector,
+    max_notes: usize,
+    max_total_note_bytes: u64,
+    max_assets: usize,
+) -> Result<ScannedWorkspace, String> {
+    let mut scanned = ScannedWorkspace::default();
     let mut total_bytes = 0_u64;
+    let mut note_limit_reached = false;
     let walker = WalkDir::new(root)
         .follow_links(false)
         .max_depth(128)
@@ -1165,62 +1209,106 @@ pub(super) fn scan_workspace_files(
         .filter_entry(should_visit_workspace_entry);
 
     for entry in walker {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                warnings.push(format!("Could not inspect a vault entry: {error}"));
-                continue;
-            }
-        };
+        let entry = entry.map_err(|error| format!("Could not inspect a vault entry: {error}"))?;
         if entry.depth() == 0 || entry.file_type().is_symlink() {
             continue;
         }
-        let relative_path = match entry
+        let Some(relative_path) = entry
             .path()
             .strip_prefix(root)
             .ok()
             .and_then(path_to_slash_string)
-        {
-            Some(path)
-                if validate_relative_path(
-                    &path,
-                    entry.file_type().is_file() && is_markdown_path(entry.path()),
-                )
-                .is_ok() =>
-            {
-                path
-            }
-            _ => {
-                warnings.push(format!(
-                    "Skipped a vault entry with an unsupported path: {}",
-                    entry.path().display()
-                ));
-                continue;
-            }
+        else {
+            warnings.push(format!(
+                "Skipped a vault entry with an unsupported path: {}",
+                entry.path().display()
+            ));
+            continue;
         };
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                warnings.push(format!("Could not inspect {relative_path}: {error}"));
-                continue;
-            }
-        };
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Could not inspect {relative_path}: {error}"))?;
+        if metadata.file_type() != entry.file_type() {
+            return Err(workspace_load_changed());
+        }
+        let markdown = entry.file_type().is_file() && is_markdown_path(entry.path());
+        let path_is_valid = validate_relative_path(&relative_path, markdown).is_ok();
+        if !path_is_valid {
+            warnings.push(format!(
+                "Skipped a vault entry with an unsupported path: {}",
+                entry.path().display()
+            ));
+        }
         if entry.file_type().is_dir() {
-            folders.push(ScannedFolder {
-                relative_path,
-                created_at: metadata_time_millis(&metadata, true),
-            });
+            scanned
+                .revision_entries
+                .push((format!("D:{relative_path}"), None));
+            if path_is_valid {
+                scanned.folders.push(ScannedFolder {
+                    relative_path,
+                    created_at: metadata_time_millis(&metadata, true),
+                });
+            }
             continue;
         }
         if !entry.file_type().is_file() {
             continue;
         }
-        let markdown = is_markdown_path(entry.path());
+        if markdown && path_is_valid && !note_limit_reached {
+            if scanned.notes.len() >= max_notes {
+                warnings.push(format!("Stopped after {max_notes} Markdown notes."));
+                note_limit_reached = true;
+            } else if metadata.len() <= MAX_NOTE_BYTES
+                && total_bytes.saturating_add(metadata.len()) > max_total_note_bytes
+            {
+                warnings.push(format!(
+                    "Stopped after reading {} MiB of Markdown notes.",
+                    max_total_note_bytes / 1024 / 1024
+                ));
+                note_limit_reached = true;
+            }
+        }
+        let note_bytes =
+            if markdown && path_is_valid && !note_limit_reached && metadata.len() <= MAX_NOTE_BYTES
+            {
+                Some(
+                    fs::read(entry.path())
+                        .map_err(|error| format!("Could not read {relative_path}: {error}"))?,
+                )
+            } else {
+                None
+            };
+        let fingerprint = if let Some(bytes) = &note_bytes {
+            Some(fingerprint_bytes(bytes))
+        } else if markdown {
+            // Skipped notes still belong to the snapshot. Hash them without
+            // retaining their bytes or exceeding the editor's loading limits.
+            Some(fingerprint_regular_file(entry.path())?.ok_or_else(workspace_load_changed)?)
+        } else {
+            None
+        };
+        if fingerprint
+            .as_ref()
+            .is_some_and(|value| value.length != metadata.len())
+        {
+            return Err(workspace_load_changed());
+        }
+        scanned.revision_entries.push((
+            format!("F:{relative_path}"),
+            Some(revision_file_stamp(&metadata, fingerprint)),
+        ));
+        if !path_is_valid {
+            continue;
+        }
         if !markdown
-            && workspace_asset_limit_reached(images.len(), attachments.len(), MAX_VAULT_ASSETS)
+            && workspace_asset_limit_reached(
+                scanned.images.len(),
+                scanned.attachments.len(),
+                max_assets,
+            )
         {
             warnings.push(format!(
-                "Only the first {MAX_VAULT_ASSETS} asset files are shown in the vault."
+                "Only the first {max_assets} asset files are shown in the vault."
             ));
             continue;
         }
@@ -1235,7 +1323,7 @@ pub(super) fn scan_workspace_files(
             else {
                 continue;
             };
-            images.push(ScannedImage {
+            scanned.images.push(ScannedImage {
                 relative_path,
                 media_type: media_type.to_owned(),
             });
@@ -1245,7 +1333,7 @@ pub(super) fn scan_workspace_files(
             if metadata.len() > MAX_ATTACHMENT_BYTES {
                 continue;
             }
-            attachments.push(ScannedAttachment {
+            scanned.attachments.push(ScannedAttachment {
                 relative_path,
                 media_type: attachment_media_type_for_path(entry.path()).to_owned(),
                 byte_length: metadata.len(),
@@ -1253,9 +1341,8 @@ pub(super) fn scan_workspace_files(
             });
             continue;
         }
-        if notes.len() >= MAX_NOTES {
-            warnings.push(format!("Stopped after {MAX_NOTES} Markdown notes."));
-            break;
+        if note_limit_reached {
+            continue;
         }
         if metadata.len() > MAX_NOTE_BYTES {
             warnings.push(format!(
@@ -1264,14 +1351,7 @@ pub(super) fn scan_workspace_files(
             ));
             continue;
         }
-        if total_bytes.saturating_add(metadata.len()) > MAX_TOTAL_NOTE_BYTES {
-            warnings.push(format!(
-                "Stopped after reading {} MiB of Markdown notes.",
-                MAX_TOTAL_NOTE_BYTES / 1024 / 1024
-            ));
-            break;
-        }
-        let content = match fs::read_to_string(entry.path()) {
+        let content = match String::from_utf8(note_bytes.expect("eligible note bytes were read")) {
             Ok(content) => content,
             Err(error) => {
                 warnings.push(format!(
@@ -1282,7 +1362,7 @@ pub(super) fn scan_workspace_files(
         };
         total_bytes += metadata.len();
         let tags = parse_frontmatter_tags(&content);
-        notes.push(ScannedNote {
+        scanned.notes.push(ScannedNote {
             relative_path,
             content,
             created_at: metadata_time_millis(&metadata, true),
@@ -1291,40 +1371,61 @@ pub(super) fn scan_workspace_files(
         });
     }
 
-    notes.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    folders.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    images.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    attachments.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    Ok((notes, folders, images, attachments))
+    scanned
+        .notes
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    scanned
+        .folders
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    scanned
+        .images
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    scanned
+        .attachments
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    scanned
+        .revision_entries
+        .sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(scanned)
 }
 
 pub(super) fn read_workspace_state(
     root: &Path,
     warnings: &mut WarningCollector,
 ) -> (Option<WorkspaceState>, bool) {
+    let (state, present, _) = read_workspace_state_with_fingerprint(root, warnings);
+    (state, present)
+}
+
+pub(super) fn read_workspace_state_with_fingerprint(
+    root: &Path,
+    warnings: &mut WarningCollector,
+) -> (Option<WorkspaceState>, bool, Option<FileFingerprint>) {
     let path = workspace_state_path(root);
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return (None, false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (None, false, None),
         Err(error) => {
             warnings.push(format!("Could not inspect workspace metadata: {error}"));
 
-            return (None, true);
+            return (None, true, None);
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         warnings.push("Ignored workspace metadata because it is not a regular file.".to_owned());
 
-        return (None, true);
+        return (None, true, None);
     }
     if metadata.len() > 64 * 1024 * 1024 {
         warnings.push("Ignored workspace metadata because it is unexpectedly large.".to_owned());
 
-        return (None, true);
+        return (None, true, None);
     }
-    match fs::read(&path)
+    let mut fingerprint = None;
+    let result = match fs::read(&path)
         .map_err(|error| error.to_string())
         .and_then(|bytes| {
+            fingerprint = Some(fingerprint_bytes(&bytes));
             serde_json::from_slice::<WorkspaceState>(&bytes).map_err(|error| error.to_string())
         }) {
         Ok(state) if state.version <= STATE_VERSION => (Some(state), true),
@@ -1339,17 +1440,43 @@ pub(super) fn read_workspace_state(
             warnings.push(format!("Ignored invalid workspace metadata: {error}"));
             (None, true)
         }
-    }
+    };
+    (result.0, result.1, fingerprint)
 }
 
-pub(super) fn write_workspace_state(root: &Path, state: &WorkspaceState) -> Result<(), String> {
-    let directory = root.join(STATE_DIRECTORY);
-    ensure_state_directory(root, &directory)?;
+pub(super) fn workspace_state_bytes(state: &WorkspaceState) -> Result<Vec<u8>, String> {
     let mut bytes = serde_json::to_vec_pretty(state)
         .map_err(|error| format!("Could not encode workspace metadata: {error}"))?;
     bytes.push(b'\n');
-    atomic_write(&directory.join(STATE_FILE), &bytes)
+    Ok(bytes)
+}
+
+pub(super) fn write_workspace_state(root: &Path, state: &WorkspaceState) -> Result<(), String> {
+    write_workspace_state_bytes(root, &workspace_state_bytes(state)?)
+}
+
+fn write_workspace_state_bytes(root: &Path, bytes: &[u8]) -> Result<(), String> {
+    let directory = root.join(STATE_DIRECTORY);
+    ensure_state_directory(root, &directory)?;
+    atomic_write(&directory.join(STATE_FILE), bytes)
         .map_err(|error| format!("Could not write workspace metadata: {error}"))
+}
+
+pub(super) fn write_loaded_workspace_state_bytes(
+    root: &Path,
+    bytes: &[u8],
+    expected_fingerprint: Option<&FileFingerprint>,
+) -> Result<(), String> {
+    ensure_state_directory(root, &root.join(STATE_DIRECTORY))?;
+    let path = workspace_state_path(root);
+    atomic_write_with_precondition(&path, bytes, || {
+        let current = fingerprint_regular_file(&path).map_err(io::Error::other)?;
+        if current.as_ref() != expected_fingerprint {
+            return Err(io::Error::other(workspace_load_changed()));
+        }
+        Ok(())
+    })
+    .map_err(|error| format!("Could not write workspace metadata: {error}"))
 }
 
 pub(super) fn lock_workspace_files(root: &Path) -> Result<File, String> {
