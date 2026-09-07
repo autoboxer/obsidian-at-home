@@ -293,6 +293,7 @@ pub struct RecentlyDeletedNote {
 pub struct WorkspaceLoad {
     pub vault: VaultData,
     pub descriptor: VaultDescriptor,
+    pub access: WorkspaceAccess,
     #[serde(default)]
     pub recently_deleted_notes: Vec<RecentlyDeletedNote>,
     pub editor_positions: BTreeMap<String, NoteEditorPosition>,
@@ -300,6 +301,13 @@ pub struct WorkspaceLoad {
     pub editor_positions_writable: bool,
     pub warnings: Vec<String>,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum WorkspaceAccess {
+    ReadWrite,
+    ReadOnly { reason: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -194,6 +194,7 @@ pub(in crate::workspace) fn begin_external_file_upload(
     root: PathBuf,
     note_relative_path: String,
 ) -> Result<WorkspaceExternalFileUpload, String> {
+    require_workspace_write_access(&root)?;
     match kind {
         ExternalFileUploadKind::Image
             if expected_length == 0 || expected_length > MAX_IMAGE_BYTES =>
