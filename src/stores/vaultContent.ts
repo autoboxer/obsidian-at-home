@@ -13,6 +13,7 @@ import {
 } from './vaultModel';
 import { isSmartFolderSelection } from './vaultNavigation';
 import {
+  canEditVault,
   uiState,
   vaultSession,
   vaultState,
@@ -41,7 +42,10 @@ export function createVaultContent(
     folderId?: string | null,
     title = 'Untitled note',
     content?: string
-  ): Note {
+  ): Note | undefined {
+    if ( !canEditVault.value ) {
+      return undefined;
+    }
     const now = Date.now();
     const note: Note = {
       id: createId( 'note' ),
@@ -69,7 +73,7 @@ export function createVaultContent(
     return note;
   }
 
-  function createLinkedNote( target: string ): Note {
+  function createLinkedNote( target: string ): Note | undefined {
     const cleanTarget = target.replace( /\.md$/i, '' ).split( '/' ).pop()?.trim()
       || 'Untitled note';
     const existing = resolveWikiLink(
@@ -82,6 +86,11 @@ export function createVaultContent(
 
       return existing;
     }
+    if ( !canEditVault.value ) {
+      dependencies.notify( `Could not find note “${ cleanTarget }” in this read-only vault`, 'warning' );
+
+      return undefined;
+    }
 
     return createNote(
       dependencies.activeNote()?.folderId ?? dependencies.currentFolderId(),
@@ -90,6 +99,9 @@ export function createVaultContent(
   }
 
   function updateNote( id: string, patch: NotePatch ): boolean {
+    if ( !canEditVault.value ) {
+      return false;
+    }
     const note = vaultState.notes.find( ( candidate ) => candidate.id === id );
     if ( !note ) {
       return false;
@@ -138,6 +150,9 @@ export function createVaultContent(
     noteId: string,
     folderId: string | null
   ): Promise<boolean> {
+    if ( !canEditVault.value ) {
+      return false;
+    }
     let note = vaultState.notes.find( ( candidate ) => candidate.id === noteId );
     if ( !note ) {
       dependencies.notify( 'Could not move that note', 'warning' );
@@ -185,7 +200,9 @@ export function createVaultContent(
       }
     }
 
-    updateNote( noteId, { folderId });
+    if ( !updateNote( noteId, { folderId }) ) {
+      return false;
+    }
     if ( vaultSession.backend === 'native' && !( await dependencies.flushVault() ) ) {
       return false;
     }
@@ -206,6 +223,9 @@ export function createVaultContent(
     name: string,
     parentId: string | null = null
   ): Folder | undefined {
+    if ( !canEditVault.value ) {
+      return undefined;
+    }
     const cleanName = name.trim().replace( /[\\/]/g, ' ' );
     if ( !cleanName ) {
       return undefined;
@@ -241,6 +261,9 @@ export function createVaultContent(
   }
 
   function renameFolder( id: string, name: string ): void {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const folder = vaultState.folders.find( ( candidate ) => candidate.id === id );
     const cleanName = name.trim().replace( /[\\/]/g, ' ' );
     if ( !folder || !cleanName || folder.name === cleanName ) {
@@ -283,6 +306,9 @@ export function createVaultContent(
   }
 
   function moveFolder( folderId: string, parentId: string | null ): boolean {
+    if ( !canEditVault.value ) {
+      return false;
+    }
     const folder = vaultState.folders.find( ( candidate ) => candidate.id === folderId );
     if ( !folder ) {
       dependencies.notify( 'Could not move that folder', 'warning' );
@@ -353,6 +379,9 @@ export function createVaultContent(
   }
 
   function deleteFolder( id: string ): void {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const folder = vaultState.folders.find( ( candidate ) => candidate.id === id );
     if ( !folder ) {
       return;
@@ -457,7 +486,10 @@ export function createVaultContent(
 
   function saveTemplate(
     template: Partial<NoteTemplate> & Pick<NoteTemplate, 'name' | 'content'>
-  ): NoteTemplate {
+  ): NoteTemplate | undefined {
+    if ( !canEditVault.value ) {
+      return undefined;
+    }
     const existing = template.id
       ? vaultState.templates.find( ( candidate ) => candidate.id === template.id )
       : undefined;
@@ -482,7 +514,10 @@ export function createVaultContent(
 
   function saveSnippet(
     snippet: Partial<CssSnippet> & Pick<CssSnippet, 'name' | 'css'>
-  ): CssSnippet {
+  ): CssSnippet | undefined {
+    if ( !canEditVault.value ) {
+      return undefined;
+    }
     const existing = snippet.id
       ? vaultState.snippets.find( ( candidate ) => candidate.id === snippet.id )
       : undefined;
@@ -505,6 +540,9 @@ export function createVaultContent(
   }
 
   function deleteSnippet( id: string ): void {
+    if ( !canEditVault.value ) {
+      return;
+    }
     const index = vaultState.snippets.findIndex(
       ( snippet ) => snippet.id === id
     );

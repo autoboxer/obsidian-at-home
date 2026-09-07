@@ -4,6 +4,7 @@ import { formatCommandShortcut } from '../lib/keyboard';
 import { VAULT_IMAGE_DRAG_MIME } from '../lib/imageEmbeds';
 import { VAULT_ATTACHMENT_DRAG_MIME } from '../lib/markdownAttachments';
 import {
+  canEditVault,
   createFolder,
   createNote,
   FOLDER_DRAG_MIME,
@@ -257,6 +258,9 @@ function findRevealTargetRow(): HTMLElement | undefined {
 }
 
 function openFolderInput(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   folderInputOpen.value = true;
   nextTick( () => {
     folderField.value?.focus();
@@ -288,6 +292,9 @@ function openVaultChooser(): void {
 }
 
 function isTreeDrag( event: DragEvent ): boolean {
+  if ( !canEditVault.value ) {
+    return false;
+  }
   const types = Array.from( event.dataTransfer?.types ?? []);
 
   return Boolean(
@@ -382,6 +389,9 @@ async function handleRootDrop( event: DragEvent ): Promise<void> {
 }
 
 function isInvalidRootFolderDrop(): boolean {
+  if ( !canEditVault.value ) {
+    return true;
+  }
   if ( treeDragState.attachmentPath ) {
     const attachment = vaultState.attachmentFiles.find( ( candidate ) =>
       candidate.relativePath === treeDragState.attachmentPath
@@ -467,6 +477,7 @@ function handleRootKeydown( event: KeyboardEvent ): void {
 
     <div class="explorer-create-actions">
       <button
+        :disabled="!canEditVault"
         type="button"
         class="explorer-create-button"
         :title="`New note · ${createNoteShortcut}`"
@@ -476,6 +487,7 @@ function handleRootKeydown( event: KeyboardEvent ): void {
         New note
       </button>
       <button
+        :disabled="!canEditVault"
         type="button"
         class="explorer-create-button"
         title="New folder"
@@ -496,6 +508,7 @@ function handleRootKeydown( event: KeyboardEvent ): void {
         <input
           ref="folderField"
           v-model="folderName"
+          :disabled="!canEditVault"
           placeholder="Folder name"
           aria-label="Folder name"
           autocomplete="off"
@@ -551,6 +564,7 @@ function handleRootKeydown( event: KeyboardEvent ): void {
           <span id="vault-tree-heading">Files</span>
           <div class="section-label-actions">
             <button
+              :disabled="!canEditVault"
               type="button"
               aria-label="New note"
               :title="`New note · ${createNoteShortcut}`"
@@ -559,6 +573,7 @@ function handleRootKeydown( event: KeyboardEvent ): void {
               <AppIcon name="file-plus" :size="14" />
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               aria-label="New folder"
               title="New folder"
@@ -608,7 +623,7 @@ function handleRootKeydown( event: KeyboardEvent ): void {
                 <AppIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
                 <span>Vault root</span>
               </button>
-              <small>Drop here</small>
+              <small v-if="canEditVault">Drop here</small>
             </div>
 
             <Transition name="collapse-fade">

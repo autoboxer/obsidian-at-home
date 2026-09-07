@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from 'vue';
 import { VAULT_IMAGE_DRAG_MIME } from '../lib/imageEmbeds';
 import {
+  canEditVault,
   renameVaultImage,
   requestInsertVaultImage,
   showVaultItemInFolder,
@@ -25,10 +26,15 @@ const menuButton = ref<HTMLButtonElement>();
 
 const fileName = computed( () => props.image.relativePath.split( '/' ).at( -1 ) || 'Image' );
 const rowTitle = computed( () =>
-  `${ props.image.relativePath } · Press Enter to embed or drag onto a note or folder`
+  !canEditVault.value ? props.image.relativePath : `${ props.image.relativePath } · Press Enter to embed or drag onto a note or folder`
 );
 
 function startDrag( event: DragEvent ): void {
+  if ( !canEditVault.value ) {
+    event.preventDefault();
+
+    return;
+  }
   if ( !event.dataTransfer ) {
     return;
   }
@@ -66,6 +72,9 @@ function showInFolder(): void {
 }
 
 function beginRename(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   closeMenu();
   editValue.value = fileName.value;
   editing.value = true;
@@ -140,9 +149,10 @@ function handleMenuFocusOut( event: FocusEvent ): void {
   >
     <template v-if="!editing">
       <button
+        :disabled="!canEditVault"
         type="button"
         class="vault-tree-image-main"
-        draggable="true"
+        :draggable="canEditVault"
         :aria-label="`Insert ${fileName} into the active note`"
         @click="insertIntoActiveNote"
         @dragstart="startDrag"
@@ -179,6 +189,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
             @keydown.esc.prevent="closeMenu( true )"
           >
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="insertIntoActiveNote"
@@ -187,6 +198,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
               Insert into active note
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               role="menuitem"
               @click="beginRename"
@@ -215,6 +227,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
       <input
         ref="renameInput"
         v-model="editValue"
+        :disabled="!canEditVault"
         type="text"
         maxlength="180"
         aria-label="Image file name"

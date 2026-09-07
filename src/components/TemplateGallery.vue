@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from 'vue';
 import {
+  canEditVault,
   createFromTemplate,
   notify,
   saveTemplate,
@@ -63,6 +64,9 @@ function restoreFocus(): void {
 }
 
 async function openCreate(): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   editingId.value = null;
   Object.assign( draft, {
     name: '',
@@ -74,6 +78,9 @@ async function openCreate(): Promise<void> {
 }
 
 async function openEdit( template: NoteTemplate ): Promise<void> {
+  if ( !canEditVault.value ) {
+    return;
+  }
   editingId.value = template.builtIn ? null : template.id;
   Object.assign( draft, {
     name: template.builtIn ? `${ template.name } copy` : template.name,
@@ -85,6 +92,9 @@ async function openEdit( template: NoteTemplate ): Promise<void> {
 }
 
 function submitTemplate(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( !draft.name.trim() || !draft.content.trim() ) {
     return;
   }
@@ -137,6 +147,7 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
           <p>Templates can use <code v-pre>{{date}}</code>, <code v-pre>{{time}}</code>, and <code v-pre>{{title}}</code>.</p>
         </div>
         <button
+          :disabled="!canEditVault"
           type="button"
           class="primary-action-button"
           @click="openCreate"
@@ -170,6 +181,7 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
           </div>
           <footer>
             <button
+              :disabled="!canEditVault"
               type="button"
               class="template-edit"
               @click="openEdit( template )"
@@ -178,6 +190,7 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
               {{ template.builtIn ? "Duplicate" : "Edit" }}
             </button>
             <button
+              :disabled="!canEditVault"
               type="button"
               class="template-use"
               @click="useTemplate( template.id )"
@@ -228,13 +241,23 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
               <label><span>Name</span><input
                 ref="nameField"
                 v-model="draft.name"
+                :readonly="!canEditVault"
                 required
                 placeholder="Weekly review"
               ></label>
-              <label><span>Title pattern</span><input v-model="draft.titlePattern" placeholder="Weekly review — {{date}}"></label>
-              <label class="full-field"><span>Description</span><input v-model="draft.description" placeholder="A short explanation of when to use this."></label>
+              <label><span>Title pattern</span><input
+                v-model="draft.titlePattern"
+                :readonly="!canEditVault"
+                placeholder="Weekly review — {{date}}"
+              ></label>
+              <label class="full-field"><span>Description</span><input
+                v-model="draft.description"
+                :readonly="!canEditVault"
+                placeholder="A short explanation of when to use this."
+              ></label>
               <label class="full-field"><span>Markdown source</span><textarea
                 v-model="draft.content"
+                :readonly="!canEditVault"
                 required
                 spellcheck="false"
               /></label>
@@ -246,7 +269,11 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
                 @click="closeModal"
               >
                 Cancel
-              </button><button type="submit" class="primary-action-button">
+              </button><button
+                :disabled="!canEditVault"
+                type="submit"
+                class="primary-action-button"
+              >
                 <AppIcon name="check" :size="15" /> Save template
               </button>
             </footer>

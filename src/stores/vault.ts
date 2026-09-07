@@ -81,6 +81,7 @@ import {
   type NoteNavigationState
 } from './vaultNavigation';
 import {
+  canEditVault,
   recentlyDeletedState,
   uiState,
   vaultAttachmentInsertRequest,
@@ -93,6 +94,7 @@ import {
   type WorkspaceUiSnapshot
 } from './vaultState';
 export {
+  canEditVault,
   recentlyDeletedState,
   searchState,
   treeDragState,
@@ -181,7 +183,7 @@ const pendingNoteOriginalPaths = new Map<string, string>();
 watch(
   vaultState,
   () => {
-    if ( !initialized || suppressPersistence ) {
+    if ( !initialized || suppressPersistence || !canEditVault.value ) {
       return;
     }
     dirtyVersion += 1;
@@ -216,6 +218,7 @@ export function initializeVault(): Promise<void> {
 async function initializeVaultStorage(): Promise<void> {
   vaultSession.error = null;
   vaultSession.phase = 'loading';
+  vaultSession.access = { mode: 'read-write' };
 
   if ( !isTauri() ) {
     let storedVault: StoredBrowserWorkspace | null;
@@ -425,6 +428,7 @@ export async function forgetCurrentVault(): Promise<boolean> {
     vaultSession.conflict = false;
     vaultSession.warnings = [];
     vaultSession.phase = 'needs-vault';
+    vaultSession.access = { mode: 'read-write' };
     hydrateVault( createEmptyVault() );
     hydrateRecentlyDeletedNotes([]);
     resetNoteNavigation();
@@ -481,6 +485,9 @@ export async function reloadFilesystemVault(): Promise<boolean> {
 }
 
 export async function overwriteFilesystemVault(): Promise<boolean> {
+  if ( !canEditVault.value ) {
+    return false;
+  }
   const path = vaultSession.path;
   if ( vaultSession.backend !== 'native' || !path || vaultSession.busy ) {
     return false;
@@ -517,6 +524,9 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
 
 export async function flushVault( imageImportTransactionId?: string ): Promise<boolean> {
   clearTimeout( persistTimer );
+  if ( vaultSession.access.mode === 'read-only' ) {
+    return savedVersion >= dirtyVersion && !imageImportTransactionId;
+  }
 
   if ( recoverySaveInFlight ) {
     const saved = await recoverySaveInFlight;
@@ -1381,6 +1391,9 @@ function folderContainsAssets( folderId: string ): boolean {
 }
 
 export function requestInsertVaultImage( image: VaultImageFile ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( vaultSession.backend !== 'native' || !vaultSession.path || !activeNote.value ) {
     notify( 'Open a note in a desktop vault before inserting an image', 'warning' );
 
@@ -1543,6 +1556,9 @@ function applyRelocatedImageResult(
 }
 
 export function requestInsertVaultAttachment( attachment: VaultAttachmentFile ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( vaultSession.backend !== 'native' || !vaultSession.path || !activeNote.value ) {
     notify( 'Open a note in a desktop vault before inserting a file', 'warning' );
 
@@ -2081,7 +2097,7 @@ async function runExclusiveVaultDataOperation<T>(
   fallback: T,
   operation: () => Promise<T>
 ): Promise<T> {
-  if ( vaultSession.busy || vaultSession.phase !== 'ready' ) {
+  if ( vaultSession.busy || !canEditVault.value ) {
     return fallback;
   }
 
@@ -2098,7 +2114,7 @@ async function runRecoveryOperation( operation: () => Promise<boolean> ): Promis
   if (
     recentlyDeletedState.busy
     || vaultSession.busy
-    || vaultSession.phase !== 'ready'
+    || !canEditVault.value
   ) {
     return false;
   }
@@ -2246,6 +2262,9 @@ function applySavedNotePaths( notePaths: Record<string, string> | undefined ): v
 }
 
 export function applyEmbeddedImageResult( result: WorkspaceEmbedImageResult ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   applyVaultMutation( () => {
     const index = vaultState.embeddedImages.findIndex( ( image ) => image.id === result.image.id );
     if ( index >= 0 ) {
@@ -2266,6 +2285,9 @@ export function applyEmbeddedImageResult( result: WorkspaceEmbedImageResult ): v
 export function applyEmbeddedAttachmentResult(
   result: WorkspaceEmbedAttachmentResult
 ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   applyVaultMutation( () => {
     const index = vaultState.embeddedAttachments.findIndex(
       ( attachment ) => attachment.id === result.attachment.id
@@ -2392,6 +2414,9 @@ async function removeRecentlyDeletedNotes( ids: string[], successMessage: string
 }
 
 async function pruneExpiredRecentlyDeletedNotes(): Promise<boolean> {
+  if ( !canEditVault.value ) {
+    return false;
+  }
   const now = Date.now();
   if ( !recentlyDeletedState.notes.some( ( entry ) => entry.expiresAt <= now ) ) {
     scheduleRecentlyDeletedExpiry();
@@ -2464,7 +2489,7 @@ function scheduleRecentlyDeletedExpiry(): void {
 
     return;
   }
-  if ( vaultSession.phase !== 'ready' ) {
+  if ( !canEditVault.value ) {
     return;
   }
 
@@ -2485,7 +2510,7 @@ function scheduleRecentlyDeletedExpiry(): void {
 function scheduleRecentlyDeletedExpiryRetry(): void {
   clearTimeout( recentlyDeletedTimer );
   recentlyDeletedTimer = undefined;
-  if ( !recentlyDeletedState.notes.length || vaultSession.phase !== 'ready' ) {
+  if ( !recentlyDeletedState.notes.length || !canEditVault.value ) {
     return;
   }
 
@@ -2730,6 +2755,8 @@ function hydrateRecentlyDeletedNotes( notes: RecentlyDeletedNote[]): void {
 function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.recentVaults ): void {
   const previousPath = vaultSession.path;
   sessionGeneration += 1;
+  clearTimeout( persistTimer );
+  vaultSession.access = workspace.access;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
   uiState.imageRefreshToken += 1;
   uiState.attachmentRefreshToken += 1;

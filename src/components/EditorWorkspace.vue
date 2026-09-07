@@ -18,6 +18,7 @@ import {
   setNoteEditorPosition
 } from '../stores/editorPositions';
 import {
+  canEditVault,
   activeNote,
   backNavigationNote,
   canNavigateBack,
@@ -83,8 +84,10 @@ defineExpose({ storeAndInsertAttachment });
 
 const noteTitles = computed( () => vaultState.notes.map( ( note ) => note.title ) );
 const positionVaultId = computed( () => editorPositionVaultId( vaultSession.backend, vaultSession.path ) );
+// Access changes rebuild the editor and its widget controls.
 const editorKey = computed( () => JSON.stringify([
   positionVaultId.value,
+  canEditVault.value,
   activeNote.value?.id ?? null
 ]) );
 const sortedFolders = computed( () => [ ...vaultState.folders ].sort( ( a, b ) => folderPath( a.id ).localeCompare( folderPath( b.id ) ) ) );
@@ -225,6 +228,9 @@ async function setFolder( event: Event ): Promise<void> {
 }
 
 function openTagInput(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   tagInput.value = '';
   tagSuggestionIndex.value = -1;
   tagInputOpen.value = true;
@@ -239,6 +245,9 @@ function normalizeTag( value: string ): string {
 }
 
 function addTag( suggestedTag?: string ): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( !activeNote.value ) {
     return;
   }
@@ -290,6 +299,9 @@ function removeTag( tag: string ): void {
 }
 
 function requestDelete(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   if ( !activeNote.value ) {
     return;
   }
@@ -304,6 +316,9 @@ function toggleFrontmatter(): void {
 }
 
 function openQuickFolder(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   quickFolderOpen.value = true;
   nextTick( () => quickFolderField.value?.focus() );
 }
@@ -347,6 +362,13 @@ watch(
     noteMenuOpen.value = false;
   }
 );
+
+watch( canEditVault, ( editable ) => {
+  if ( !editable ) {
+    cancelTagInput();
+    closeQuickFolder();
+  }
+});
 
 watch( tagInput, () => {
   tagSuggestionIndex.value = -1;
@@ -405,6 +427,7 @@ watch( tagInput, () => {
         <Transition name="chip-swap">
           <div v-if="!uiState.explorerOpen" class="vault-hidden-actions">
             <button
+              :disabled="!canEditVault"
               type="button"
               class="icon-button subtle"
               aria-label="Create note"
@@ -416,6 +439,7 @@ watch( tagInput, () => {
             <div class="menu-anchor">
               <button
                 ref="quickFolderButton"
+                :disabled="!canEditVault"
                 type="button"
                 class="icon-button subtle"
                 aria-label="Create folder"
@@ -447,7 +471,7 @@ watch( tagInput, () => {
                     >
                     <button
                       type="submit"
-                      :disabled="!quickFolderName.trim()"
+                      :disabled="!canEditVault || !quickFolderName.trim()"
                       aria-label="Create folder"
                     >
                       <AppIcon name="arrow" :size="14" />
@@ -476,7 +500,7 @@ watch( tagInput, () => {
           class="icon-button"
           type="button"
           data-note-action="embed-attachment"
-          :disabled="!nativeAvailable || attachmentEmbedBusy || imageEmbedBusy || vaultSession.busy"
+          :disabled="!canEditVault || !nativeAvailable || attachmentEmbedBusy || imageEmbedBusy || vaultSession.busy"
           aria-label="Embed file"
           :title="`Embed file · ${embedAttachmentShortcut}`"
           @click="requestAttachmentFromToolbar"
@@ -487,7 +511,7 @@ watch( tagInput, () => {
           class="icon-button"
           type="button"
           data-note-action="embed-image"
-          :disabled="!nativeAvailable || imageEmbedBusy || attachmentEmbedBusy || vaultSession.busy"
+          :disabled="!canEditVault || !nativeAvailable || imageEmbedBusy || attachmentEmbedBusy || vaultSession.busy"
           aria-label="Embed image"
           :title="`Embed image · ${embedImageShortcut}`"
           @click="requestImageFromToolbar"
@@ -495,6 +519,7 @@ watch( tagInput, () => {
           <AppIcon name="image" :size="16" />
         </button>
         <button
+          :disabled="!canEditVault"
           class="icon-button"
           type="button"
           :class="{ active: activeNote.pinned }"
@@ -539,6 +564,7 @@ watch( tagInput, () => {
           <Transition name="popover-fade">
             <div v-if="noteMenuOpen" class="popover-menu compact-menu">
               <button
+                :disabled="!canEditVault"
                 type="button"
                 class="danger"
                 @click="requestDelete"
@@ -557,6 +583,7 @@ watch( tagInput, () => {
           <input
             class="note-title-input"
             data-ui-region="note-title"
+            :readonly="!canEditVault"
             :value="activeNote.title"
             aria-label="Note title"
             placeholder="Untitled note"
@@ -566,6 +593,7 @@ watch( tagInput, () => {
             <label class="property-control folder-property">
               <AppIcon name="folder" :size="14" />
               <select
+                :disabled="!canEditVault"
                 :value="activeNote.folderId ?? ''"
                 aria-label="Move note to folder"
                 @change="setFolder"
@@ -588,6 +616,7 @@ watch( tagInput, () => {
             >
               <span>#</span>{{ tag }}
               <button
+                :disabled="!canEditVault"
                 type="button"
                 :aria-label="`Remove ${tag} tag`"
                 @click="removeTag( tag )"
@@ -630,6 +659,7 @@ watch( tagInput, () => {
                     v-for="( tag, index ) in tagSuggestions"
                     :id="`tag-suggestion-${index}`"
                     :key="tag"
+                    :disabled="!canEditVault"
                     type="button"
                     role="option"
                     :aria-selected="index === tagSuggestionIndex"
@@ -644,6 +674,7 @@ watch( tagInput, () => {
               <button
                 v-else
                 key="tag-button"
+                :disabled="!canEditVault"
                 type="button"
                 class="add-tag-button"
                 @click="openTagInput"
@@ -669,6 +700,7 @@ watch( tagInput, () => {
             :note-relative-path="activeNote.relativePath"
             :note-titles="noteTitles"
             :rename-attachment="renameVaultAttachment"
+            :read-only="!canEditVault"
             :show-frontmatter="uiState.frontmatterVisible"
             :vault-id="positionVaultId"
             :vault-path="vaultSession.path"
@@ -692,7 +724,8 @@ watch( tagInput, () => {
       <footer class="editor-statusbar">
         <div>
           <span class="status-dot" :class="uiState.saveStatus" />
-          <span v-if="uiState.saveStatus === 'saving'">Saving…</span>
+          <span v-if="!canEditVault">Read only</span>
+          <span v-else-if="uiState.saveStatus === 'saving'">Saving…</span>
           <span v-else-if="uiState.saveStatus === 'error'">Couldn’t save</span>
           <span v-else>Saved</span>
         </div>
@@ -710,7 +743,7 @@ watch( tagInput, () => {
         <AppIcon name="file-plus" :size="28" />
       </div>
       <h2>No note selected</h2>
-      <p>Select a note or create a new one.</p>
+      <p>{{ canEditVault ? "Select a note or create a new one." : "Select a note to read." }}</p>
     </div>
   </main>
 </template>

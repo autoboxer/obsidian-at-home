@@ -104,6 +104,7 @@ export class TaskWidget extends WidgetType {
     marker.textContent = this.source;
     checkbox.className = 'live-task-checkbox';
     checkbox.type = 'button';
+    checkbox.disabled = view.state.readOnly;
     checkbox.tabIndex = -1;
     checkbox.setAttribute(
       'aria-label',
@@ -385,7 +386,7 @@ export class MarkdownAttachmentWidget extends WidgetType {
       ) );
     }
     const renameTarget = this.metadata?.renameTarget;
-    if ( renameTarget && this.renameAttachment ) {
+    if ( !view.state.readOnly && renameTarget && this.renameAttachment ) {
       const rename = document.createElement( 'button' );
       const fileName = renameTarget.relativePath.split( '/' ).at( -1 )
         || presentation.name;
@@ -632,7 +633,7 @@ export class MarkdownImageWidget extends WidgetType {
     frame.dataset.imageAssetId = this.image.assetId ?? '';
     frame.dataset.imageDestination = this.image.destination;
     frame.setAttribute( 'contenteditable', 'false' );
-    frame.draggable = true;
+    frame.draggable = !view.state.readOnly;
     image.alt = this.image.alt;
     image.className = 'live-embedded-image__content';
     image.decoding = 'async';
@@ -670,6 +671,11 @@ export class MarkdownImageWidget extends WidgetType {
       revealWidgetSource( view, frame, event, this.from, this.to )
     );
     frame.addEventListener( 'dragstart', ( event ) => {
+      if ( view.state.readOnly ) {
+        event.preventDefault();
+
+        return;
+      }
       if ( !event.dataTransfer ) {
         return;
       }

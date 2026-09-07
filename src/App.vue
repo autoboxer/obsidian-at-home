@@ -35,6 +35,11 @@ const vaultChooserVisible = computed(
   () => vaultSession.phase !== 'loading'
     && ( vaultSession.phase !== 'ready' || uiState.vaultChooserOpen )
 );
+const readOnlyReason = computed( () => (
+  vaultSession.phase === 'ready' && vaultSession.access.mode === 'read-only'
+    ? vaultSession.access.reason
+    : null
+) );
 const appInteractionBlocked = computed(
   () => vaultSession.phase !== 'ready'
     || uiState.vaultChooserOpen
@@ -193,7 +198,7 @@ onBeforeUnmount( () => {
 <template>
   <div
     class="app-frame"
-    :class="`tool-${uiState.tool}`"
+    :class="[ `tool-${uiState.tool}`, { 'is-read-only': readOnlyReason !== null }]"
     :data-app-view="uiState.tool"
     data-ui-region="app"
   >
@@ -211,6 +216,16 @@ onBeforeUnmount( () => {
       </div>
       <div data-tauri-drag-region />
     </header>
+
+    <div
+      v-if="readOnlyReason !== null"
+      class="vault-access-banner"
+      data-ui-region="vault-access"
+      role="status"
+    >
+      <strong>Read only</strong>
+      <span>{{ readOnlyReason }}</span>
+    </div>
 
     <div class="app-content" :inert="appInteractionBlocked">
       <ActivityRail />

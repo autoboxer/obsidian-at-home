@@ -9,6 +9,30 @@
   background: var(--bg);
 }
 
+.app-frame.is-read-only {
+  grid-template-rows: var(--titlebar-height) auto minmax(0, 1fr);
+}
+
+.app-frame.is-read-only :is(button, select):disabled {
+  opacity: 0.45;
+}
+
+.vault-access-banner {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-faint);
+  background: var(--panel);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.vault-access-banner strong {
+  flex-shrink: 0;
+  color: var(--text);
+}
+
 .desktop-titlebar {
   position: relative;
   z-index: 100;

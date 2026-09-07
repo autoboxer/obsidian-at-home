@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { deleteSnippet, notify, saveSnippet, vaultState } from '../stores/vault';
+import {
+  canEditVault,
+  deleteSnippet,
+  notify,
+  saveSnippet,
+  vaultState
+} from '../stores/vault';
 import type { CssSnippet } from '../types';
 import AppIcon from './AppIcon.vue';
 
@@ -24,6 +30,9 @@ function loadDraft( snippet?: CssSnippet ): void {
 }
 
 function markDirty(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   dirty.value = true;
 }
 
@@ -31,7 +40,9 @@ function save(): void {
   if ( !activeSnippet.value ) {
     return;
   }
-  saveSnippet({ id: activeSnippet.value.id, ...draft });
+  if ( !saveSnippet({ id: activeSnippet.value.id, ...draft }) ) {
+    return;
+  }
   dirty.value = false;
   notify( 'CSS snippet saved', 'success' );
 }
@@ -43,14 +54,19 @@ function create(): void {
     css: `.source-editor {\n  /* Add your styles here */\n}\n`,
     enabled: true
   });
-  activeId.value = snippet.id;
+  if ( snippet ) {
+    activeId.value = snippet.id;
+  }
 }
 
 function toggle( snippet: CssSnippet ): void {
-  snippet.enabled = !snippet.enabled;
+  saveSnippet({ ...snippet, enabled: !snippet.enabled });
 }
 
 function remove(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   const snippet = activeSnippet.value;
   if ( !snippet || snippet.builtIn ) {
     return;
@@ -81,6 +97,7 @@ async function closeReference(): Promise<void> {
         <header>
           <div><span class="utility-eyebrow">Appearance</span><h1>CSS snippets</h1></div>
           <button
+            :disabled="!canEditVault"
             type="button"
             class="icon-button"
             title="New snippet"
@@ -122,6 +139,7 @@ async function closeReference(): Promise<void> {
             <label class="toggle-control">
               <input
                 type="checkbox"
+                :disabled="!canEditVault"
                 :checked="activeSnippet.enabled"
                 @change="toggle( activeSnippet )"
               >
@@ -130,6 +148,7 @@ async function closeReference(): Promise<void> {
             </label>
             <button
               v-if="!activeSnippet.builtIn"
+              :disabled="!canEditVault"
               type="button"
               class="icon-button danger-hover"
               title="Delete snippet"
@@ -140,7 +159,7 @@ async function closeReference(): Promise<void> {
             <button
               type="button"
               class="primary-action-button small"
-              :disabled="!dirty"
+              :disabled="!canEditVault || !dirty"
               @click="save"
             >
               <AppIcon name="check" :size="14" /> Save
@@ -149,8 +168,16 @@ async function closeReference(): Promise<void> {
         </header>
 
         <div class="snippet-fields">
-          <label><span>Name</span><input v-model="draft.name" @input="markDirty"></label>
-          <label><span>Description</span><input v-model="draft.description" @input="markDirty"></label>
+          <label><span>Name</span><input
+            v-model="draft.name"
+            :readonly="!canEditVault"
+            @input="markDirty"
+          ></label>
+          <label><span>Description</span><input
+            v-model="draft.description"
+            :readonly="!canEditVault"
+            @input="markDirty"
+          ></label>
         </div>
 
         <div class="css-editor-frame">
@@ -161,6 +188,7 @@ async function closeReference(): Promise<void> {
             <pre class="css-line-numbers" aria-hidden="true">{{ draft.css.split( '\n' ).map( ( _, index ) => index + 1 ).join( '\n' ) }}</pre>
             <textarea
               v-model="draft.css"
+              :readonly="!canEditVault"
               spellcheck="false"
               aria-label="CSS source"
               @input="markDirty"

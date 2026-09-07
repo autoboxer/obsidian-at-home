@@ -221,6 +221,7 @@ export interface WorkspaceAttachmentCopyResult {
 
 export interface VaultSessionState {
   phase: 'loading' | 'needs-vault' | 'ready' | 'error';
+  access: WorkspaceAccess;
   backend: 'native' | 'browser';
   path: string | null;
   recentVaults: VaultDescriptor[];

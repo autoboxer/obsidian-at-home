@@ -54,6 +54,7 @@ export class CodeFenceHeaderWidget extends WidgetType {
 
     button.type = 'button';
     button.className = 'live-code-language-button';
+    button.disabled = view.state.readOnly;
     button.setAttribute( 'aria-haspopup', 'listbox' );
     button.setAttribute( 'aria-expanded', 'false' );
     label.textContent = codeLanguageLabel( this.fence.language );

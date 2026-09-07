@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { createSearchSnippet, searchNotes } from '../lib';
 import {
+  canEditVault,
   createNote,
   folderNameMap,
   searchState,
@@ -60,6 +61,9 @@ function chooseNote( id: string ): void {
 }
 
 function create(): void {
+  if ( !canEditVault.value ) {
+    return;
+  }
   createNote();
   close();
 }
@@ -182,7 +186,11 @@ function escapeHtml( value: string ): string {
       </div>
 
       <footer class="command-footer">
-        <button type="button" @click="create">
+        <button
+          :disabled="!canEditVault"
+          type="button"
+          @click="create"
+        >
           <span><AppIcon name="plus" :size="13" /></span> New note
         </button>
         <div><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span></div>

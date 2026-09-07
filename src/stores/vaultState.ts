@@ -1,4 +1,4 @@
-import { reactive } from 'vue';
+import { computed, reactive } from 'vue';
 import { createEmptyVault } from '../data/seed';
 import { isTauri, type WorkspaceVaultItemKind } from '../services/native';
 import type {
@@ -103,6 +103,7 @@ export const recentlyDeletedState = reactive<RecentlyDeletedState>({
 
 export const vaultSession = reactive<VaultSessionState>({
   phase: 'loading',
+  access: { mode: 'read-write' },
   backend: isTauri() ? 'native' : 'browser',
   path: null,
   recentVaults: [],
@@ -113,6 +114,10 @@ export const vaultSession = reactive<VaultSessionState>({
   conflict: false,
   warnings: []
 });
+
+export const canEditVault = computed( () =>
+  vaultSession.phase === 'ready' && vaultSession.access.mode === 'read-write'
+);
 
 export const uiState = reactive<UiState>({
   tool: 'notes',
