@@ -10,13 +10,14 @@ import {
   selectNote,
   uiState
 } from '../stores/vault';
+import type { WikiLink } from '../types';
 import AppIcon from './AppIcon.vue';
 
 const uniqueOutgoing = computed( () => {
   const seen = new Set<string>();
 
   return outgoingLinks.value.filter( ({ link }) => {
-    const key = link.target.toLocaleLowerCase();
+    const key = link.target;
     if ( seen.has( key ) ) {
       return false;
     }
@@ -32,11 +33,11 @@ const wordCount = computed( () => {
   return content ? content.split( /\s+/ ).length : 0;
 });
 
-function openOutgoing( target: string, noteId?: string ): void {
+function openOutgoing( link: WikiLink, noteId?: string ): void {
   if ( noteId ) {
     selectNote( noteId );
   } else {
-    createLinkedNote( target );
+    createLinkedNote( link );
   }
 }
 
@@ -102,7 +103,7 @@ function formatDate( timestamp?: number ): string {
               class="connection-card outgoing-card"
               :disabled="!item.note && !canEditVault"
               :class="{ unresolved: !item.note }"
-              @click="openOutgoing( item.link.target, item.note?.id )"
+              @click="openOutgoing( item.link, item.note?.id )"
             >
               <span class="connection-node"><AppIcon :name="item.note ? 'file-text' : 'plus'" :size="14" /></span>
               <span>

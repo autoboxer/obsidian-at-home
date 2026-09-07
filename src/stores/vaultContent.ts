@@ -1,4 +1,4 @@
-import { resolveWikiLink } from '../lib';
+import { normalizeWikiTarget, wikiLinkCandidates, type WikiLinkTarget } from '../lib/wikiLinks';
 import { parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
 import type { CssSnippet, Folder, Note, NoteTemplate } from '../types';
 import {
@@ -9,6 +9,7 @@ import {
   noteFileNameKeys,
   noteStemKey,
   replaceTemplateTokens,
+  safeNoteStem,
   uniqueNoteTitle
 } from './vaultModel';
 import { isSmartFolderSelection } from './vaultNavigation';
@@ -26,6 +27,7 @@ interface VaultContentDependencies {
   flushVault: () => Promise<boolean>;
   folderContainsAssets: ( id: string ) => boolean;
   notify: ( message: string, tone: ToastTone ) => void;
+  noteLinkPaths: () => ReadonlyMap<string, string>;
   rememberNoteOriginalPath: ( note: Note ) => void;
   selectNote: ( id: string ) => void;
 }
@@ -73,28 +75,46 @@ export function createVaultContent(
     return note;
   }
 
-  function createLinkedNote( target: string ): Note | undefined {
-    const cleanTarget = target.replace( /\.md$/i, '' ).split( '/' ).pop()?.trim()
-      || 'Untitled note';
-    const existing = resolveWikiLink(
-      cleanTarget,
+  function createLinkedNote( link: WikiLinkTarget | string ): Note | undefined {
+    const target = typeof link === 'string' ? normalizeWikiTarget( link ) : link.target;
+    const candidates = wikiLinkCandidates(
+      { target },
       vaultState.notes,
-      dependencies.activeNote()
+      dependencies.activeNote(),
+      dependencies.noteLinkPaths()
     );
-    if ( existing ) {
+    if ( candidates.length === 1 ) {
+      const existing = candidates[ 0 ]!;
       dependencies.selectNote( existing.id );
 
       return existing;
     }
+    if ( candidates.length > 1 ) {
+      dependencies.notify( `More than one note matches “${ target }”. Use the full file path in the link.`, 'warning' );
+
+      return undefined;
+    }
     if ( !canEditVault.value ) {
-      dependencies.notify( `Could not find note “${ cleanTarget }” in this read-only vault`, 'warning' );
+      dependencies.notify( `Could not find note “${ target }” in this read-only vault`, 'warning' );
+
+      return undefined;
+    }
+
+    const title = target.replace( /\.md$/i, '' );
+    // Creating a basename-only note would silently change an explicit destination.
+    if (
+      !title || target.includes( '/' ) || /\.markdown$/i.test( target )
+      || safeNoteStem( title ) !== title
+      || uniqueNoteTitle( vaultState, title ) !== title
+    ) {
+      dependencies.notify( `Could not find note “${ target }”`, 'warning' );
 
       return undefined;
     }
 
     return createNote(
       dependencies.activeNote()?.folderId ?? dependencies.currentFolderId(),
-      cleanTarget
+      title
     );
   }
 

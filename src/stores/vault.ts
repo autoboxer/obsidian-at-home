@@ -739,6 +739,13 @@ const {
   touchRecentNote
 } = vaultNavigation;
 
+export const noteLinkPaths = computed( () => new Map(
+  vaultState.notes.map( ( note ) => [
+    note.id,
+    projectedNoteRelativePath( note, vaultState.folders, note.relativePath )
+  ])
+) );
+
 const vaultContent = createVaultContent({
   activeNote: () => activeNote.value,
   currentFolderId,
@@ -746,6 +753,7 @@ const vaultContent = createVaultContent({
   folderContainsAssets,
   notify,
   rememberNoteOriginalPath,
+  noteLinkPaths: () => noteLinkPaths.value,
   selectNote
 });
 
@@ -772,12 +780,12 @@ export const outgoingLinks = computed( () => {
 
   return parseWikiLinks( activeNote.value.content ).map( ( link ) => ({
     link,
-    note: resolveWikiLink( link, vaultState.notes, activeNote.value )
+    note: resolveWikiLink( link, vaultState.notes, activeNote.value, noteLinkPaths.value )
   }) );
 });
 
 export const backlinks = computed( () =>
-  activeNote.value ? findBacklinks( activeNote.value, vaultState.notes ) : []
+  activeNote.value ? findBacklinks( activeNote.value, vaultState.notes, noteLinkPaths.value ) : []
 );
 
 export function setZoom( zoom: number ): void {

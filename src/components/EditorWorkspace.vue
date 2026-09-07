@@ -11,7 +11,7 @@ import {
   parseMarkdownHeadingTarget
 } from '../lib/headingLinks';
 import { formatCommandShortcut } from '../lib/keyboard';
-import { resolveWikiLink } from '../lib/wikiLinks';
+import { resolveWikiLink, wikiLinkSuggestions } from '../lib/wikiLinks';
 import {
   editorPositionVaultId,
   getNoteEditorPosition,
@@ -33,6 +33,7 @@ import {
   navigateForward,
   moveNoteToFolder,
   notify,
+  noteLinkPaths,
   renameVaultAttachment,
   selectNote,
   togglePinned,
@@ -82,7 +83,24 @@ const {
 
 defineExpose({ storeAndInsertAttachment });
 
-const noteTitles = computed( () => vaultState.notes.map( ( note ) => note.title ) );
+const noteLinkTargets = computed( () => wikiLinkSuggestions( vaultState.notes, noteLinkPaths.value ) );
+const wikiLinkIsResolved = computed( () => {
+  const paths = noteLinkPaths.value;
+  const sourceNote = activeNote.value;
+  const resolvedTargets = new Map<string, boolean>();
+
+  // Render updates reuse results until the source note or vault paths change.
+  return ( target: string ): boolean => {
+    const cached = resolvedTargets.get( target );
+    if ( cached !== undefined ) {
+      return cached;
+    }
+    const resolved = Boolean( resolveWikiLink({ target }, vaultState.notes, sourceNote, paths ) );
+    resolvedTargets.set( target, resolved );
+
+    return resolved;
+  };
+});
 const positionVaultId = computed( () => editorPositionVaultId( vaultSession.backend, vaultSession.path ) );
 // Access changes rebuild the editor and its widget controls.
 const editorKey = computed( () => JSON.stringify([
@@ -182,7 +200,7 @@ async function openRenderedLink( href: string ): Promise<void> {
 
 async function openWikiLink( target: string, heading?: string ): Promise<void> {
   if ( !heading ) {
-    createLinkedNote( target );
+    createLinkedNote({ target });
 
     return;
   }
@@ -191,7 +209,7 @@ async function openWikiLink( target: string, heading?: string ): Promise<void> {
 }
 
 async function openHeadingLink( target: string, heading: string ): Promise<void> {
-  const note = resolveWikiLink( target, vaultState.notes, activeNote.value );
+  const note = resolveWikiLink({ target, heading }, vaultState.notes, activeNote.value, noteLinkPaths.value );
   if ( !note ) {
     notify( `Could not find note “${ linkedNoteLabel( target ) }”`, 'warning' );
 
@@ -698,7 +716,8 @@ watch( tagInput, () => {
             :model-value="activeNote.content"
             :note-id="activeNote.id"
             :note-relative-path="activeNote.relativePath"
-            :note-titles="noteTitles"
+            :note-link-targets="noteLinkTargets"
+            :wiki-link-is-resolved="wikiLinkIsResolved"
             :rename-attachment="renameVaultAttachment"
             :read-only="!canEditVault"
             :show-frontmatter="uiState.frontmatterVisible"

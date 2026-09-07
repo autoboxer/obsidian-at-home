@@ -90,7 +90,6 @@ import type {
 } from '../lib/markdownAttachments';
 import { VAULT_ATTACHMENT_DRAG_MIME } from '../lib/markdownAttachments';
 import { parseMarkdownImageAt } from '../lib/markdownImages';
-import { normalizeWikiTarget, wikiTargetTitle } from '../lib/wikiLinks';
 import { isTauri, readWorkspaceImage } from '../services/native';
 import type { Extension, SelectionRange } from '@codemirror/state';
 import type { Command, ViewUpdate } from '@codemirror/view';
@@ -117,7 +116,8 @@ const props = defineProps<{
   modelValue: string;
   noteId: string;
   noteRelativePath: string;
-  noteTitles: string[];
+  noteLinkTargets: string[];
+  wikiLinkIsResolved: ( target: string ) => boolean;
   renameAttachment: (
     target: MarkdownAttachmentRenameTarget,
     fileName: string
@@ -209,20 +209,13 @@ interface TextEdit {
   added: number;
 }
 
-const normalizedNoteTitles = computed( () => new Set(
-  props.noteTitles.flatMap( ( title ) => [
-    normalizeInlineLinkTarget( title ),
-    normalizeInlineLinkTarget( wikiTargetTitle( title ) )
-  ])
-) );
-
 const suggestions = computed( () => {
   if ( suggestionQuery.value === null ) {
     return [];
   }
   const query = suggestionQuery.value.toLocaleLowerCase();
 
-  return props.noteTitles
+  return props.noteLinkTargets
     .filter( ( title ) => !query || title.toLocaleLowerCase().includes( query ) )
     .sort( ( a, b ) => {
       const aStarts = a.toLocaleLowerCase().startsWith( query );
@@ -978,7 +971,7 @@ onMounted( () => {
       resolveAttachmentMetadata: resolveLiveMarkdownAttachmentMetadata,
       resolveImageSource: resolveLiveMarkdownImageSource,
       showAttachmentInFolder: showLiveMarkdownAttachmentInFolder,
-      wikiLinkIsResolved: inlineWikiLinkIsResolved
+      wikiLinkIsResolved: ( target ) => props.wikiLinkIsResolved( target )
     }),
     codeMirrorDocumentSearchExtension,
     Prec.high( keymap.of([
@@ -1298,7 +1291,7 @@ watch(
 );
 
 watch(
-  () => props.noteTitles,
+  () => props.noteLinkTargets,
   () => {
     editorView.value?.dispatch({
       effects: refreshLiveMarkdownEffect.of( null )
@@ -1584,24 +1577,6 @@ defineExpose({
   insertEmbeddedAttachment,
   insertEmbeddedImage
 });
-
-function normalizeInlineLinkTarget( value: string ): string {
-  return normalizeWikiTarget( value )
-    .normalize( 'NFKD' )
-    .replace( /[\u0300-\u036f]/g, '' )
-    .toLocaleLowerCase()
-    .replace( /\s+/g, ' ' )
-    .trim();
-}
-
-function inlineWikiLinkIsResolved( target: string ): boolean {
-  if ( !target ) {
-    return true;
-  }
-
-  return normalizedNoteTitles.value.has( normalizeInlineLinkTarget( target ) ) ||
-    normalizedNoteTitles.value.has( normalizeInlineLinkTarget( wikiTargetTitle( target ) ) );
-}
 
 function updateSuggestions( view: EditorView ): void {
   const selection = view.state.selection.main;
