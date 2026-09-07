@@ -487,3 +487,704 @@ fn tag_sync_native_frontmatter_contract_preserves_source() {
         }
     }
 }
+
+#[test]
+fn load_snapshot_rejects_note_changes_before_metadata_writes() {
+    for change in ["edit", "add", "remove", "rename", "folder", "attachment"] {
+        let workspace = TestWorkspace::new("load-snapshot-note-change");
+        let note = test_note("before");
+        let state = write_saved_note(&workspace, &note);
+        let state_path = workspace_state_path(&workspace.root);
+        let original_state = fs::read(&state_path).unwrap();
+        let original_state_modified = fs::metadata(&state_path).unwrap().modified().unwrap();
+        let baseline = revision_entries_for_root(&workspace.root).unwrap();
+        let scanned =
+            scan_workspace_files(&workspace.root, &mut WarningCollector::default()).unwrap();
+        assert_eq!(scanned.notes[0].content, "before");
+        let path = workspace.root.join(&note.relative_path);
+        match change {
+            "edit" => {
+                let modified = fs::metadata(&path).unwrap().modified().unwrap();
+                fs::write(&path, "edited").unwrap();
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_times(FileTimes::new().set_modified(modified))
+                    .unwrap();
+            }
+            "add" => fs::write(workspace.root.join("External.md"), "external").unwrap(),
+            "remove" => fs::remove_file(&path).unwrap(),
+            "rename" => fs::rename(&path, workspace.root.join("Renamed.md")).unwrap(),
+            "folder" => fs::create_dir(workspace.root.join("External folder")).unwrap(),
+            "attachment" => fs::write(workspace.root.join("External.txt"), "attachment").unwrap(),
+            _ => unreachable!(),
+        }
+        let external_revision = revision_for_root(&workspace.root).unwrap();
+        let error = persist_loaded_workspace(
+            &workspace.root,
+            &state,
+            true,
+            &baseline,
+            &mut WarningCollector::default(),
+        )
+        .expect_err("changed notes must not receive a revision accepting stale content");
+        assert!(error.contains("vault changed"), "{change}: {error}");
+        assert_eq!(
+            revision_for_root(&workspace.root).unwrap(),
+            external_revision
+        );
+        assert_eq!(fs::read(&state_path).unwrap(), original_state);
+        assert_eq!(
+            fs::metadata(&state_path).unwrap().modified().unwrap(),
+            original_state_modified
+        );
+    }
+}
+
+#[test]
+fn load_snapshot_preserves_external_metadata_edits() {
+    let workspace = TestWorkspace::new("load-snapshot-state-change");
+    let state = write_saved_note(&workspace, &test_note("before"));
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    let state_path = workspace_state_path(&workspace.root);
+    let modified = fs::metadata(&state_path).unwrap().modified().unwrap();
+    let external_state = fs::read_to_string(&state_path)
+        .unwrap()
+        .replace("Test vault", "User vault");
+    fs::write(&state_path, &external_state).unwrap();
+    File::options()
+        .write(true)
+        .open(&state_path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+
+    let error = persist_loaded_workspace(
+        &workspace.root,
+        &state,
+        true,
+        &baseline,
+        &mut WarningCollector::default(),
+    )
+    .expect_err("loading must not overwrite external metadata edits");
+    assert!(error.contains("vault changed"));
+    assert_eq!(fs::read_to_string(&state_path).unwrap(), external_state);
+}
+
+#[test]
+fn load_snapshot_checks_the_note_bytes_actually_read() {
+    let workspace = TestWorkspace::new("load-snapshot-transient-note-edit");
+    let note = test_note("before");
+    write_saved_note(&workspace, &note);
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    let path = workspace.root.join(&note.relative_path);
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::write(&path, "edited").unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    let scanned = scan_workspace_files(&workspace.root, &mut WarningCollector::default()).unwrap();
+    assert_eq!(scanned.notes[0].content, "edited");
+    fs::write(&path, "before").unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(
+        revision_entries_for_root(&workspace.root).unwrap(),
+        baseline
+    );
+
+    let error = verify_workspace_load_reads(&baseline, &scanned, None, true)
+        .expect_err("matching filesystem snapshots must not accept different loaded bytes");
+    assert!(error.contains("vault changed"));
+}
+
+#[test]
+fn load_snapshot_checks_the_metadata_bytes_actually_read() {
+    let workspace = TestWorkspace::new("load-snapshot-state-read");
+    write_saved_note(&workspace, &test_note("before"));
+    let state_path = workspace_state_path(&workspace.root);
+    let (state, present, fingerprint) =
+        read_workspace_state_with_fingerprint(&workspace.root, &mut WarningCollector::default());
+    assert_eq!(state.unwrap().name, "Test vault");
+    let modified = fs::metadata(&state_path).unwrap().modified().unwrap();
+    let external_state = fs::read_to_string(&state_path)
+        .unwrap()
+        .replace("Test vault", "User vault");
+    fs::write(&state_path, &external_state).unwrap();
+    File::options()
+        .write(true)
+        .open(&state_path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    let scanned = scan_workspace_files(&workspace.root, &mut WarningCollector::default()).unwrap();
+    let error = verify_workspace_load_reads(&baseline, &scanned, fingerprint.as_ref(), present)
+        .expect_err("metadata read before the snapshot must still match it");
+    assert!(error.contains("vault changed"));
+    assert_eq!(fs::read_to_string(&state_path).unwrap(), external_state);
+}
+
+#[test]
+fn load_snapshot_rejects_metadata_created_during_loading() {
+    let workspace = TestWorkspace::new("load-snapshot-new-state");
+    let (state, present, fingerprint) =
+        read_workspace_state_with_fingerprint(&workspace.root, &mut WarningCollector::default());
+    assert!(state.is_none());
+    assert!(!present);
+    assert!(fingerprint.is_none());
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    let external_state = WorkspaceState {
+        name: "External vault".to_owned(),
+        ..WorkspaceState::default()
+    };
+    write_workspace_state(&workspace.root, &external_state).unwrap();
+    let current = revision_entries_for_root(&workspace.root).unwrap();
+
+    assert!(
+        verify_workspace_load_reads(&current, &ScannedWorkspace::default(), None, false).is_err()
+    );
+    assert!(persist_loaded_workspace(
+        &workspace.root,
+        &WorkspaceState::default(),
+        true,
+        &baseline,
+        &mut WarningCollector::default(),
+    )
+    .is_err());
+    assert_eq!(
+        read_workspace_state(&workspace.root, &mut WarningCollector::default()).0,
+        Some(external_state)
+    );
+}
+
+#[test]
+fn load_snapshot_rechecks_changes_after_its_own_metadata_write() {
+    for change in ["note", "metadata", "new note"] {
+        let workspace = TestWorkspace::new("load-snapshot-final-revision");
+        let note = test_note("before");
+        let mut state = write_saved_note(&workspace, &note);
+        let baseline = revision_entries_for_root(&workspace.root).unwrap();
+        state.name = "Loaded vault".to_owned();
+        write_workspace_state(&workspace.root, &state).unwrap();
+        let expected_state =
+            fingerprint_regular_file(&workspace_state_path(&workspace.root)).unwrap();
+        assert_eq!(
+            verify_workspace_load_revision(&workspace.root, &baseline, expected_state.as_ref())
+                .unwrap(),
+            revision_for_root(&workspace.root).unwrap(),
+        );
+        match change {
+            "note" => fs::write(workspace.root.join(&note.relative_path), "edited").unwrap(),
+            "metadata" => {
+                state.name = "External vault".to_owned();
+                write_workspace_state(&workspace.root, &state).unwrap();
+            }
+            "new note" => fs::write(workspace.root.join("External.md"), "external").unwrap(),
+            _ => unreachable!(),
+        }
+        let error =
+            verify_workspace_load_revision(&workspace.root, &baseline, expected_state.as_ref())
+                .expect_err("the loader's metadata write must not mask another change");
+        assert!(error.contains("vault changed"), "{change}: {error}");
+    }
+}
+
+#[test]
+fn load_snapshot_initializes_metadata_and_protects_subsequent_saves() {
+    let workspace = TestWorkspace::new("load-snapshot-save");
+    let note_path = workspace.root.join("External.md");
+    fs::write(&note_path, "original").unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    assert_eq!(loaded.vault.notes[0].content, "original");
+    assert_eq!(loaded.revision, revision_for_root(&workspace.root).unwrap());
+    let mut edited = loaded.vault;
+    edited.notes[0].content = "app edit".to_owned();
+    save_workspace_files(&workspace.root, &edited, loaded.revision).unwrap();
+    assert_eq!(fs::read_to_string(&note_path).unwrap(), "app edit");
+    let reopened = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_eq!(reopened.vault.notes[0].content, "app edit");
+    let modified = fs::metadata(&note_path).unwrap().modified().unwrap();
+    fs::write(&note_path, "external").unwrap();
+    File::options()
+        .write(true)
+        .open(&note_path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert!(save_workspace_files(&workspace.root, &reopened.vault, reopened.revision).is_err());
+    assert_eq!(fs::read_to_string(&note_path).unwrap(), "external");
+}
+
+#[test]
+fn load_snapshot_preserves_unsupported_metadata() {
+    for bytes in [
+        b"not JSON".as_slice(),
+        b"{\"version\":999,\"name\":\"Future vault\"}",
+    ] {
+        let workspace = TestWorkspace::new("load-snapshot-unsupported-state");
+        fs::write(workspace.root.join("Note.md"), "keep me").unwrap();
+        fs::create_dir(workspace.root.join(STATE_DIRECTORY)).unwrap();
+        let path = workspace_state_path(&workspace.root);
+        fs::write(&path, bytes).unwrap();
+        let before = revision_for_root(&workspace.root).unwrap();
+        let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+        assert_eq!(loaded.vault.notes[0].content, "keep me");
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(loaded.revision, before);
+        assert!(!loaded.warnings.is_empty());
+    }
+}
+
+#[test]
+fn unchanged_load_preserves_metadata_bytes_mtime_and_revision() {
+    for content in [None, Some("before")] {
+        let workspace = TestWorkspace::new("unchanged-load");
+        if let Some(content) = content {
+            write_saved_note(&workspace, &test_note(content));
+        }
+        load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+        let path = workspace_state_path(&workspace.root);
+        // A fixed old timestamp makes an accidental rewrite observable even
+        // on filesystems whose modification times have coarse precision.
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(
+                FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_600_000_000)),
+            )
+            .unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let revision = revision_for_root(&workspace.root).unwrap();
+        for _ in 0..3 {
+            let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+            assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                fs::metadata(&path).unwrap().modified().unwrap(),
+                metadata.modified().unwrap()
+            );
+            assert_eq!(loaded.revision, revision);
+        }
+    }
+}
+
+#[test]
+fn unchanged_load_in_another_window_does_not_conflict_with_saving() {
+    let workspace = TestWorkspace::new("unchanged-load-two-windows");
+    let note = test_note("before");
+    write_saved_note(&workspace, &note);
+    let mut first = {
+        let _lock = lock_workspace_files(&workspace.root).unwrap();
+        load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap()
+    };
+    first.vault.notes[0].content = "edited in first window".to_owned();
+    std::thread::sleep(Duration::from_millis(20));
+    let second = {
+        let _lock = lock_workspace_files(&workspace.root).unwrap();
+        load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap()
+    };
+    assert_eq!(second.vault.notes[0].content, "before");
+    {
+        let _lock = lock_workspace_files(&workspace.root).unwrap();
+        save_workspace_files(&workspace.root, &first.vault, first.revision)
+            .expect("opening another window must not invalidate unsaved edits");
+    }
+    assert_eq!(second.revision, first.revision);
+    let error = save_workspace_files(&workspace.root, &second.vault, second.revision)
+        .expect_err("a real edit must still invalidate the other window's stale save");
+    assert!(error.contains("vault changed"));
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        "edited in first window"
+    );
+}
+
+#[test]
+fn unchanged_load_migrates_legacy_state_bytes_once() {
+    let workspace = TestWorkspace::new("unchanged-load-legacy-state");
+    load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    let (state, _) = read_workspace_state(&workspace.root, &mut WarningCollector::default());
+    let mut state = state.unwrap();
+    state.image_embed_settings = ImageEmbedSettings {
+        location: ImageEmbedLocation::SpecifiedFolder,
+        folder_path: "Images".to_owned(),
+    };
+    write_legacy_mirrored_workspace_state(&workspace.root, &state);
+    let path = workspace_state_path(&workspace.root);
+    let legacy_bytes = fs::read(&path).unwrap();
+    // The parser already normalizes this old enum value. Comparing only the
+    // decoded structs would miss the migration that must be persisted.
+    assert_eq!(
+        read_workspace_state(&workspace.root, &mut WarningCollector::default()).0,
+        Some(state.clone())
+    );
+    let before = revision_for_root(&workspace.root).unwrap();
+    let migrated = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    let migrated_bytes = fs::read(&path).unwrap();
+    assert_ne!(migrated_bytes, legacy_bytes);
+    assert!(!String::from_utf8(migrated_bytes.clone())
+        .unwrap()
+        .contains("specified-folder-mirrored"));
+    assert_ne!(migrated.revision, before);
+    assert_eq!(
+        migrated.vault.image_embed_settings,
+        state.image_embed_settings
+    );
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let reopened = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_eq!(reopened.revision, migrated.revision);
+    assert_eq!(fs::read(&path).unwrap(), migrated_bytes);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+}
+
+#[test]
+fn changed_load_updates_note_and_folder_mappings_once() {
+    let workspace = TestWorkspace::new("changed-load-inventory");
+    let initial = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    fs::create_dir(workspace.root.join("Projects")).unwrap();
+    fs::write(workspace.root.join("Projects/External.md"), "external").unwrap();
+    let discovered = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_ne!(discovered.revision, initial.revision);
+    let (state, _) = read_workspace_state(&workspace.root, &mut WarningCollector::default());
+    let state = state.unwrap();
+    assert_eq!(
+        state.note_paths.get(&discovered.vault.notes[0].id).unwrap(),
+        "Projects/External.md"
+    );
+    assert_eq!(
+        state
+            .folder_paths
+            .get(&discovered.vault.folders[0].id)
+            .unwrap(),
+        "Projects"
+    );
+    assert_eq!(
+        load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .unwrap()
+            .revision,
+        discovered.revision
+    );
+
+    fs::remove_file(workspace.root.join("Projects/External.md")).unwrap();
+    fs::rename(
+        workspace.root.join("Projects"),
+        workspace.root.join("Renamed"),
+    )
+    .unwrap();
+    let reconciled = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_ne!(reconciled.revision, discovered.revision);
+    assert!(reconciled.vault.notes.is_empty());
+    let (state, _) = read_workspace_state(&workspace.root, &mut WarningCollector::default());
+    let state = state.unwrap();
+    assert!(state.note_paths.is_empty());
+    assert!(state.note_metadata.is_empty());
+    assert_eq!(
+        state.folder_paths.values().collect::<Vec<_>>(),
+        vec!["Renamed"]
+    );
+    assert_eq!(
+        load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .unwrap()
+            .revision,
+        reconciled.revision
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unchanged_load_needs_no_metadata_write_permission() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = TestWorkspace::new("unchanged-load-readonly-metadata");
+    let initial = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    let directory = workspace.root.join(STATE_DIRECTORY);
+    let permissions = fs::metadata(&directory).unwrap().permissions();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    let result = load_workspace(&workspace.root, &empty_vault("Test vault"));
+    fs::set_permissions(&directory, permissions).unwrap();
+    let loaded = result.unwrap();
+    assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    assert_eq!(loaded.revision, initial.revision);
+}
+
+#[cfg(unix)]
+#[test]
+fn changed_load_warns_and_retries_failed_metadata_writes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = TestWorkspace::new("changed-load-metadata-write-failure");
+    load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    ensure_recently_deleted_directory(&workspace.root).unwrap();
+    let orphan_path = recently_deleted_snapshot_path(&workspace.root, "deleted-orphan").unwrap();
+    fs::write(&orphan_path, "keep until metadata is current").unwrap();
+    fs::write(workspace.root.join("External.md"), "external").unwrap();
+    let state_path = workspace_state_path(&workspace.root);
+    let bytes = fs::read(&state_path).unwrap();
+    let before = revision_for_root(&workspace.root).unwrap();
+    let directory = workspace.root.join(STATE_DIRECTORY);
+    let permissions = fs::metadata(&directory).unwrap().permissions();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    let result = load_workspace(&workspace.root, &empty_vault("Test vault"));
+    fs::set_permissions(&directory, permissions).unwrap();
+
+    let loaded = result.unwrap();
+    assert_eq!(loaded.vault.notes[0].content, "external");
+    assert!(loaded
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("Could not save workspace metadata")));
+    assert_eq!(fs::read(&state_path).unwrap(), bytes);
+    assert_eq!(loaded.revision, before);
+    assert!(
+        orphan_path.is_file(),
+        "cleanup must wait for the metadata write to succeed"
+    );
+    let retried = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert!(retried.warnings.is_empty(), "{:?}", retried.warnings);
+    assert_ne!(retried.revision, before);
+    assert!(!orphan_path.exists());
+    let (state, _) = read_workspace_state(&workspace.root, &mut WarningCollector::default());
+    assert_eq!(state.unwrap().note_paths.len(), 1);
+    assert_eq!(
+        load_workspace(&workspace.root, &empty_vault("Test vault"))
+            .unwrap()
+            .revision,
+        retried.revision
+    );
+}
+
+#[test]
+fn load_snapshot_rejects_inventory_temporarily_missing_from_the_scan() {
+    for relative in ["Note.md", "Folder", "Image.png", "Attachment.pdf"] {
+        let workspace = TestWorkspace::new("load-snapshot-missing-inventory");
+        let path = workspace.root.join(relative);
+        if relative == "Folder" {
+            fs::create_dir(&path).unwrap();
+        } else {
+            fs::write(&path, "original").unwrap();
+        }
+        let baseline = revision_entries_for_root(&workspace.root).unwrap();
+        let outside = workspace.root.join(STATE_DIRECTORY);
+        fs::create_dir(&outside).unwrap();
+        let hidden = outside.join("temporarily-missing");
+        fs::rename(&path, &hidden).unwrap();
+        let scanned =
+            scan_workspace_files(&workspace.root, &mut WarningCollector::default()).unwrap();
+        fs::rename(&hidden, &path).unwrap();
+        assert_eq!(
+            revision_entries_for_root(&workspace.root).unwrap(),
+            baseline
+        );
+        let error = verify_workspace_load_reads(&baseline, &scanned, None, false)
+            .expect_err("restored inventory must not be omitted from a successful load");
+        assert!(error.contains("vault changed"), "{relative}: {error}");
+    }
+}
+
+#[test]
+fn load_snapshot_rejects_inventory_present_only_during_the_scan() {
+    for relative in ["Note.md", "Folder", "Image.png", "Attachment.pdf"] {
+        let workspace = TestWorkspace::new("load-snapshot-transient-inventory");
+        let baseline = revision_entries_for_root(&workspace.root).unwrap();
+        let path = workspace.root.join(relative);
+        if relative == "Folder" {
+            fs::create_dir(&path).unwrap();
+        } else {
+            fs::write(&path, "temporary").unwrap();
+        }
+        let scanned =
+            scan_workspace_files(&workspace.root, &mut WarningCollector::default()).unwrap();
+        if relative == "Folder" {
+            fs::remove_dir(&path).unwrap();
+        } else {
+            fs::remove_file(&path).unwrap();
+        }
+        assert_eq!(
+            revision_entries_for_root(&workspace.root).unwrap(),
+            baseline
+        );
+        let error = verify_workspace_load_reads(&baseline, &scanned, None, false)
+            .expect_err("transient inventory must not leak into a successful load");
+        assert!(error.contains("vault changed"), "{relative}: {error}");
+    }
+}
+
+#[test]
+fn load_snapshot_rejects_a_note_skipped_during_a_transient_edit() {
+    let workspace = TestWorkspace::new("load-snapshot-transient-invalid-note");
+    let path = workspace.root.join("Note.md");
+    fs::write(&path, "before").unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    fs::write(&path, [0xff; 6]).unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    let scanned = scan_workspace_files(&workspace.root, &mut WarningCollector::default()).unwrap();
+    assert!(scanned.notes.is_empty());
+    fs::write(&path, "before").unwrap();
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    assert_eq!(
+        revision_entries_for_root(&workspace.root).unwrap(),
+        baseline
+    );
+    assert!(verify_workspace_load_reads(&baseline, &scanned, None, false).is_err());
+}
+
+#[test]
+fn load_snapshot_keeps_the_complete_inventory_after_loading_limits() {
+    let workspace = TestWorkspace::new("load-snapshot-limited-inventory");
+    fs::create_dir(workspace.root.join("Folder")).unwrap();
+    for relative in [
+        "One.md",
+        "Two.md",
+        "Folder/Three.md",
+        "Image.png",
+        "Attachment.pdf",
+    ] {
+        fs::write(workspace.root.join(relative), "ok").unwrap();
+    }
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    for (max_notes, max_bytes) in [(1, 100), (100, 3)] {
+        let scanned = scan_workspace_files_with_limits(
+            &workspace.root,
+            &mut WarningCollector::default(),
+            max_notes,
+            max_bytes,
+            1,
+        )
+        .unwrap();
+        assert_eq!(scanned.notes.len(), 1);
+        assert_eq!(scanned.folders.len(), 1);
+        assert_eq!(scanned.images.len() + scanned.attachments.len(), 1);
+        verify_workspace_load_reads(&baseline, &scanned, None, false).unwrap();
+        assert_eq!(scanned.revision_entries, baseline);
+    }
+}
+
+#[test]
+fn load_snapshot_tracks_stable_skipped_files_and_ignores_private_directories() {
+    let workspace = TestWorkspace::new("load-snapshot-skipped-inventory");
+    fs::write(workspace.root.join("Valid.md"), "keep me").unwrap();
+    fs::write(workspace.root.join("Invalid.md"), [0xff]).unwrap();
+    File::create(workspace.root.join("Oversized.md"))
+        .unwrap()
+        .set_len(MAX_NOTE_BYTES + 1)
+        .unwrap();
+    File::create(workspace.root.join("Oversized.bin"))
+        .unwrap()
+        .set_len(MAX_ATTACHMENT_BYTES + 1)
+        .unwrap();
+    for directory in [
+        STATE_DIRECTORY,
+        ".obsidian",
+        ".trash",
+        ".git",
+        "Nested/.obsidian-at-home",
+    ] {
+        let path = workspace.root.join(directory);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("state.json"), "{}").unwrap();
+        fs::write(path.join("Private.md"), "hidden").unwrap();
+    }
+    fs::write(workspace.root.join("Nested/Note.md"), "another vault").unwrap();
+    let baseline = revision_entries_for_root(&workspace.root).unwrap();
+    let mut warnings = WarningCollector::default();
+    let scanned = scan_workspace_files(&workspace.root, &mut warnings).unwrap();
+    assert_eq!(scanned.notes.len(), 1);
+    assert_eq!(scanned.notes[0].relative_path, "Valid.md");
+    assert!(scanned.folders.is_empty());
+    assert!(scanned.attachments.is_empty());
+    assert_eq!(scanned.revision_entries.len(), 4);
+    verify_workspace_load_reads(&baseline, &scanned, None, true).unwrap();
+    assert_eq!(warnings.finish().len(), 2);
+}
+
+#[test]
+fn load_snapshot_rechecks_metadata_at_the_replacement_boundary() {
+    for initially_present in [false, true] {
+        let workspace = TestWorkspace::new("load-snapshot-metadata-replacement");
+        let mut state = WorkspaceState::default();
+        if initially_present {
+            state = write_saved_note(&workspace, &test_note("before"));
+        }
+        let baseline = revision_entries_for_root(&workspace.root).unwrap();
+        verify_workspace_load_revision(&workspace.root, &baseline, None).unwrap();
+        let expected = workspace_state_revision_fingerprint(&baseline);
+        let path = workspace_state_path(&workspace.root);
+        let modified = fs::metadata(&path)
+            .ok()
+            .and_then(|value| value.modified().ok());
+        state.name = "User vault".to_owned();
+        write_workspace_state(&workspace.root, &state).unwrap();
+        if let Some(modified) = modified {
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(modified))
+                .unwrap();
+        }
+        let external_bytes = fs::read(&path).unwrap();
+        let external_revision = revision_for_root(&workspace.root).unwrap();
+        state.name = "Stale loaded vault".to_owned();
+        let error = write_loaded_workspace_state_bytes(
+            &workspace.root,
+            &workspace_state_bytes(&state).unwrap(),
+            expected.as_ref(),
+        )
+        .expect_err("metadata changed since validation must survive replacement preparation");
+        assert!(error.contains("vault changed"));
+        assert_eq!(fs::read(&path).unwrap(), external_bytes);
+        assert_eq!(
+            revision_for_root(&workspace.root).unwrap(),
+            external_revision
+        );
+        assert_eq!(
+            fs::read_dir(workspace.root.join(STATE_DIRECTORY))
+                .unwrap()
+                .count(),
+            1,
+            "a failed precondition must clean up its temporary file"
+        );
+    }
+}
+
+#[test]
+fn metadata_replacement_precondition_runs_after_staging() {
+    let workspace = TestWorkspace::new("metadata-replacement-precondition");
+    let path = workspace.root.join("state.json");
+    fs::write(&path, "before").unwrap();
+    let result = atomic_write_with_precondition(&path, b"replacement", || {
+        assert_eq!(
+            fs::read_dir(&workspace.root)?.count(),
+            2,
+            "the temporary replacement should be prepared before checking"
+        );
+        fs::write(&path, "external")?;
+        Err(io::Error::other("concurrent edit"))
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+    assert_eq!(fs::read_dir(&workspace.root).unwrap().count(), 1);
+}

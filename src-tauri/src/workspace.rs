@@ -519,6 +519,15 @@ struct DecodedEditorPositions {
     unknown_count: usize,
 }
 
+#[derive(Debug, Default)]
+struct ScannedWorkspace {
+    notes: Vec<ScannedNote>,
+    folders: Vec<ScannedFolder>,
+    images: Vec<ScannedImage>,
+    attachments: Vec<ScannedAttachment>,
+    revision_entries: Vec<RevisionEntry>,
+}
+
 #[derive(Debug)]
 struct ScannedNote {
     relative_path: String,

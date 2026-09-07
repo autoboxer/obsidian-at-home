@@ -32,10 +32,9 @@ fn archives_and_reloads_a_note_without_scanning_the_snapshot() {
     );
     assert!(snapshot_path.is_file());
 
-    let (scanned_notes, _, _, _) =
-        scan_workspace_files(&workspace.root, &mut WarningCollector::default())
-            .expect("workspace should scan");
-    assert!(scanned_notes.is_empty());
+    let scanned = scan_workspace_files(&workspace.root, &mut WarningCollector::default())
+        .expect("workspace should scan");
+    assert!(scanned.notes.is_empty());
 
     let loaded = load_workspace(&workspace.root, &empty_vault("Test vault"))
         .expect("workspace should reopen");
@@ -316,6 +315,7 @@ fn loading_finishes_expiry_after_snapshot_cleanup_preceded_state_cleanup() {
     let path = recently_deleted_snapshot_path(&workspace.root, &deleted_note.id)
         .expect("snapshot path should be safe");
     remove_file_durable(&path).expect("snapshot cleanup should be interrupted before state");
+    let before = revision_for_root(&workspace.root).unwrap();
 
     let loaded = load_workspace(&workspace.root, &empty_vault("Test vault"))
         .expect("workspace should finish the interrupted cleanup");
@@ -326,6 +326,9 @@ fn loading_finishes_expiry_after_snapshot_cleanup_preceded_state_cleanup() {
         .expect("cleaned state should load")
         .recently_deleted_notes
         .is_empty());
+    assert_ne!(loaded.revision, before);
+    let reopened = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_eq!(reopened.revision, loaded.revision);
 }
 
 #[cfg(unix)]
@@ -770,4 +773,45 @@ fn tag_sync_restored_note_does_not_initialize_legacy_tags() {
     .expect("restoration must not rewrite a snapshot to resolve stale tags");
     assert!(error.contains("tags do not match"), "{error}");
     assert!(!workspace.root.join("First note.md").exists());
+}
+
+#[test]
+fn unchanged_load_still_cleans_orphaned_recovery_snapshots() {
+    let workspace = TestWorkspace::new("unchanged-load-orphan-cleanup");
+    let note = test_note("Keep this recovery");
+    write_saved_note(&workspace, &note);
+    let (_, deleted) = save_workspace_files_with_archive(
+        &workspace.root,
+        &empty_vault("Test vault"),
+        revision_for_root(&workspace.root).unwrap(),
+        Some(PendingNoteArchive {
+            note,
+            original_folder_path: String::new(),
+            editor_position: None,
+        }),
+    )
+    .unwrap();
+    let deleted = deleted.unwrap();
+    let initial = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    let active_path = recently_deleted_snapshot_path(&workspace.root, &deleted.id).unwrap();
+    let orphan_path = recently_deleted_snapshot_path(&workspace.root, "deleted-orphan").unwrap();
+    fs::copy(&active_path, &orphan_path).unwrap();
+    let state_path = workspace_state_path(&workspace.root);
+    let bytes = fs::read(&state_path).unwrap();
+    let modified = fs::metadata(&state_path).unwrap().modified().unwrap();
+    assert_eq!(
+        revision_for_root(&workspace.root).unwrap(),
+        initial.revision
+    );
+
+    let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert!(!orphan_path.exists());
+    assert!(active_path.is_file());
+    assert_eq!(loaded.recently_deleted_notes, vec![deleted]);
+    assert_eq!(loaded.revision, initial.revision);
+    assert_eq!(fs::read(&state_path).unwrap(), bytes);
+    assert_eq!(
+        fs::metadata(&state_path).unwrap().modified().unwrap(),
+        modified
+    );
 }

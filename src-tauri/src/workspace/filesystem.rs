@@ -706,6 +706,14 @@ pub(super) fn rename_durable(source: &Path, target: &Path) -> io::Result<()> {
 }
 
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with_precondition(path, bytes, || Ok(()))
+}
+
+pub(super) fn atomic_write_with_precondition(
+    path: &Path,
+    bytes: &[u8],
+    precondition: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file has no parent"))?;
@@ -729,6 +737,11 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         file.flush()?;
         file.sync_all()?;
         drop(file);
+
+        // Check after preparing and syncing the temporary file, immediately
+        // before replacement. This is optimistic validation, not an atomic CAS
+        // against external writers that do not honor the workspace lock.
+        precondition()?;
 
         #[cfg(windows)]
         {
