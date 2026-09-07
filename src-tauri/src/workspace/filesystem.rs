@@ -743,27 +743,9 @@ pub(super) fn atomic_write_with_precondition(
         // against external writers that do not honor the workspace lock.
         precondition()?;
 
-        #[cfg(windows)]
-        {
-            if path.exists() {
-                let backup = parent.join(format!(
-                    ".{file_name}.{}.{}.bak",
-                    std::process::id(),
-                    counter
-                ));
-                fs::rename(path, &backup)?;
-                if let Err(error) = fs::rename(&temporary, path) {
-                    let _ = fs::rename(&backup, path);
-
-                    return Err(error);
-                }
-                let _ = fs::remove_file(backup);
-                sync_directory(parent)?;
-
-                return Ok(());
-            }
-        }
-
+        // std::fs::rename replaces an existing file on Windows as well as Unix.
+        // Keep the destination in place until that operation: moving it to a
+        // backup first leaves metadata missing if the process exits in between.
         fs::rename(&temporary, path)?;
         sync_directory(parent)
     })();

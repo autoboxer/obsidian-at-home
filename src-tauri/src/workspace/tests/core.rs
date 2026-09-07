@@ -1188,3 +1188,127 @@ fn metadata_replacement_precondition_runs_after_staging() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "external");
     assert_eq!(fs::read_dir(&workspace.root).unwrap().count(), 1);
 }
+
+#[test]
+fn metadata_replacement_creates_and_replaces_complete_files() {
+    for name in [STATE_FILE, REGISTRY_FILE, EDITOR_POSITIONS_FILE] {
+        let workspace = TestWorkspace::new("metadata-replacement");
+        let directory = workspace.root.join("Vault with spaces and é");
+        let path = directory.join(name);
+        for bytes in [b"original metadata".as_slice(), b"short", b""] {
+            atomic_write(&path, bytes).expect("metadata should be created or replaced");
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                fs::read_dir(&directory).unwrap().count(),
+                1,
+                "successful replacement must not leave temporary or backup files"
+            );
+        }
+    }
+}
+
+#[test]
+fn metadata_replacement_failure_keeps_the_existing_file() {
+    for name in [STATE_FILE, REGISTRY_FILE, EDITOR_POSITIONS_FILE] {
+        let workspace = TestWorkspace::new("metadata-replacement-failure");
+        let path = workspace.root.join(name);
+        atomic_write(&path, b"original").unwrap();
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        let result = atomic_write_with_precondition(&path, b"replacement", || {
+            // A vanished staging file forces the installation itself to fail,
+            // after the precondition passed. The original must stay in place.
+            let staged = fs::read_dir(&workspace.root)?
+                .map(|entry| entry.unwrap().path())
+                .find(|entry| entry != &path)
+                .expect("replacement should be staged");
+            fs::remove_file(staged)
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+        assert_eq!(fs::read_dir(&workspace.root).unwrap().count(), 1);
+        atomic_write(&path, b"retry").expect("a failed installation must allow retry");
+        assert_eq!(fs::read(&path).unwrap(), b"retry");
+    }
+}
+
+#[test]
+fn metadata_replacement_preserves_an_occupied_directory() {
+    let workspace = TestWorkspace::new("metadata-replacement-directory");
+    let path = workspace.root.join(STATE_FILE);
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("keep"), b"original").unwrap();
+    atomic_write(&path, b"replacement").expect_err("a directory must not be replaced");
+    assert_eq!(fs::read(path.join("keep")).unwrap(), b"original");
+    assert_eq!(fs::read_dir(&workspace.root).unwrap().count(), 1);
+}
+
+#[test]
+fn metadata_replacement_reloads_workspace_registry_and_editor_positions() {
+    let workspace = TestWorkspace::new("metadata-replacement-reload");
+    let note = test_note("# Saved note\n");
+    let mut state = write_saved_note(&workspace, &note);
+    for anchor in [4, 14] {
+        state.name = format!("Vault {anchor}");
+        write_workspace_state(&workspace.root, &state).unwrap();
+        write_editor_positions(
+            &workspace.root,
+            &BTreeMap::from([(note.id.clone(), editor_position(anchor))]),
+        )
+        .unwrap();
+        let registry = WorkspaceRegistry {
+            active_path: Some(workspace.root.to_string_lossy().into_owned()),
+            recent_vaults: vec![VaultDescriptor {
+                path: workspace.root.to_string_lossy().into_owned(),
+                name: state.name.clone(),
+                last_opened_at: anchor,
+            }],
+            ..WorkspaceRegistry::default()
+        };
+        // Registry I/O uses an AppHandle only to locate this configuration file.
+        // Exercise its shared writer and decoder without launching a desktop app.
+        let registry_path = workspace.root.join("config").join(REGISTRY_FILE);
+        atomic_write(
+            &registry_path,
+            &serde_json::to_vec_pretty(&registry).unwrap(),
+        )
+        .unwrap();
+        let reopened: WorkspaceRegistry =
+            serde_json::from_slice(&fs::read(registry_path).unwrap()).unwrap();
+        assert_eq!(reopened, registry);
+
+        let loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.vault.name, state.name);
+        assert_eq!(loaded.vault.notes.len(), 1);
+        let reopened_note = &loaded.vault.notes[0];
+        assert_eq!(reopened_note.id, note.id);
+        assert_eq!(reopened_note.content, note.content);
+        assert_eq!(reopened_note.pinned, note.pinned);
+        assert_eq!(reopened_note.created_at, note.created_at);
+        assert_eq!(loaded.editor_positions[&note.id], editor_position(anchor));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn metadata_replacement_sharing_failure_preserves_the_existing_file() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    for name in [STATE_FILE, REGISTRY_FILE, EDITOR_POSITIONS_FILE] {
+        let workspace = TestWorkspace::new("metadata-replacement-sharing");
+        let path = workspace.root.join(name);
+        atomic_write(&path, b"original").unwrap();
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(1) // FILE_SHARE_READ: deny deletion/replacement while held.
+            .open(&path)
+            .unwrap();
+        atomic_write(&path, b"replacement").expect_err("an unshared file must stay intact");
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&workspace.root).unwrap().count(), 1);
+        drop(held);
+        atomic_write(&path, b"retry").expect("replacement should succeed once released");
+        assert_eq!(fs::read(&path).unwrap(), b"retry");
+    }
+}
