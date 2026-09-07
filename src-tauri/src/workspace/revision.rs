@@ -137,6 +137,16 @@ pub(super) fn workspace_state_revision_fingerprint(
     })
 }
 
+pub(super) fn workspace_state_matches_revision(
+    entries: &[RevisionEntry],
+    fingerprint: &FileFingerprint,
+) -> bool {
+    stamp_matches_fingerprint(
+        revision_entry_stamp(entries, &format!("F:{STATE_DIRECTORY}/{STATE_FILE}")),
+        fingerprint,
+    )
+}
+
 pub(super) fn verify_workspace_load_reads(
     baseline: &[RevisionEntry],
     scanned: &ScannedWorkspace,

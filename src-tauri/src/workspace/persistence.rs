@@ -403,17 +403,26 @@ pub(super) fn persist_loaded_workspace(
     warnings: &mut WarningCollector,
 ) -> Result<u64, String> {
     // Check before writing so reconciled metadata cannot replace an external edit.
-    verify_workspace_load_revision(root, baseline, None)?;
+    let revision = verify_workspace_load_revision(root, baseline, None)?;
     let mut written_state = None;
+    let mut state_is_current = false;
     if state_writable {
         let bytes = workspace_state_bytes(state)?;
-        match write_loaded_workspace_state_bytes(
-            root,
-            &bytes,
-            workspace_state_revision_fingerprint(baseline).as_ref(),
-        ) {
-            Ok(()) => written_state = Some(fingerprint_bytes(&bytes)),
-            Err(error) => warnings.push(format!("Could not save workspace metadata: {error}")),
+        let fingerprint = fingerprint_bytes(&bytes);
+        if workspace_state_matches_revision(baseline, &fingerprint) {
+            state_is_current = true;
+        } else {
+            match write_loaded_workspace_state_bytes(
+                root,
+                &bytes,
+                workspace_state_revision_fingerprint(baseline).as_ref(),
+            ) {
+                Ok(()) => {
+                    written_state = Some(fingerprint);
+                    state_is_current = true;
+                }
+                Err(error) => warnings.push(format!("Could not save workspace metadata: {error}")),
+            }
         }
     } else {
         warnings.push(
@@ -421,7 +430,7 @@ pub(super) fn persist_loaded_workspace(
                 .to_owned(),
         );
     }
-    if written_state.is_some() {
+    if state_is_current {
         cleanup_orphaned_recovery_snapshots(
             root,
             &state.recently_deleted_notes,
@@ -430,6 +439,11 @@ pub(super) fn persist_loaded_workspace(
         );
     }
 
+    if state_is_current && written_state.is_none() {
+        // Recovery snapshots are outside the vault revision. Without a metadata
+        // write, the already verified revision still describes the loaded bytes.
+        return Ok(revision);
+    }
     // Only the metadata bytes we wrote may differ from the loaded snapshot.
     verify_workspace_load_revision(root, baseline, written_state.as_ref())
 }
