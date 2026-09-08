@@ -2,7 +2,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, watch } from 'vue';
 import { createEmptyVault, createSeedVault } from '../data/seed';
-import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from '../lib';
+import { findBacklinks, parseNoteLinks, resolveNoteLink, searchNotes } from '../lib';
 import { resolveMarkdownImagePath } from '../lib/imageEmbeds';
 import {
   formatMarkdownImage,
@@ -778,9 +778,9 @@ export const outgoingLinks = computed( () => {
     return [];
   }
 
-  return parseWikiLinks( activeNote.value.content ).map( ( link ) => ({
+  return parseNoteLinks( activeNote.value.content ).map( ( link ) => ({
     link,
-    note: resolveWikiLink( link, vaultState.notes, activeNote.value, noteLinkPaths.value )
+    note: resolveNoteLink( link, vaultState.notes, activeNote.value, noteLinkPaths.value )
   }) );
 });
 

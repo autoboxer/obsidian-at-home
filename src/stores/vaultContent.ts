@@ -1,4 +1,9 @@
-import { normalizeWikiTarget, wikiLinkCandidates, type WikiLinkTarget } from '../lib/wikiLinks';
+import {
+  normalizeWikiTarget,
+  rewriteMarkdownNoteLinksForNotePaths,
+  wikiLinkCandidates,
+  type WikiLinkTarget
+} from '../lib/wikiLinks';
 import { parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
 import type { CssSnippet, Folder, Note, NoteTemplate } from '../types';
 import {
@@ -40,6 +45,22 @@ type NotePatch = Partial<Pick<
 export function createVaultContent(
   dependencies: VaultContentDependencies
 ) {
+  function preserveRelocatedNoteLinks( previousPaths: ReadonlyMap<string, string> ): void {
+    const nextPaths = dependencies.noteLinkPaths();
+    for ( const note of vaultState.notes ) {
+      if ( previousPaths.get( note.id ) === nextPaths.get( note.id ) ) {
+        continue;
+      }
+      const content = rewriteMarkdownNoteLinksForNotePaths(
+        note, vaultState.notes, previousPaths, nextPaths
+      );
+      if ( content !== note.content ) {
+        note.content = content;
+        note.updatedAt = Date.now();
+      }
+    }
+  }
+
   function createNote(
     folderId?: string | null,
     title = 'Untitled note',
@@ -142,6 +163,7 @@ export function createVaultContent(
     ) || (
       patch.folderId !== undefined && patch.folderId !== note.folderId
     );
+    const previousPaths = locationChanged ? dependencies.noteLinkPaths() : undefined;
     if ( locationChanged ) {
       dependencies.rememberNoteOriginalPath( note );
     }
@@ -160,6 +182,9 @@ export function createVaultContent(
     }
     if ( patch.pinned !== undefined ) {
       note.pinned = patch.pinned;
+    }
+    if ( previousPaths ) {
+      preserveRelocatedNoteLinks( previousPaths );
     }
     note.updatedAt = Date.now();
 
@@ -317,12 +342,14 @@ export function createVaultContent(
     }
 
     const affectedFolders = new Set([ id, ...descendantFolderIds( vaultState, id ) ]);
+    const previousPaths = dependencies.noteLinkPaths();
     for ( const note of vaultState.notes ) {
       if ( note.folderId && affectedFolders.has( note.folderId ) ) {
         dependencies.rememberNoteOriginalPath( note );
       }
     }
     folder.name = cleanName;
+    preserveRelocatedNoteLinks( previousPaths );
   }
 
   function moveFolder( folderId: string, parentId: string | null ): boolean {
@@ -384,12 +411,14 @@ export function createVaultContent(
       return false;
     }
 
+    const previousPaths = dependencies.noteLinkPaths();
     for ( const note of vaultState.notes ) {
       if ( note.folderId && affectedFolders.has( note.folderId ) ) {
         dependencies.rememberNoteOriginalPath( note );
       }
     }
     folder.parentId = parentId;
+    preserveRelocatedNoteLinks( previousPaths );
     dependencies.notify(
       `Moved ${ folder.name } to ${ parent?.name ?? 'Vault root' }`,
       'success'
@@ -449,6 +478,7 @@ export function createVaultContent(
 
       return;
     }
+    const previousPaths = dependencies.noteLinkPaths();
     for ( const child of children ) {
       child.parentId = folder.parentId;
     }
@@ -462,6 +492,7 @@ export function createVaultContent(
       }
     }
     vaultState.folders.splice( vaultState.folders.indexOf( folder ), 1 );
+    preserveRelocatedNoteLinks( previousPaths );
     if ( vaultState.selectedFolderId === id ) {
       vaultState.selectedFolderId = 'all';
     }

@@ -1,4 +1,10 @@
-import type { Backlink, Note, WikiLink } from '../types';
+import type { Backlink, Note, NoteLink, WikiLink } from '../types';
+import {
+  parseInlineMarkdownLinkAt,
+  parseMarkdownNoteLinks,
+  type MarkdownNoteTarget
+} from './markdownLinks';
+import { relativeImageDestination } from './markdownImages';
 
 export type WikiLinkTarget = Pick<WikiLink, 'target' | 'heading'>;
 
@@ -263,7 +269,90 @@ function canonicalNotePath( value: string ): string | undefined {
   return parts.length ? parts.join( '/' ) : undefined;
 }
 
-/** Find every incoming wiki-link occurrence for a note. */
+/** Keep source order when displaying wiki and ordinary Markdown connections. */
+export function parseNoteLinks( markdown: string ): NoteLink[] {
+  return [ ...parseWikiLinks( markdown ), ...parseMarkdownNoteLinks( markdown ) ]
+    .sort( ( a, b ) => a.index - b.index );
+}
+
+/** Markdown file URLs are source-relative, including paths without a ./ prefix. */
+export function resolveNoteLink(
+  link: WikiLinkTarget | MarkdownNoteTarget,
+  notes: readonly Note[],
+  sourceNote?: Note,
+  notePaths?: ReadonlyMap<string, string>
+): Note | undefined {
+  const target = 'destination' in link && link.target && !link.target.startsWith( '/' )
+    ? `./${ link.target }`
+    : link.target;
+
+  return resolveWikiLink({ ...link, target }, notes, sourceNote, notePaths );
+}
+
+/** Preserve outgoing Markdown destinations when their source note changes path. */
+export function rewriteMarkdownNoteLinksForNotePaths(
+  note: Note,
+  notes: readonly Note[],
+  previousPaths: ReadonlyMap<string, string>,
+  nextPaths: ReadonlyMap<string, string>
+): string {
+  const previousPath = noteLinkPath( note, previousPaths );
+  const nextPath = noteLinkPath( note, nextPaths );
+  if ( !previousPath || !nextPath || previousPath === nextPath ) {
+    return note.content;
+  }
+  const absoluteTarget = ( source: string, target: string ): string | undefined =>
+    canonicalNotePath( target.startsWith( '/' )
+      ? target
+      : `${ source.split( '/' ).slice( 0, -1 ).join( '/' ) }/${ target }` );
+
+  let content = note.content;
+  for ( const link of parseMarkdownNoteLinks( note.content ).reverse() ) {
+    // Heading-only links already follow their source note.
+    if ( !link.target ) {
+      continue;
+    }
+    const target = resolveNoteLink( link, notes, note, previousPaths );
+    const targetPath = target
+      ? noteLinkPath( target, nextPaths )
+      : absoluteTarget( previousPath, link.target );
+    if (
+      !targetPath
+      || ( target
+        ? resolveNoteLink( link, notes, note, nextPaths )?.id === target.id
+        : absoluteTarget( nextPath, link.target ) === targetPath )
+    ) {
+      continue;
+    }
+
+    const parsed = parseInlineMarkdownLinkAt( note.content, link.index );
+    if ( !parsed ) {
+      continue;
+    }
+    // Missing and ambiguous links keep their original absolute path; do not
+    // guess a note in the new folder. Resolved siblings follow the same move.
+    const path = link.target.startsWith( '/' )
+      ? `/${ targetPath }`
+      : relativeImageDestination( nextPath, targetPath );
+    const destination = path.split( '/' ).map( ( part ) =>
+      encodeURIComponent( part ).replace( /[!'()*]/g, ( character ) =>
+        `%${ character.charCodeAt( 0 ).toString( 16 ).toUpperCase() }`
+      )
+    ).join( '/' );
+    let pathLength = 0;
+    while ( pathLength < parsed.destination.length && parsed.destination[ pathLength ] !== '#' ) {
+      pathLength += parsed.destination[ pathLength ] === '\\' ? 2 : 1;
+    }
+    // Replace only the path: retain fragment spelling, wrappers, title, label,
+    // and surrounding whitespace exactly as the user wrote them.
+    content = content.slice( 0, parsed.destinationFrom ) + destination
+      + content.slice( Math.min( parsed.destinationFrom + pathLength, parsed.destinationTo ) );
+  }
+
+  return content;
+}
+
+/** Find every incoming wiki or Markdown note-link occurrence for a note. */
 export function findBacklinks(
   target: Note | string,
   notes: readonly Note[],
@@ -283,8 +372,8 @@ export function findBacklinks(
       continue;
     }
 
-    for ( const link of parseWikiLinks( note.content ) ) {
-      const resolved = resolveWikiLink( link, notes, note, notePaths );
+    for ( const link of parseNoteLinks( note.content ) ) {
+      const resolved = resolveNoteLink( link, notes, note, notePaths );
       if ( resolved?.id !== targetNote.id ) {
         continue;
       }
