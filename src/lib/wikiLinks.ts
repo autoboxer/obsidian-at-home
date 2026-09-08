@@ -114,8 +114,9 @@ export function parseWikiLinkAt(
     return undefined;
   }
 
+  const noteName = target.split( '/' ).at( -1 )!.replace( NOTE_EXTENSION, '' );
   const fallbackDisplay = target
-    ? target.split( '/' ).at( -1 )!.replace( NOTE_EXTENSION, '' )
+    ? noteName + ( heading ? ` (${ heading })` : '' )
     : heading ?? '';
   const display = alias === undefined
     ? fallbackDisplay
