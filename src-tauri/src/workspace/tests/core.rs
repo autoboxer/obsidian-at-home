@@ -1,4 +1,114 @@
 #[test]
+fn import_note_extensions_survive_save_and_reload() {
+    let workspace = TestWorkspace::new("import-note-extensions");
+    let mut vault = empty_vault("Imported notes");
+    for (index, path) in ["Same.md", "Same.markdown", "Upper.MD", "Upper.MARKDOWN"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut note = test_note("[Other extension](Same.markdown)\n");
+        note.id = format!("import-{index}");
+        note.title = Path::new(path)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        note.relative_path = path.to_owned();
+        vault.notes.push(note);
+    }
+    save_workspace_files(
+        &workspace.root,
+        &vault,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .expect("distinct Markdown extensions should save");
+    let mut loaded = load_workspace(&workspace.root, &vault).unwrap();
+    for note in &vault.notes {
+        let saved = loaded
+            .vault
+            .notes
+            .iter()
+            .find(|saved| saved.id == note.id)
+            .unwrap();
+        assert_eq!(saved.relative_path, note.relative_path);
+        assert_eq!(saved.content, note.content);
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+            note.content
+        );
+    }
+
+    let renamed = loaded
+        .vault
+        .notes
+        .iter_mut()
+        .find(|note| note.relative_path == "Upper.MD")
+        .unwrap();
+    renamed.title = "Renamed".to_owned();
+    renamed.relative_path = "Untrusted.exe".to_owned();
+    let renamed_id = renamed.id.clone();
+    let saved = save_workspace_files(&workspace.root, &loaded.vault, loaded.revision).unwrap();
+    assert_eq!(saved.note_paths[&renamed_id], "Renamed.MD");
+    assert!(!workspace.root.join("Untrusted.exe").exists());
+}
+
+#[test]
+fn import_note_extension_hint_does_not_choose_the_destination_path() {
+    for (hint, expected) in [
+        ("../Else/Unrelated.markdown", "Safe.markdown"),
+        ("../Else/Unrelated.exe", "Safe.md"),
+    ] {
+        let workspace = TestWorkspace::new("import-note-extension-hint");
+        let mut vault = empty_vault("Imported notes");
+        let mut note = test_note("# Safe content\n");
+        note.title = "Safe".to_owned();
+        note.relative_path = hint.to_owned();
+        vault.notes.push(note);
+        let saved = save_workspace_files(
+            &workspace.root,
+            &vault,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved.note_paths["note-1"], expected);
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(expected)).unwrap(),
+            "# Safe content\n"
+        );
+        assert!(!workspace.root.join("Else").exists());
+    }
+}
+
+#[test]
+fn import_note_extension_collisions_fail_before_writing() {
+    let workspace = TestWorkspace::new("import-note-extension-collision");
+    let original = test_note("# Keep existing source\n");
+    write_saved_note(&workspace, &original);
+    let mut loaded = load_workspace(&workspace.root, &empty_vault("Imported notes")).unwrap();
+    let original_state = fs::read(workspace_state_path(&workspace.root)).unwrap();
+    for (index, extension) in ["md", "MD"].into_iter().enumerate() {
+        let mut note = test_note("# New content\n");
+        note.id = format!("new-{index}");
+        note.title = "Duplicate".to_owned();
+        note.relative_path = format!("Duplicate.{extension}");
+        loaded.vault.notes.push(note);
+    }
+    let error = save_workspace_files(&workspace.root, &loaded.vault, loaded.revision).unwrap_err();
+    assert!(error.contains("More than one note would be saved"));
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&original.relative_path)).unwrap(),
+        original.content
+    );
+    assert_eq!(
+        fs::read(workspace_state_path(&workspace.root)).unwrap(),
+        original_state
+    );
+    assert!(!workspace.root.join("Duplicate.md").exists());
+    assert!(!workspace.root.join("Duplicate.MD").exists());
+}
+
+#[test]
 fn version_one_state_defaults_and_migrates_recently_deleted_notes() {
     let workspace = TestWorkspace::new("state-v1-migration");
     let state: WorkspaceState = serde_json::from_value(serde_json::json!({

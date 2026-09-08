@@ -364,11 +364,12 @@ function indexedNoteLinkResolver(
   };
 }
 
-/** Reuse old/new lookup indexes throughout one note or folder mutation. */
+/** Reuse old/new lookup indexes throughout one note, folder, or import mutation. */
 export function createNoteLinkRewriter(
   notes: readonly Note[],
   previousPaths: ReadonlyMap<string, string>,
-  nextPaths: ReadonlyMap<string, string>
+  nextPaths: ReadonlyMap<string, string>,
+  options: { destinationNotes?: readonly Note[]; preserveUnresolvedPaths?: boolean } = {}
 ): ( note: Note ) => string {
   // Notes without link syntax need neither Markdown parsing nor lookup indexes.
   let previousResolver: NoteLinkResolver | undefined;
@@ -379,9 +380,9 @@ export function createNoteLinkRewriter(
       return note.content;
     }
     previousResolver ??= indexedNoteLinkResolver( notes, previousPaths );
-    nextResolver ??= indexedNoteLinkResolver( notes, nextPaths );
+    nextResolver ??= indexedNoteLinkResolver( options.destinationNotes ?? notes, nextPaths );
 
-    return rewriteNoteLinks( note, previousPaths, nextPaths, previousResolver, nextResolver );
+    return rewriteNoteLinks( note, previousPaths, nextPaths, previousResolver, nextResolver, options.preserveUnresolvedPaths );
   };
 }
 
@@ -390,12 +391,14 @@ export function rewriteNoteLinksForNotePaths(
   note: Note,
   notes: readonly Note[],
   previousPaths: ReadonlyMap<string, string>,
-  nextPaths: ReadonlyMap<string, string>
+  nextPaths: ReadonlyMap<string, string>,
+  options: { destinationNotes?: readonly Note[]; preserveUnresolvedPaths?: boolean } = {}
 ): string {
   return rewriteNoteLinks(
     note, previousPaths, nextPaths,
     ( link, source ) => resolveNoteLink( link, notes, source, previousPaths ),
-    ( link, source ) => resolveNoteLink( link, notes, source, nextPaths )
+    ( link, source ) => resolveNoteLink( link, options.destinationNotes ?? notes, source, nextPaths ),
+    options.preserveUnresolvedPaths
   );
 }
 
@@ -404,7 +407,8 @@ function rewriteNoteLinks(
   previousPaths: ReadonlyMap<string, string>,
   nextPaths: ReadonlyMap<string, string>,
   previousResolver: NoteLinkResolver,
-  nextResolver: NoteLinkResolver
+  nextResolver: NoteLinkResolver,
+  preserveUnresolvedPaths = true
 ): string {
   const previousPath = noteLinkPath( note, previousPaths );
   const nextPath = noteLinkPath( note, nextPaths );
@@ -416,13 +420,16 @@ function rewriteNoteLinks(
       ? target
       : `${ source.split( '/' ).slice( 0, -1 ).join( '/' ) }/${ target }` );
 
-  let content = note.content;
-  for ( const link of parseNoteLinks( note.content ).reverse() ) {
+  const replacements: Array<{ from: number; to: number; value: string }> = [];
+  for ( const link of parseNoteLinks( note.content ) ) {
     // Heading-only links already follow their source note.
     if ( !link.target ) {
       continue;
     }
     const target = previousResolver( link, note );
+    if ( !target && !preserveUnresolvedPaths ) {
+      continue;
+    }
     const targetPath = target
       ? noteLinkPath( target, nextPaths )
       : 'destination' in link ? absoluteTarget( previousPath, link.target ) : undefined;
@@ -448,7 +455,7 @@ function rewriteNoteLinks(
       const rawTarget = splitUnescaped( rawDestination, '#', 2 )[ 0 ]!;
       const from = link.index + openingLength + rawTarget.length - rawTarget.trimStart().length;
       const to = link.index + openingLength + rawTarget.trimEnd().length;
-      content = content.slice( 0, from ) + destination + content.slice( to );
+      replacements.push({ from, to, value: destination });
       continue;
     }
 
@@ -472,8 +479,17 @@ function rewriteNoteLinks(
     }
     // Replace only the path: retain fragment spelling, wrappers, title, label,
     // and surrounding whitespace exactly as the user wrote them.
-    content = content.slice( 0, parsed.destinationFrom ) + destination
-      + content.slice( Math.min( parsed.destinationFrom + pathLength, parsed.destinationTo ) );
+    replacements.push({
+      from: parsed.destinationFrom,
+      to: Math.min( parsed.destinationFrom + pathLength, parsed.destinationTo ),
+      value: destination
+    });
+  }
+
+  let content = note.content;
+  // Actual destination offsets also handle wiki links inside Markdown labels.
+  for ( const { from, to, value } of replacements.sort( ( a, b ) => b.from - a.from ) ) {
+    content = content.slice( 0, from ) + value + content.slice( to );
   }
 
   return content;

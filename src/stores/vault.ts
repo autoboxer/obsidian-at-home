@@ -2,7 +2,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, watch } from 'vue';
 import { createEmptyVault, createSeedVault } from '../data/seed';
-import { findBacklinks, parseNoteLinks, resolveNoteLink, searchNotes } from '../lib';
+import { createNoteLinkRewriter, findBacklinks, parseNoteLinks, resolveNoteLink, searchNotes } from '../lib';
 import { resolveMarkdownImagePath } from '../lib/imageEmbeds';
 import {
   formatMarkdownImage,
@@ -43,7 +43,6 @@ import {
   folderContainsVaultAssets,
   isSafeVaultAttachmentFileName,
   isSafeVaultImageFileName,
-  rebuildVaultAssetFolders,
   rewriteVaultAssetDestinationsForNotePath,
   rewriteVaultAttachmentReferences,
   rewriteVaultImageReferences,
@@ -53,13 +52,12 @@ import {
 import {
   createId,
   descendantFolderIds as vaultDescendantFolderIds,
-  ensureFolderPath as ensureVaultFolderPath,
   folderConflictsWithNote,
   folderPathFromFolders,
   noteStemKey,
+  planImportedNotes,
   projectedNoteRelativePath,
-  safeNoteStem,
-  uniqueNoteTitle as uniqueVaultNoteTitle
+  safeNoteStem
 } from './vaultModel';
 import { createVaultContent } from './vaultContent';
 import {
@@ -1076,6 +1074,15 @@ async function mergeImportedVaultExclusive(
   const previousActiveNoteId = vaultState.activeNoteId;
   const previousNoteNavigation = snapshotNoteNavigation();
   const previousVault = snapshotVault();
+  let plan: ReturnType<typeof planImportedNotes>;
+  try {
+    plan = planImportedNotes( vaultState, result.notes, replace );
+  } catch ( error ) {
+    const warning = errorMessage( error, 'The imported note paths could not be reserved.' );
+    notify( warning, 'warning' );
+
+    return { attachmentCount: 0, imageCount: 0, noteCount: 0, saved: false, warnings: [ warning ] };
+  }
   let attachmentCount = 0;
   let imageCount = 0;
   let imageImportTransactionId: string | undefined;
@@ -1140,6 +1147,8 @@ async function mergeImportedVaultExclusive(
         applyWorkspaceSaveResult( assetResult );
         applyWorkspaceImageFiles( assetResult.imageFiles );
         applyWorkspaceAttachmentFiles( assetResult.attachmentFiles );
+        // Copied assets can reserve different folders from their source paths.
+        plan = planImportedNotes( vaultState, result.notes, replace );
         uiState.imageRefreshToken += 1;
         uiState.attachmentRefreshToken += 1;
         imageCount = assetResult.imageCount;
@@ -1163,38 +1172,44 @@ async function mergeImportedVaultExclusive(
     }
   }
 
-  if ( replace ) {
-    vaultState.notes.splice( 0 );
-    vaultState.folders.splice( 0 );
-    rebuildWorkspaceAssetFolders();
-  }
-
   const now = Date.now();
-  let firstImportedNoteId: string | null = null;
-  for ( const imported of result.notes ) {
-    const folderId = ensureFolderPath( imported.folderPath );
-    const title = uniqueNoteTitle( imported.title || 'Untitled note' );
-    const relativePath = importedNoteTargetPath( title, folderPath( folderId ) );
-    const note: Note = {
-      id: createId( 'note' ),
-      title,
-      content: rewriteImportedAssetReferences(
-        imported.content,
-        imported.relativePath,
-        relativePath,
-        importedImagePaths,
-        importedAttachmentPaths
-      ),
-      relativePath,
-      folderId,
-      tags: imported.tags,
-      pinned: false,
-      createdAt: now,
-      updatedAt: now
-    };
-    firstImportedNoteId ??= note.id;
-    vaultState.notes.push( note );
+  const importedNotes: Note[] = plan.notes.map( ({ source, title, folderId, relativePath }) => ({
+    id: createId( 'note' ),
+    title,
+    content: source.content,
+    relativePath,
+    folderId,
+    tags: source.tags,
+    pinned: false,
+    createdAt: now,
+    updatedAt: now
+  }) );
+  const sourcePaths = new Map( importedNotes.map( ( note, index ) => [ note.id, plan.notes[ index ]!.source.relativePath ]) );
+  const existingNotes = replace ? [] : vaultState.notes;
+  const destinationNotes = [ ...existingNotes, ...importedNotes ];
+  const destinationPaths = new Map([
+    ...noteLinkPaths.value,
+    ...importedNotes.map( ( note ) => [ note.id, note.relativePath ] as const )
+  ]);
+  const rewriteOptions = { destinationNotes, preserveUnresolvedPaths: false };
+  const rewriteExistingNote = createNoteLinkRewriter( existingNotes, noteLinkPaths.value, destinationPaths, rewriteOptions );
+  for ( const note of existingNotes ) {
+    const content = rewriteExistingNote( note );
+    if ( content !== note.content ) {
+      note.content = content;
+      note.updatedAt = now;
+    }
   }
+  const rewriteImportedNote = createNoteLinkRewriter( importedNotes, sourcePaths, destinationPaths, rewriteOptions );
+  for ( const note of importedNotes ) {
+    const content = rewriteImportedNote( note );
+    note.content = rewriteImportedAssetReferences(
+      content, sourcePaths.get( note.id )!, note.relativePath, importedImagePaths, importedAttachmentPaths
+    );
+  }
+  vaultState.folders.splice( 0, vaultState.folders.length, ...plan.folders );
+  vaultState.notes.splice( 0, vaultState.notes.length, ...destinationNotes );
+  const firstImportedNoteId = importedNotes[ 0 ]?.id ?? null;
 
   for ( const imported of result.snippets ) {
     const existing = vaultState.snippets.find(
@@ -1323,37 +1338,6 @@ function rewriteImportedAssetReferences(
   }
 
   return applyMarkdownReplacements( content, replacements );
-}
-
-function importedNoteTargetPath( title: string, folder: string ): string {
-  const fileName = `${ safeImportedNoteStem( title ) }.md`;
-
-  return folder ? `${ folder }/${ fileName }` : fileName;
-}
-
-function safeImportedNoteStem( value: string ): string {
-  const encoder = new TextEncoder();
-  let result = '';
-  let previousWasReplacement = false;
-  for ( const character of value.trim() ) {
-    if ( /[\p{Cc}/\\:*?"<>|]/u.test( character ) ) {
-      if ( !previousWasReplacement ) {
-        result += '-';
-        previousWasReplacement = true;
-      }
-    } else {
-      result += character;
-      previousWasReplacement = false;
-    }
-    if ( encoder.encode( result ).length >= 120 ) {
-      break;
-    }
-  }
-  result = result.replace( /^[ .]+|[ .]+$/g, '' ) || 'Untitled note';
-
-  return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test( result )
-    ? `_${ result }`
-    : result;
 }
 
 export function buildExportPayload(): {
@@ -2347,10 +2331,6 @@ function upsertWorkspaceAttachmentFile( attachment: VaultAttachmentFile ): void 
   upsertVaultAttachmentFile( vaultState, attachment, () => createId( 'folder' ) );
 }
 
-function rebuildWorkspaceAssetFolders(): void {
-  rebuildVaultAssetFolders( vaultState, () => createId( 'folder' ) );
-}
-
 function addVaultWarning( message: string ): void {
   vaultSession.warnings = [ message, ...vaultSession.warnings ].slice( 0, 200 );
   notify( message, 'warning' );
@@ -2697,14 +2677,6 @@ function restoreWorkspaceUi( snapshot: WorkspaceUiSnapshot ): void {
   uiState.tool = snapshot.tool;
   uiState.notesView = snapshot.notesView;
   uiState.noteFilter = snapshot.noteFilter;
-}
-
-function uniqueNoteTitle( base: string ): string {
-  return uniqueVaultNoteTitle( vaultState, base );
-}
-
-function ensureFolderPath( path: string ): string | null {
-  return ensureVaultFolderPath( vaultState, path, () => createId( 'folder' ) );
 }
 
 function descendantFolderIds( id: string ): string[] {
