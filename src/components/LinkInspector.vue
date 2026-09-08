@@ -10,13 +10,19 @@ import {
   selectNote,
   uiState
 } from '../stores/vault';
+import type { NoteLink } from '../types';
 import AppIcon from './AppIcon.vue';
+
+const emit = defineEmits<{ openNoteLink: [link: NoteLink] }>();
 
 const uniqueOutgoing = computed( () => {
   const seen = new Set<string>();
 
-  return outgoingLinks.value.filter( ({ link }) => {
-    const key = link.target.toLocaleLowerCase();
+  return outgoingLinks.value.filter( ({ link, note }) => {
+    const key = JSON.stringify([
+      note?.id ?? [ 'destination' in link ? 'markdown' : 'wiki', link.target ],
+      link.heading ?? ''
+    ]);
     if ( seen.has( key ) ) {
       return false;
     }
@@ -32,11 +38,15 @@ const wordCount = computed( () => {
   return content ? content.split( /\s+/ ).length : 0;
 });
 
-function openOutgoing( target: string, noteId?: string ): void {
+function canCreateTarget( link: NoteLink ): boolean {
+  return canEditVault.value && !( 'destination' in link );
+}
+
+function openOutgoing( link: NoteLink, noteId?: string ): void {
   if ( noteId ) {
-    selectNote( noteId );
-  } else {
-    createLinkedNote( target );
+    emit( 'openNoteLink', link );
+  } else if ( !( 'destination' in link ) ) {
+    createLinkedNote( link );
   }
 }
 
@@ -100,20 +110,20 @@ function formatDate( timestamp?: number ): string {
               :key="`${item.link.target}-${item.link.index}`"
               type="button"
               class="connection-card outgoing-card"
-              :disabled="!item.note && !canEditVault"
+              :disabled="!item.note && !canCreateTarget( item.link )"
               :class="{ unresolved: !item.note }"
-              @click="openOutgoing( item.link.target, item.note?.id )"
+              @click="openOutgoing( item.link, item.note?.id )"
             >
-              <span class="connection-node"><AppIcon :name="item.note ? 'file-text' : 'plus'" :size="14" /></span>
+              <span class="connection-node"><AppIcon :name="item.note || !canCreateTarget( item.link ) ? 'file-text' : 'plus'" :size="14" /></span>
               <span>
                 <strong>{{ item.link.display || item.link.target }}</strong>
-                <small>{{ item.note ? ( item.note.folderId ? folderPath( item.note.folderId ) : 'Vault root' ) : ( canEditVault ? 'Create this note' : 'Note not found' ) }}</small>
+                <small>{{ item.note ? ( item.note.folderId ? folderPath( item.note.folderId ) : 'Vault root' ) : ( canCreateTarget( item.link ) ? 'Create this note' : 'Note not found' ) }}</small>
               </span>
               <AppIcon name="chevron" :size="13" />
             </button>
           </div>
           <div v-else class="empty-connection">
-            <span>Type <code>[[</code> in the editor to connect another note.</span>
+            <span>Connect another note with <code>[[</code> or a Markdown link.</span>
           </div>
         </section>
 

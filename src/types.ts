@@ -249,9 +249,20 @@ export interface WikiLink {
   index: number;
 }
 
+export interface MarkdownNoteLink {
+  raw: string;
+  destination: string;
+  target: string;
+  display: string;
+  heading?: string;
+  index: number;
+}
+
+export type NoteLink = WikiLink | MarkdownNoteLink;
+
 export interface Backlink {
   note: Note;
-  link: WikiLink;
+  link: NoteLink;
   excerpt: string;
 }
 

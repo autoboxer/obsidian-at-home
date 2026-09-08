@@ -1,5 +1,98 @@
+import { markdownLanguage } from '@codemirror/lang-markdown';
+import type { MarkdownNoteLink } from '../types';
+import { leadingFrontmatterEnd } from './frontmatter';
+
+export type MarkdownNoteTarget = Pick<MarkdownNoteLink, 'destination' | 'target' | 'heading'>;
+
+const MARKDOWN_PUNCTUATION_ESCAPE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+
+/** Keep escaped local URL delimiters literal through rendering and URI decoding. */
+export function normalizeMarkdownLinkDestination( value: string ): string {
+  const raw = value.trim().replace( /^<|>$/g, '' );
+  const unescaped = unescapeMarkdownPunctuation( raw );
+  if ( unescaped.startsWith( '//' ) || /^[a-z][a-z0-9+.-]*:/i.test( unescaped ) ) {
+    return unescaped;
+  }
+
+  return raw.replace( MARKDOWN_PUNCTUATION_ESCAPE, ( _match, character: string ) =>
+    '#?%'.includes( character ) ? encodeURIComponent( character ) : character
+  );
+}
+
+/** Parse a local Markdown note URL, splitting the fragment before decoding once. */
+export function parseMarkdownNoteTarget( href: string ): MarkdownNoteTarget | undefined {
+  const destination = normalizeMarkdownLinkDestination( href );
+  if ( !destination || destination.startsWith( '//' ) || /^[a-z][a-z0-9+.-]*:/i.test( destination ) ) {
+    return undefined;
+  }
+
+  const fragmentStart = destination.indexOf( '#' );
+  const rawTarget = fragmentStart < 0 ? destination : destination.slice( 0, fragmentStart );
+  if ( rawTarget.includes( '?' ) ) {
+    return undefined;
+  }
+
+  let target: string;
+  let heading: string;
+  try {
+    target = decodeURIComponent( rawTarget );
+    heading = fragmentStart < 0 ? '' : decodeURIComponent( destination.slice( fragmentStart + 1 ) ).trim();
+  } catch {
+    return undefined;
+  }
+  if (
+    target.startsWith( '//' )
+    || target.includes( '\\' )
+    || /[\u0000-\u001f\u007f]/u.test( target + heading )
+    || /^[a-z][a-z0-9+.-]*:/i.test( target )
+  ) {
+    return undefined;
+  }
+
+  // File links name Markdown files. Retain extensionless heading links, but
+  // leave other file types and extensionless attachments to asset handling.
+  const filename = target.split( '/' ).at( -1 ) ?? '';
+  if ( target
+    ? !/\.(?:md|markdown)$/i.test( filename ) && !( heading && filename && !filename.includes( '.' ) )
+    : !heading
+  ) {
+    return undefined;
+  }
+
+  return { destination, target, ...( heading ? { heading } : {}) };
+}
+
+/** Index the same inline links as the editor, excluding code, images and metadata. */
+export function parseMarkdownNoteLinks( source: string ): MarkdownNoteLink[] {
+  const bodyStart = leadingFrontmatterEnd( source ) ?? 0;
+  const links: MarkdownNoteLink[] = [];
+  markdownLanguage.parser.parse( source ).iterate({
+    enter( node ) {
+      if ( node.name === 'Image' ) {
+        return false;
+      }
+      if ( node.name !== 'Link' || node.from < bodyStart ) {
+        return;
+      }
+      const parsed = parseInlineMarkdownLinkAt( source, node.from );
+      const target = parsed && parsed.end + 1 === node.to
+        ? parseMarkdownNoteTarget( parsed.destination )
+        : undefined;
+      if ( parsed && target ) {
+        links.push({ ...target, raw: parsed.raw, display: parsed.label, index: node.from });
+      }
+
+      return false;
+    }
+  });
+
+  return links;
+}
+
 export interface ParsedInlineMarkdownLink {
   destination: string;
+  destinationFrom: number;
+  destinationTo: number;
   end: number;
   label: string;
   raw: string;
@@ -29,15 +122,20 @@ export function parseInlineMarkdownLinkAt(
     return undefined;
   }
 
-  const destinationParts = parseDestination(
-    source.slice( labelEnd + 2, destinationEnd ).trim()
-  );
+  const destinationSource = source.slice( labelEnd + 2, destinationEnd );
+  const destinationParts = parseDestination( destinationSource.trim() );
   if ( !destinationParts ) {
     return undefined;
   }
 
+  const destinationFrom = labelEnd + 2
+    + destinationSource.length - destinationSource.trimStart().length
+    + ( destinationSource.trimStart().startsWith( '<' ) ? 1 : 0 );
+
   return {
     destination: destinationParts.destination,
+    destinationFrom,
+    destinationTo: destinationFrom + destinationParts.destination.length,
     end: destinationEnd,
     label: unescapeMarkdownPunctuation( source.slice( labelStart, labelEnd ) ),
     raw: source.slice( start, destinationEnd + 1 ),
@@ -135,9 +233,6 @@ function parseDestination(
   };
 }
 
-function unescapeMarkdownPunctuation( value: string ): string {
-  return value.replace(
-    /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g,
-    '$1'
-  );
+export function unescapeMarkdownPunctuation( value: string ): string {
+  return value.replace( MARKDOWN_PUNCTUATION_ESCAPE, '$1' );
 }

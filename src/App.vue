@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ActivityRail from './components/ActivityRail.vue';
 import AppIcon from './components/AppIcon.vue';
 import CommandPalette from './components/CommandPalette.vue';
@@ -25,6 +25,8 @@ import {
   zoomOut
 } from './stores/vault';
 import type { ToolView } from './types';
+
+const editorWorkspace = ref<InstanceType<typeof EditorWorkspace>>();
 
 const requestedView = new URLSearchParams( window.location.search ).get( 'view' ) as ToolView | null;
 if ( requestedView && [ 'notes', 'search', 'templates', 'snippets', 'settings' ].includes( requestedView ) ) {
@@ -242,9 +244,12 @@ onBeforeUnmount( () => {
           </Transition>
           <RecentlyDeletedWorkspace v-if="uiState.notesView === 'recently-deleted'" />
           <template v-else>
-            <EditorWorkspace />
+            <EditorWorkspace ref="editorWorkspace" />
             <Transition name="panel-right">
-              <LinkInspector v-if="uiState.contextOpen" />
+              <LinkInspector
+                v-if="uiState.contextOpen"
+                @open-note-link="editorWorkspace?.openNoteLink( $event )"
+              />
             </Transition>
           </template>
         </div>

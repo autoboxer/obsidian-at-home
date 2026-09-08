@@ -41,6 +41,7 @@ import {
 import { sanitizeImageUrl, sanitizeLinkUrl } from './markdown';
 import { parseMarkdownAttachmentAt } from './markdownAttachments';
 import { parseMarkdownImageAt } from './markdownImages';
+import { parseMarkdownNoteTarget } from './markdownLinks';
 import { parseWikiLinks } from './wikiLinks';
 import type {
   Extension,
@@ -239,7 +240,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
 
         const rawHref = link.dataset.liveHref ?? '';
         const href = rawHref.startsWith( '//' ) ? `https:${ rawHref }` : rawHref;
-        if ( parseMarkdownHeadingTarget( rawHref ) ) {
+        if ( parseMarkdownNoteTarget( rawHref ) ) {
           this.options.openLink( rawHref );
         } else if ( !window.__TAURI__ ) {
           return false;
@@ -259,7 +260,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
         }
 
         const rawHref = link.dataset.liveHref ?? '';
-        if ( window.__TAURI__ || parseMarkdownHeadingTarget( rawHref ) ) {
+        if ( window.__TAURI__ || parseMarkdownNoteTarget( rawHref ) ) {
           return true;
         }
 

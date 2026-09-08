@@ -15,6 +15,7 @@ import {
   type ParsedMarkdownImage
 } from './markdownImages';
 import { parseWikiLinkAt } from './wikiLinks';
+import { normalizeMarkdownLinkDestination } from './markdownLinks';
 
 export interface MarkdownRenderOptions {
   /** Recognize an extensionless attachment only when its vault inventory contains the file. */
@@ -172,9 +173,7 @@ export function escapeHtml( value: string ): string {
 
 /** Return a browser-safe Markdown link destination, or `undefined`. */
 export function sanitizeLinkUrl( value: string ): string | undefined {
-  const url = value
-    .trim()
-    .replace( /^<|>$/g, '' )
+  const url = normalizeMarkdownLinkDestination( value )
     .replace( /[\u0000-\u001f\u007f]/g, '' );
   if ( !url ) {
     return undefined;

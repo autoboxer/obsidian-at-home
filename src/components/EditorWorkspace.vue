@@ -6,12 +6,10 @@ import {
   type AssetEmbeddingEditor
 } from '../composables/useAssetEmbedding';
 import { leadingFrontmatterEnd } from '../lib/frontmatter';
-import {
-  findMarkdownHeading,
-  parseMarkdownHeadingTarget
-} from '../lib/headingLinks';
+import { findMarkdownHeading } from '../lib/headingLinks';
 import { formatCommandShortcut } from '../lib/keyboard';
-import { resolveWikiLink } from '../lib/wikiLinks';
+import { parseMarkdownNoteTarget, type MarkdownNoteTarget } from '../lib/markdownLinks';
+import { resolveNoteLink, resolveWikiLink, wikiLinkSuggestions, type WikiLinkTarget } from '../lib/wikiLinks';
 import {
   editorPositionVaultId,
   getNoteEditorPosition,
@@ -33,6 +31,7 @@ import {
   navigateForward,
   moveNoteToFolder,
   notify,
+  noteLinkPaths,
   renameVaultAttachment,
   selectNote,
   togglePinned,
@@ -80,9 +79,26 @@ const {
   showEmbeddedAttachmentInFolder
 } = useAssetEmbedding( sourceEditor );
 
-defineExpose({ storeAndInsertAttachment });
+defineExpose({ openNoteLink, storeAndInsertAttachment });
 
-const noteTitles = computed( () => vaultState.notes.map( ( note ) => note.title ) );
+const noteLinkTargets = computed( () => wikiLinkSuggestions( vaultState.notes, noteLinkPaths.value ) );
+const wikiLinkIsResolved = computed( () => {
+  const paths = noteLinkPaths.value;
+  const sourceNote = activeNote.value;
+  const resolvedTargets = new Map<string, boolean>();
+
+  // Render updates reuse results until the source note or vault paths change.
+  return ( target: string ): boolean => {
+    const cached = resolvedTargets.get( target );
+    if ( cached !== undefined ) {
+      return cached;
+    }
+    const resolved = Boolean( resolveWikiLink({ target }, vaultState.notes, sourceNote, paths ) );
+    resolvedTargets.set( target, resolved );
+
+    return resolved;
+  };
+});
 const positionVaultId = computed( () => editorPositionVaultId( vaultSession.backend, vaultSession.path ) );
 // Access changes rebuild the editor and its widget controls.
 const editorKey = computed( () => JSON.stringify([
@@ -166,10 +182,13 @@ function rememberEditorPosition(
 }
 
 async function openRenderedLink( href: string ): Promise<void> {
-  const headingTarget = parseMarkdownHeadingTarget( href );
-  if ( headingTarget ) {
-    await openHeadingLink( headingTarget.noteTarget, headingTarget.heading );
+  const target = parseMarkdownNoteTarget( href );
+  if ( target ) {
+    await openNoteLink( target );
 
+    return;
+  }
+  if ( !/^(?:https?|mailto):/i.test( href ) ) {
     return;
   }
 
@@ -182,22 +201,28 @@ async function openRenderedLink( href: string ): Promise<void> {
 
 async function openWikiLink( target: string, heading?: string ): Promise<void> {
   if ( !heading ) {
-    createLinkedNote( target );
+    createLinkedNote({ target });
 
     return;
   }
 
-  await openHeadingLink( target, heading );
+  await openNoteLink({ target, heading });
 }
 
-async function openHeadingLink( target: string, heading: string ): Promise<void> {
-  const note = resolveWikiLink( target, vaultState.notes, activeNote.value );
+async function openNoteLink( link: WikiLinkTarget | MarkdownNoteTarget ): Promise<void> {
+  const note = resolveNoteLink( link, vaultState.notes, activeNote.value, noteLinkPaths.value );
   if ( !note ) {
-    notify( `Could not find note “${ linkedNoteLabel( target ) }”`, 'warning' );
+    notify( `Could not find note “${ linkedNoteLabel( link.target ) }”`, 'warning' );
+
+    return;
+  }
+  if ( !link.heading ) {
+    selectNote( note.id );
 
     return;
   }
 
+  const heading = link.heading;
   const match = findMarkdownHeading( note.content, heading );
   if ( !match ) {
     notify( `Could not find heading “${ heading }” in “${ note.title }”`, 'warning' );
@@ -698,7 +723,8 @@ watch( tagInput, () => {
             :model-value="activeNote.content"
             :note-id="activeNote.id"
             :note-relative-path="activeNote.relativePath"
-            :note-titles="noteTitles"
+            :note-link-targets="noteLinkTargets"
+            :wiki-link-is-resolved="wikiLinkIsResolved"
             :rename-attachment="renameVaultAttachment"
             :read-only="!canEditVault"
             :show-frontmatter="uiState.frontmatterVisible"

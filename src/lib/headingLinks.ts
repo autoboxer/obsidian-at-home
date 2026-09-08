@@ -1,4 +1,5 @@
 import { parseLiveMarkdownBlocks } from './liveMarkdown';
+import { parseMarkdownNoteTarget } from './markdownLinks';
 
 export interface MarkdownHeading {
   contentFrom: number;
@@ -60,30 +61,9 @@ export function findMarkdownHeading(
 export function parseMarkdownHeadingTarget(
   href: string
 ): MarkdownHeadingTarget | undefined {
-  const destination = href.trim().replace( /^<|>$/g, '' );
-  if (
-    !destination
-    || destination.startsWith( '//' )
-    || /^[a-z][a-z0-9+.-]*:/i.test( destination )
-  ) {
-    return undefined;
-  }
+  const target = parseMarkdownNoteTarget( href );
 
-  const fragmentStart = destination.indexOf( '#' );
-  if ( fragmentStart < 0 ) {
-    return undefined;
-  }
-
-  const rawNoteTarget = destination.slice( 0, fragmentStart );
-  const heading = decodeUriComponent( destination.slice( fragmentStart + 1 ) ).trim();
-  if ( !heading || rawNoteTarget.includes( '?' ) ) {
-    return undefined;
-  }
-
-  return {
-    heading,
-    noteTarget: decodeUriComponent( rawNoteTarget ).trim()
-  };
+  return target?.heading ? { heading: target.heading, noteTarget: target.target } : undefined;
 }
 
 export function markdownHeadingSlug( value: string ): string {
@@ -116,12 +96,4 @@ function markdownHeadingComparisonKey( value: string ): string {
     .toLocaleLowerCase()
     .replace( /\s+/g, ' ' )
     .trim();
-}
-
-function decodeUriComponent( value: string ): string {
-  try {
-    return decodeURIComponent( value );
-  } catch {
-    return value;
-  }
 }

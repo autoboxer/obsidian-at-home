@@ -2,7 +2,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, watch } from 'vue';
 import { createEmptyVault, createSeedVault } from '../data/seed';
-import { findBacklinks, parseWikiLinks, resolveWikiLink, searchNotes } from '../lib';
+import { findBacklinks, parseNoteLinks, resolveNoteLink, searchNotes } from '../lib';
 import { resolveMarkdownImagePath } from '../lib/imageEmbeds';
 import {
   formatMarkdownImage,
@@ -739,6 +739,13 @@ const {
   touchRecentNote
 } = vaultNavigation;
 
+export const noteLinkPaths = computed( () => new Map(
+  vaultState.notes.map( ( note ) => [
+    note.id,
+    projectedNoteRelativePath( note, vaultState.folders, note.relativePath )
+  ])
+) );
+
 const vaultContent = createVaultContent({
   activeNote: () => activeNote.value,
   currentFolderId,
@@ -746,6 +753,7 @@ const vaultContent = createVaultContent({
   folderContainsAssets,
   notify,
   rememberNoteOriginalPath,
+  noteLinkPaths: () => noteLinkPaths.value,
   selectNote
 });
 
@@ -770,14 +778,14 @@ export const outgoingLinks = computed( () => {
     return [];
   }
 
-  return parseWikiLinks( activeNote.value.content ).map( ( link ) => ({
+  return parseNoteLinks( activeNote.value.content ).map( ( link ) => ({
     link,
-    note: resolveWikiLink( link, vaultState.notes, activeNote.value )
+    note: resolveNoteLink( link, vaultState.notes, activeNote.value, noteLinkPaths.value )
   }) );
 });
 
 export const backlinks = computed( () =>
-  activeNote.value ? findBacklinks( activeNote.value, vaultState.notes ) : []
+  activeNote.value ? findBacklinks( activeNote.value, vaultState.notes, noteLinkPaths.value ) : []
 );
 
 export function setZoom( zoom: number ): void {
