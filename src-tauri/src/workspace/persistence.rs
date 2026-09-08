@@ -1035,11 +1035,16 @@ pub(super) fn build_note_write_plans(
             None => "",
         };
         let old_relative_path = old_state.note_paths.get(&note.id).cloned();
+        // New imports may retain either Markdown extension. Only the extension
+        // is a hint: the validated folder and title still determine the path.
         let extension = old_relative_path
             .as_deref()
+            .or(Some(note.relative_path.as_str()))
             .and_then(|path| Path::new(path).extension())
             .and_then(|value| value.to_str())
-            .filter(|value| value.eq_ignore_ascii_case("markdown"))
+            .filter(|value| {
+                value.eq_ignore_ascii_case("md") || value.eq_ignore_ascii_case("markdown")
+            })
             .unwrap_or("md");
         let stem = safe_file_stem(&note.title, "Untitled note");
 
