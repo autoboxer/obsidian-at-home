@@ -1,6 +1,6 @@
 import {
+  createNoteLinkRewriter,
   normalizeWikiTarget,
-  rewriteMarkdownNoteLinksForNotePaths,
   wikiLinkCandidates,
   type WikiLinkTarget
 } from '../lib/wikiLinks';
@@ -11,8 +11,10 @@ import {
   descendantFolderIds,
   folderConflictsWithNote,
   folderNameKey,
+  folderPathFromFolders,
   noteFileNameKeys,
   noteStemKey,
+  projectedNoteRelativePath,
   replaceTemplateTokens,
   safeNoteStem,
   uniqueNoteTitle
@@ -45,15 +47,14 @@ type NotePatch = Partial<Pick<
 export function createVaultContent(
   dependencies: VaultContentDependencies
 ) {
-  function preserveRelocatedNoteLinks( previousPaths: ReadonlyMap<string, string> ): void {
+  function preserveNoteLinks( previousPaths: ReadonlyMap<string, string> ): void {
     const nextPaths = dependencies.noteLinkPaths();
+    if ( vaultState.notes.every( ( note ) => previousPaths.get( note.id ) === nextPaths.get( note.id ) ) ) {
+      return;
+    }
+    const rewrite = createNoteLinkRewriter( vaultState.notes, previousPaths, nextPaths );
     for ( const note of vaultState.notes ) {
-      if ( previousPaths.get( note.id ) === nextPaths.get( note.id ) ) {
-        continue;
-      }
-      const content = rewriteMarkdownNoteLinksForNotePaths(
-        note, vaultState.notes, previousPaths, nextPaths
-      );
+      const content = rewrite( note );
       if ( content !== note.content ) {
         note.content = content;
         note.updatedAt = Date.now();
@@ -164,6 +165,24 @@ export function createVaultContent(
       patch.folderId !== undefined && patch.folderId !== note.folderId
     );
     const previousPaths = locationChanged ? dependencies.noteLinkPaths() : undefined;
+    if ( previousPaths ) {
+      const destination = projectedNoteRelativePath({
+        ...note,
+        title: patch.title ?? note.title,
+        folderId: patch.folderId === undefined ? note.folderId : patch.folderId
+      }, vaultState.folders, note.relativePath ).toLowerCase();
+      const duplicateNote = vaultState.notes.some( ( candidate ) =>
+        candidate.id !== id && previousPaths.get( candidate.id )?.toLowerCase() === destination
+      );
+      const duplicateFolder = vaultState.folders.some( ( folder ) =>
+        folderPathFromFolders( folder.id, vaultState.folders ).toLowerCase() === destination
+      );
+      if ( duplicateNote || duplicateFolder ) {
+        dependencies.notify( 'A file or folder with that name already exists there', 'warning' );
+
+        return false;
+      }
+    }
     if ( locationChanged ) {
       dependencies.rememberNoteOriginalPath( note );
     }
@@ -184,7 +203,7 @@ export function createVaultContent(
       note.pinned = patch.pinned;
     }
     if ( previousPaths ) {
-      preserveRelocatedNoteLinks( previousPaths );
+      preserveNoteLinks( previousPaths );
     }
     note.updatedAt = Date.now();
 
@@ -349,7 +368,7 @@ export function createVaultContent(
       }
     }
     folder.name = cleanName;
-    preserveRelocatedNoteLinks( previousPaths );
+    preserveNoteLinks( previousPaths );
   }
 
   function moveFolder( folderId: string, parentId: string | null ): boolean {
@@ -418,7 +437,7 @@ export function createVaultContent(
       }
     }
     folder.parentId = parentId;
-    preserveRelocatedNoteLinks( previousPaths );
+    preserveNoteLinks( previousPaths );
     dependencies.notify(
       `Moved ${ folder.name } to ${ parent?.name ?? 'Vault root' }`,
       'success'
@@ -492,7 +511,7 @@ export function createVaultContent(
       }
     }
     vaultState.folders.splice( vaultState.folders.indexOf( folder ), 1 );
-    preserveRelocatedNoteLinks( previousPaths );
+    preserveNoteLinks( previousPaths );
     if ( vaultState.selectedFolderId === id ) {
       vaultState.selectedFolderId = 'all';
     }

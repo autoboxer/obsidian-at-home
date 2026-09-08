@@ -156,6 +156,12 @@ function setTitle( event: Event ): void {
   updateNote( activeNote.value.id, { title: ( event.target as HTMLInputElement ).value });
 }
 
+function resetTitle( event: FocusEvent ): void {
+  // A colliding draft can be completed while typing; leaving the field shows
+  // the last accepted name instead of implying that a rejected rename saved.
+  ( event.target as HTMLInputElement ).value = activeNote.value?.title ?? '';
+}
+
 function setContent( content: string ): void {
   if ( activeNote.value ) {
     updateNote( activeNote.value.id, { content });
@@ -613,6 +619,7 @@ watch( tagInput, () => {
             aria-label="Note title"
             placeholder="Untitled note"
             @input="setTitle"
+            @blur="resetTitle"
           >
           <div class="note-properties">
             <label class="property-control folder-property">

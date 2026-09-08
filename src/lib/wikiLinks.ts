@@ -1,4 +1,6 @@
+import { markdownLanguage } from '@codemirror/lang-markdown';
 import type { Backlink, Note, NoteLink, WikiLink } from '../types';
+import { leadingFrontmatterEnd } from './frontmatter';
 import {
   parseInlineMarkdownLinkAt,
   parseMarkdownNoteLinks,
@@ -9,7 +11,6 @@ import { relativeImageDestination } from './markdownImages';
 export type WikiLinkTarget = Pick<WikiLink, 'target' | 'heading'>;
 
 const NOTE_EXTENSION = /\.(?:md|markdown)$/i;
-const FENCE_START = /^ {0,3}(`{3,}|~{3,})/;
 
 interface TextRange {
   start: number;
@@ -33,12 +34,12 @@ export function wikiTargetTitle( value: string ): string {
 }
 
 /**
- * Parse Obsidian-style wiki links while deliberately ignoring fenced and inline
- * code. `target` retains its path prefix and extension so explicit destinations
+ * Parse Obsidian-style wiki links while ignoring frontmatter and code.
+ * `target` retains its path prefix and extension so explicit destinations
  * remain distinguishable. The heading and alias are parsed separately.
  */
 export function parseWikiLinks( markdown: string ): WikiLink[] {
-  const protectedRanges = codeRanges( markdown );
+  const protectedRanges = protectedWikiRanges( markdown );
   const links: WikiLink[] = [];
   let rangeIndex = 0;
 
@@ -290,16 +291,124 @@ export function resolveNoteLink(
   return resolveWikiLink({ ...link, target }, notes, sourceNote, notePaths );
 }
 
-/** Preserve outgoing Markdown destinations when their source note changes path. */
-export function rewriteMarkdownNoteLinksForNotePaths(
+type NoteLinkResolver = ( link: WikiLinkTarget | MarkdownNoteTarget, source: Note ) => Note | undefined;
+type UniqueNoteMatches = Map<string, Note | null>;
+
+/** Snapshot unique matches once; null retains ambiguity without storing candidates. */
+function indexedNoteLinkResolver(
+  notes: readonly Note[],
+  paths: ReadonlyMap<string, string>
+): NoteLinkResolver {
+  const exactPaths: UniqueNoteMatches = new Map();
+  const foldedPaths: UniqueNoteMatches = new Map();
+  const exactNames: UniqueNoteMatches = new Map();
+  const foldedNames: UniqueNoteMatches = new Map();
+  const nearbyNames: UniqueNoteMatches = new Map();
+  const add = ( index: UniqueNoteMatches, key: string, note: Note ): void => {
+    index.set( key, index.has( key ) ? null : note );
+  };
+  for ( const note of notes ) {
+    const path = noteLinkPath( note, paths );
+    if ( !path ) {
+      continue;
+    }
+    const folder = path.split( '/' ).slice( 0, -1 ).join( '/' );
+    for ( const [ prefix, value ] of [[ 'file:', path ], [ 'stem:', path.replace( NOTE_EXTENSION, '' ) ]] as const ) {
+      const name = value.split( '/' ).at( -1 )!;
+      add( exactPaths, prefix + value, note );
+      add( foldedPaths, prefix + value.toLowerCase(), note );
+      add( exactNames, prefix + name, note );
+      add( foldedNames, prefix + name.toLowerCase(), note );
+      // Nearby matching folds only the filename, not the source folder's case.
+      add( nearbyNames, prefix + folder + '/' + name.toLowerCase(), note );
+    }
+  }
+  const match = ( exact: UniqueNoteMatches, folded: UniqueNoteMatches, key: string ): Note | null | undefined =>
+    exact.has( key ) ? exact.get( key ) : folded.get( key.toLowerCase() );
+
+  return ( link, source ) => {
+    const target = 'destination' in link && link.target && !link.target.startsWith( '/' )
+      ? `./${ link.target }`
+      : link.target;
+    if ( !target ) {
+      return source;
+    }
+    if ( target.endsWith( '/' ) || target.startsWith( '//' ) ) {
+      return undefined;
+    }
+    const sourceFolder = noteLinkPath( source, paths )?.split( '/' ).slice( 0, -1 ).join( '/' );
+    if ( target.includes( '/' ) ) {
+      const relative = target.startsWith( './' ) || target.startsWith( '../' );
+      const path = relative && sourceFolder === undefined
+        ? undefined
+        : canonicalNotePath( relative ? `${ sourceFolder }/${ target }` : target );
+
+      return path ? match( exactPaths, foldedPaths, ( NOTE_EXTENSION.test( path ) ? 'file:' : 'stem:' ) + path ) ?? undefined : undefined;
+    }
+    const name = canonicalNotePath( target );
+    if ( !name ) {
+      return undefined;
+    }
+    const prefix = NOTE_EXTENSION.test( name ) ? 'file:' : 'stem:';
+    if ( sourceFolder !== undefined ) {
+      const key = prefix + ( sourceFolder ? sourceFolder + '/' : '' ) + name;
+      const nearby = exactPaths.has( key )
+        ? exactPaths.get( key )
+        : nearbyNames.get( prefix + sourceFolder + '/' + name.toLowerCase() );
+      if ( nearby !== undefined ) {
+        return nearby ?? undefined;
+      }
+    }
+
+    return match( exactNames, foldedNames, prefix + name ) ?? undefined;
+  };
+}
+
+/** Reuse old/new lookup indexes throughout one note or folder mutation. */
+export function createNoteLinkRewriter(
+  notes: readonly Note[],
+  previousPaths: ReadonlyMap<string, string>,
+  nextPaths: ReadonlyMap<string, string>
+): ( note: Note ) => string {
+  // Notes without link syntax need neither Markdown parsing nor lookup indexes.
+  let previousResolver: NoteLinkResolver | undefined;
+  let nextResolver: NoteLinkResolver | undefined;
+
+  return ( note ) => {
+    if ( !note.content.includes( '[' ) ) {
+      return note.content;
+    }
+    previousResolver ??= indexedNoteLinkResolver( notes, previousPaths );
+    nextResolver ??= indexedNoteLinkResolver( notes, nextPaths );
+
+    return rewriteNoteLinks( note, previousPaths, nextPaths, previousResolver, nextResolver );
+  };
+}
+
+/** Preserve resolved note identities across source and destination path changes. */
+export function rewriteNoteLinksForNotePaths(
   note: Note,
   notes: readonly Note[],
   previousPaths: ReadonlyMap<string, string>,
   nextPaths: ReadonlyMap<string, string>
 ): string {
+  return rewriteNoteLinks(
+    note, previousPaths, nextPaths,
+    ( link, source ) => resolveNoteLink( link, notes, source, previousPaths ),
+    ( link, source ) => resolveNoteLink( link, notes, source, nextPaths )
+  );
+}
+
+function rewriteNoteLinks(
+  note: Note,
+  previousPaths: ReadonlyMap<string, string>,
+  nextPaths: ReadonlyMap<string, string>,
+  previousResolver: NoteLinkResolver,
+  nextResolver: NoteLinkResolver
+): string {
   const previousPath = noteLinkPath( note, previousPaths );
   const nextPath = noteLinkPath( note, nextPaths );
-  if ( !previousPath || !nextPath || previousPath === nextPath ) {
+  if ( !previousPath || !nextPath ) {
     return note.content;
   }
   const absoluteTarget = ( source: string, target: string ): string | undefined =>
@@ -308,21 +417,38 @@ export function rewriteMarkdownNoteLinksForNotePaths(
       : `${ source.split( '/' ).slice( 0, -1 ).join( '/' ) }/${ target }` );
 
   let content = note.content;
-  for ( const link of parseMarkdownNoteLinks( note.content ).reverse() ) {
+  for ( const link of parseNoteLinks( note.content ).reverse() ) {
     // Heading-only links already follow their source note.
     if ( !link.target ) {
       continue;
     }
-    const target = resolveNoteLink( link, notes, note, previousPaths );
+    const target = previousResolver( link, note );
     const targetPath = target
       ? noteLinkPath( target, nextPaths )
-      : absoluteTarget( previousPath, link.target );
+      : 'destination' in link ? absoluteTarget( previousPath, link.target ) : undefined;
     if (
       !targetPath
       || ( target
-        ? resolveNoteLink( link, notes, note, nextPaths )?.id === target.id
+        ? nextResolver( link, note )?.id === target.id
         : absoluteTarget( nextPath, link.target ) === targetPath )
     ) {
+      continue;
+    }
+
+    if ( !( 'destination' in link ) ) {
+      if ( !target ) {
+        continue;
+      }
+      const destination = rewrittenWikiTarget( link, target, targetPath, note, nextPaths, nextResolver );
+      if ( destination === undefined ) {
+        continue;
+      }
+      const openingLength = link.embedded ? 3 : 2;
+      const rawDestination = splitUnescaped( link.raw.slice( openingLength, -2 ), '|', 2 )[ 0 ]!;
+      const rawTarget = splitUnescaped( rawDestination, '#', 2 )[ 0 ]!;
+      const from = link.index + openingLength + rawTarget.length - rawTarget.trimStart().length;
+      const to = link.index + openingLength + rawTarget.trimEnd().length;
+      content = content.slice( 0, from ) + destination + content.slice( to );
       continue;
     }
 
@@ -351,6 +477,34 @@ export function rewriteMarkdownNoteLinksForNotePaths(
   }
 
   return content;
+}
+
+function rewrittenWikiTarget(
+  link: WikiLink,
+  target: Note,
+  targetPath: string,
+  source: Note,
+  paths: ReadonlyMap<string, string>,
+  resolve: NoteLinkResolver
+): string | undefined {
+  const path = NOTE_EXTENSION.test( link.target ) ? targetPath : targetPath.replace( NOTE_EXTENSION, '' );
+  let candidates: string[];
+  if ( link.target.startsWith( './' ) || link.target.startsWith( '../' ) ) {
+    const relative = relativeImageDestination( noteLinkPath( source, paths )!, path );
+    candidates = [ relative.startsWith( '../' ) ? relative : `./${ relative }` ];
+  } else if ( link.target.startsWith( '/' ) ) {
+    candidates = [ `/${ path }` ];
+  } else {
+    candidates = link.target.includes( '/' ) ? [ path ] : [ path.split( '/' ).at( -1 )!, path ];
+  }
+  // Qualify the path and extension if preserving the old style would select a
+  // duplicate name or confuse a filename ending in .md with its extension.
+  candidates.push( `/${ targetPath }` );
+  const destination = candidates.find( ( candidate ) =>
+    resolve({ target: candidate }, source )?.id === target.id
+  );
+
+  return destination?.replace( /[\\|#[\]]/g, '\\$&' );
 }
 
 /** Find every incoming wiki or Markdown note-link occurrence for a note. */
@@ -414,79 +568,18 @@ function excerptAround( content: string, index: number, length: number ): string
   return excerpt;
 }
 
-function codeRanges( markdown: string ): TextRange[] {
-  const ranges: TextRange[] = [];
-  const linePattern = /.*(?:\n|$)/g;
-  let fence:
-    | { marker: '`' | '~'; size: number; start: number }
-    | undefined;
-  let match: RegExpExecArray | null;
+function protectedWikiRanges( markdown: string ): TextRange[] {
+  const bodyStart = leadingFrontmatterEnd( markdown ) ?? 0;
+  const ranges: TextRange[] = bodyStart ? [{ start: 0, end: bodyStart }] : [];
+  markdownLanguage.parser.parse( markdown ).iterate({
+    enter( node ) {
+      if ([ 'FencedCode', 'CodeBlock', 'InlineCode' ].includes( node.name ) ) {
+        ranges.push({ start: node.from, end: node.to });
 
-  while ( ( match = linePattern.exec( markdown ) ) !== null ) {
-    if ( !match[ 0 ]) {
-      break;
-    }
-    const lineStart = match.index;
-    const line = match[ 0 ].replace( /\r?\n$/, '' );
-
-    if ( !fence ) {
-      const opening = line.match( FENCE_START );
-      if ( opening ) {
-        const run = opening[ 1 ]!;
-        fence = {
-          marker: run[ 0 ] as '`' | '~',
-          size: run.length,
-          start: lineStart
-        };
-      }
-    } else {
-      const closing = line.match( /^ {0,3}(`+|~+)\s*$/ );
-      if (
-        closing &&
-        closing[ 1 ]![ 0 ] === fence.marker &&
-        closing[ 1 ]!.length >= fence.size
-      ) {
-        ranges.push({ start: fence.start, end: linePattern.lastIndex });
-        fence = undefined;
+        return false;
       }
     }
-
-    if ( linePattern.lastIndex >= markdown.length ) {
-      break;
-    }
-  }
-
-  if ( fence ) {
-    ranges.push({ start: fence.start, end: markdown.length });
-  }
-
-  // Inline code ranges only need to be found outside fences.
-  let fenceIndex = 0;
-  for ( let index = 0; index < markdown.length; index += 1 ) {
-    while ( fenceIndex < ranges.length && index >= ranges[ fenceIndex ]!.end ) {
-      fenceIndex += 1;
-    }
-    const fenced = ranges[ fenceIndex ];
-    if ( fenced && index >= fenced.start && index < fenced.end ) {
-      index = fenced.end - 1;
-      continue;
-    }
-    if ( markdown[ index ] !== '`' || isEscaped( markdown, index ) ) {
-      continue;
-    }
-
-    const start = index;
-    while ( markdown[ index + 1 ] === '`' ) {
-      index += 1;
-    }
-    const size = index - start + 1;
-    const delimiter = '`'.repeat( size );
-    const close = markdown.indexOf( delimiter, index + 1 );
-    if ( close >= 0 && !markdown.slice( index + 1, close ).includes( '\n\n' ) ) {
-      ranges.push({ start, end: close + size });
-      index = close + size - 1;
-    }
-  }
+  });
 
   return ranges.sort( ( a, b ) => a.start - b.start );
 }
