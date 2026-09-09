@@ -822,7 +822,8 @@ function setRenderedListTextStart(
 
   const textStart = line.from + textOffset;
   if ( selection.head < textStart ) {
-    return false;
+    // Keep a repeated selection from shrinking back to the indentation.
+    return extendSelection && selection.head === line.from;
   }
   if (
     selection.head > textStart
@@ -830,17 +831,14 @@ function setRenderedListTextStart(
   ) {
     return false;
   }
-  if (
-    selection.head === textStart
-    && ( extendSelection || selection.empty )
-  ) {
-    return true;
-  }
+  const target = selection.head === textStart && ( extendSelection || selection.empty )
+    ? line.from
+    : textStart;
 
   view.dispatch({
     selection: extendSelection
-      ? EditorSelection.range( selection.anchor, textStart )
-      : EditorSelection.cursor( textStart ),
+      ? EditorSelection.range( selection.anchor, target )
+      : EditorSelection.cursor( target ),
     scrollIntoView: true,
     userEvent: 'select'
   });
