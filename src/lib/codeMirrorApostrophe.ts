@@ -1,147 +1,130 @@
-import {
-  StateEffect,
-  StateField,
-  Transaction
-} from '@codemirror/state';
+import { Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import type { EditorSelection, Extension, Text } from '@codemirror/state';
+import type { ChangeSpec, Extension } from '@codemirror/state';
 import type { Command } from '@codemirror/view';
 
-const STRAIGHT_APOSTROPHE = "'";
-const SMART_APOSTROPHES = new Set([ '‘', '’' ]);
-
-const rememberLiteralApostrophes = StateEffect.define<readonly number[]>();
-
-const literalApostropheState = StateField.define<readonly number[]>({
-  create: () => [],
-  update( positions, transaction ) {
-    const mapped = positions
-      .map( ( position ) => transaction.changes.mapPos( position, -1 ) )
-      .filter( ( position ) => isStraightApostropheAt( transaction.newDoc, position ) );
-    const added = transaction.effects
-      .filter( ( effect ) => effect.is( rememberLiteralApostrophes ) )
-      .flatMap( ( effect ) => effect.value )
-      .filter( ( position ) => isStraightApostropheAt( transaction.newDoc, position ) );
-
-    return [ ...new Set([ ...mapped, ...added ]) ]
-      .sort( ( first, second ) => first - second )
-      .filter( ( position ) => literalApostropheIsPending(
-        transaction.newDoc,
-        transaction.newSelection,
-        position
-      ) );
-  }
-});
-
-export const literalApostropheExtension: Extension = [
-  literalApostropheState,
-  EditorView.inputHandler.of( preserveLiteralApostrophes )
-];
-
-export const insertLiteralApostrophe: Command = ( view ) => {
-  if ( view.composing ) {
-    return false;
-  }
-
-  const transaction = view.state.update(
-    view.state.replaceSelection( STRAIGHT_APOSTROPHE )
-  );
-  const positions = transaction.newSelection.ranges
-    .map( ( range ) => range.head - STRAIGHT_APOSTROPHE.length )
-    .filter( ( position ) => isStraightApostropheAt( transaction.newDoc, position ) );
-
-  view.dispatch({
-    changes: transaction.changes,
-    selection: transaction.newSelection,
-    effects: rememberLiteralApostrophes.of( positions ),
-    scrollIntoView: true,
-    userEvent: 'input.type'
-  });
-
-  return true;
+const SMART_QUOTES: Readonly<Record<string, string>> = {
+  '‘': "'",
+  '’': "'",
+  '“': '"',
+  '”': '"'
 };
 
-function preserveLiteralApostrophes(
+export const insertLiteralApostrophe: Command = ( view ) => insertQuote( view, "'" );
+export const insertLiteralDoubleQuote: Command = ( view ) => insertQuote( view, '"' );
+
+export const literalApostropheExtension: Extension = [
+  EditorView.domEventHandlers({
+    beforeinput( event, view ) {
+      if (
+        view.composing || event.isComposing || view.state.readOnly
+        || !event.cancelable || event.inputType !== 'insertText' || !event.data
+      ) {
+        return false;
+      }
+
+      const touchesQuote = /['"]/.test( event.data )
+        || view.state.selection.ranges.some( ( range ) =>
+          /['"]/.test( view.state.doc.lineAt( range.head ).text )
+        );
+      if ( !touchesQuote ) {
+        return false;
+      }
+
+      // Native smart punctuation can rewrite earlier text and its DOM caret.
+      // Keep typing on quoted lines in the same editing path as the quote key.
+      event.preventDefault();
+      view.dispatch( view.state.replaceSelection( event.data ), {
+        scrollIntoView: true,
+        userEvent: 'input.type'
+      });
+
+      return true;
+    }
+  }),
+  EditorView.inputHandler.of( preserveLiteralQuotes )
+];
+
+function preserveLiteralQuotes(
   view: EditorView,
   from: number,
   to: number,
   text: string,
   insert: () => Transaction
 ): boolean {
-  if ( view.composing ) {
+  if ( view.composing || view.state.readOnly ) {
     return false;
   }
 
-  const protectedPositions = view.state
-    .field( literalApostropheState )
-    .filter( ( position ) => position >= from && position < to );
-  if ( !protectedPositions.length ) {
+  const correctedInput = correctQuoteSubstitution( view, from, to, text );
+  if ( correctedInput === text ) {
     return false;
   }
 
-  const corrected = text.split( '' );
-  let changed = false;
+  const transaction = insert();
+  if ( !transaction.isUserEvent( 'input.type' ) || transaction.isUserEvent( 'input.type.compose' ) ) {
+    return false;
+  }
 
-  for ( const position of protectedPositions ) {
-    const offset = position - from;
-    if (
-      view.state.sliceDoc( position, position + 1 ) === STRAIGHT_APOSTROPHE &&
-      SMART_APOSTROPHES.has( corrected[ offset ] ?? '' )
-    ) {
-      corrected[ offset ] = STRAIGHT_APOSTROPHE;
-      changed = true;
+  const edits: ChangeSpec[] = [];
+  transaction.changes.iterChanges( ( fromA, toA, _fromB, _toB, inserted ) => {
+    const corrected = correctQuoteSubstitution( view, fromA, toA, inserted.toString() );
+    if ( corrected !== view.state.sliceDoc( fromA, toA ) ) {
+      edits.push({ from: fromA, to: toA, insert: corrected });
     }
-  }
-  if ( !changed ) {
-    return false;
-  }
+  });
+  const changes = view.state.changes( edits );
+  const addToHistory = transaction.annotation( Transaction.addToHistory );
+  const remote = transaction.annotation( Transaction.remote );
 
-  const defaultTransaction = insert();
-  const correctedText = corrected.join( '' );
-  const restoresExistingText = correctedText === view.state.sliceDoc( from, to );
-  // Smart punctuation may rewrite a completed word behind the actual caret.
-  const selection = restoresExistingText
-    ? view.state.selection
-    : defaultTransaction.newSelection;
-  const userEvent =
-    defaultTransaction.annotation( Transaction.userEvent ) ?? 'input.type';
-  const addToHistory = defaultTransaction.annotation( Transaction.addToHistory );
-  const remote = defaultTransaction.annotation( Transaction.remote );
-  const annotations = [
-    Transaction.userEvent.of( userEvent ),
-    ...( addToHistory === undefined
-      ? []
-      : [ Transaction.addToHistory.of( addToHistory ) ]),
-    ...( remote === undefined ? [] : [ Transaction.remote.of( remote ) ])
-  ];
-
+  // A delayed substitution alone must not move the caret or create an undo
+  // step. Retain other simultaneous edits, selections, and transaction effects.
   view.dispatch({
-    changes: { from, to, insert: correctedText },
-    selection,
-    effects: defaultTransaction.effects,
-    annotations,
-    scrollIntoView: defaultTransaction.scrollIntoView
+    changes,
+    selection: changes.empty ? view.state.selection : transaction.newSelection,
+    effects: transaction.effects,
+    annotations: [
+      Transaction.userEvent.of( transaction.annotation( Transaction.userEvent )! ),
+      Transaction.time.of( transaction.annotation( Transaction.time )! ),
+      ...( addToHistory === undefined ? [] : [ Transaction.addToHistory.of( addToHistory ) ]),
+      ...( remote === undefined ? [] : [ Transaction.remote.of( remote ) ])
+    ],
+    scrollIntoView: !changes.empty && transaction.scrollIntoView
   });
 
   return true;
 }
 
-function literalApostropheIsPending(
-  document: Text,
-  selection: EditorSelection,
-  position: number
-): boolean {
-  const line = document.lineAt( position );
+function correctQuoteSubstitution(
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string
+): string {
+  if ( view.state.selection.ranges.some( ( range ) =>
+    !range.empty && range.from === from && range.to === to
+  ) ) {
+    return text;
+  }
 
-  return selection.ranges.some( ( range ) => {
-    if ( !range.empty || range.head <= position || range.head > line.to ) {
-      return false;
-    }
+  const previous = view.state.sliceDoc( from, to );
 
-    return /^\S*\s?$/.test( document.sliceString( position + 1, range.head ) );
-  });
+  return text.split( '' ).map( ( character, offset ) =>
+    SMART_QUOTES[ character ] !== undefined && SMART_QUOTES[ character ] === previous[ offset ]
+      ? previous[ offset ]
+      : character
+  ).join( '' );
 }
 
-function isStraightApostropheAt( document: Text, position: number ): boolean {
-  return document.sliceString( position, position + 1 ) === STRAIGHT_APOSTROPHE;
+function insertQuote( view: EditorView, quote: string ): boolean {
+  if ( view.composing || view.state.readOnly ) {
+    return false;
+  }
+
+  view.dispatch( view.state.replaceSelection( quote ), {
+    scrollIntoView: true,
+    userEvent: 'input.type'
+  });
+
+  return true;
 }

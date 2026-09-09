@@ -40,6 +40,7 @@ import {
 } from '../composables/useCodeMirrorDocumentSearch';
 import {
   insertLiteralApostrophe,
+  insertLiteralDoubleQuote,
   literalApostropheExtension
 } from '../lib/codeMirrorApostrophe';
 import { tableDelimiterHyphenExtension } from '../lib/codeMirrorTableDelimiter';
@@ -944,9 +945,11 @@ onMounted( () => {
       'aria-label': 'Markdown source',
       'aria-readonly': String( props.readOnly ),
       tabindex: '0',
-      autocapitalize: 'sentences',
+      autocapitalize: 'off',
+      autocorrect: 'off',
       class: 'source-textarea',
-      spellcheck: 'true'
+      spellcheck: 'true',
+      writingsuggestions: 'false'
     }),
     markdown({
       addKeymap: false,
@@ -1035,6 +1038,7 @@ onMounted( () => {
       { key: 'Mod-k', run: wrapSelectionAsMarkdownLink },
       { key: 'Mod-Shift-x', run: toggleStrikethrough },
       { key: "'", run: insertLiteralApostrophe },
+      { key: '"', run: insertLiteralDoubleQuote },
       { key: '-', run: insertLiteralHyphen },
       { key: '`', run: wrapSelectionAsInlineCode },
       { key: 'ArrowLeft', run: revealRenderedListSourceFromRight },
