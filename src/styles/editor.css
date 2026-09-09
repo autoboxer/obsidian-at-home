@@ -992,6 +992,9 @@
   color: color-mix(in srgb, var(--violet) 72%, var(--text-soft));
   font-weight: 650;
   text-align: right;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .source-editor

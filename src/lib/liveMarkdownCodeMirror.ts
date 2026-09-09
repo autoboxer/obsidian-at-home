@@ -121,6 +121,7 @@ interface LiveMarkdownModel {
 }
 
 const LIST_INDENT_STEP_EM = 1.65;
+const LIST_MARKER_CHARACTER_WIDTH_EM = 0.9;
 const defaultMarkdownImageSource: MarkdownImageSourceResolver = ( image ) =>
   sanitizeImageUrl( image.destination );
 const inlineMarkupSpanCache = new WeakMap<Text, InlineMarkupSpan[]>();
@@ -939,6 +940,7 @@ function parseLiveMarkdownModel(
   const value = state.doc.toString();
   const tree = syntaxTree( state );
   const { blocks, tables } = liveMarkdownDocumentModel( state );
+  const listIndentations = renderedListIndentations( blocks );
   const codeFences = parseLiveMarkdownCodeFences( value );
   const codeLines = new Set(
     codeFences.flatMap( ( fence ) => fence.lineNumbers )
@@ -990,7 +992,8 @@ function parseLiveMarkdownModel(
       quoteDepth,
       renderedQuotePrefix?.depth === quoteDepth
         ? renderedQuotePrefix.source
-        : undefined
+        : undefined,
+      listIndentations.get( block.from )
     );
   }
 
@@ -1043,7 +1046,8 @@ function addBlockDecorations(
   value: string,
   options: LiveMarkdownOptions,
   quoteDepth = block.quote?.depth ?? 0,
-  quotePrefix?: string
+  quotePrefix?: string,
+  listIndentation?: number
 ): void {
   const classes = [
     'live-markdown-block',
@@ -1095,7 +1099,7 @@ function addBlockDecorations(
         block.from,
         block.content.from
       )
-    }], [ renderedListLineDecoration( block ) ], { boundaryReveal: 'construct' });
+    }], [ renderedListLineDecoration( block, listIndentation ) ], { boundaryReveal: 'construct' });
     if ( block.task.checked && block.content.from < block.content.to ) {
       addMarkDecoration( model, block.content, 'live-task-content' );
     }
@@ -1113,7 +1117,7 @@ function addBlockDecorations(
         block.from,
         block.content.from
       )
-    }], [ renderedListLineDecoration( block ) ], { boundaryReveal: 'construct' });
+    }], [ renderedListLineDecoration( block, listIndentation ) ], { boundaryReveal: 'construct' });
 
     return;
   }
@@ -1860,9 +1864,66 @@ function lineDecoration(
   };
 }
 
-function renderedListLineDecoration( block: LiveMarkdownBlock ): StoredDecoration {
-  const indentation = ( ( block.list?.depth ?? 0 ) + 1 ) * LIST_INDENT_STEP_EM;
+function renderedListIndentations( blocks: readonly LiveMarkdownBlock[]): Map<number, number> {
+  interface ListGroup {
+    ordered: boolean;
+    parent?: ListGroup;
+    blocks: LiveMarkdownBlock[];
+    markerLength: number;
+    indentation: number;
+  }
 
+  const groups: ListGroup[] = [];
+  const levels: ListGroup[] = [];
+  const indentations = new Map<number, number>();
+
+  for ( const block of blocks ) {
+    const list = block.list;
+    if ( !list ) {
+      levels.length = 0;
+
+      continue;
+    }
+
+    levels.length = Math.min( levels.length, list.depth + 1 );
+    let group = levels[ list.depth ];
+    if ( !group || group.ordered !== list.ordered ) {
+      group = {
+        ordered: list.ordered,
+        parent: levels[ list.depth - 1 ],
+        blocks: [],
+        markerLength: 0,
+        indentation: 0
+      };
+      levels[ list.depth ] = group;
+      groups.push( group );
+    }
+    group.blocks.push( block );
+    if ( !block.task ) {
+      group.markerLength = Math.max(
+        group.markerLength,
+        renderedListMarker( block ).length
+      );
+    }
+  }
+
+  // Include offscreen siblings and resolve parents first so their extra width
+  // also shifts nested lists. Single-digit markers keep the usual spacing.
+  for ( const group of groups ) {
+    const extraWidth = Math.max( 0, group.markerLength - 2 ) * LIST_MARKER_CHARACTER_WIDTH_EM;
+    group.indentation = ( group.parent?.indentation ?? 0 ) + LIST_INDENT_STEP_EM + extraWidth;
+    for ( const block of group.blocks ) {
+      indentations.set( block.from, group.indentation );
+    }
+  }
+
+  return indentations;
+}
+
+function renderedListLineDecoration(
+  block: LiveMarkdownBlock,
+  indentation = ( ( block.list?.depth ?? 0 ) + 1 ) * LIST_INDENT_STEP_EM
+): StoredDecoration {
   return {
     from: block.from,
     to: block.from,
