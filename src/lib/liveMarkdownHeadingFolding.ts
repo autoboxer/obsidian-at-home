@@ -111,6 +111,23 @@ export function liveMarkdownHeadingFoldingExtension(
           transaction.changes
         )
         : [ ...value.collapsed ];
+      // At the document end there is no following character to put the caret
+      // inside the folded body. Reveal text inserted there by an editing action.
+      if (
+        transaction.docChanged && requestedCollapsed.length
+        && ( transaction.isUserEvent( 'input' ) || transaction.isUserEvent( 'undo' ) || transaction.isUserEvent( 'redo' ) )
+        && transaction.newSelection.ranges.some( ( range ) => range.head === transaction.newDoc.length )
+      ) {
+        let insertedAtEnd = false;
+        transaction.changes.iterChangedRanges( ( _fromA, _toA, fromB, toB ) => {
+          insertedAtEnd ||= fromB < toB && toB === transaction.newDoc.length;
+        });
+        if ( insertedAtEnd ) {
+          requestedCollapsed = requestedCollapsed.filter( ( heading ) =>
+            sectionLookup.byFrom.get( heading.from )?.bodyTo !== transaction.newDoc.length
+          );
+        }
+      }
       if ( foldEffects.length ) {
         for ( const effect of foldEffects ) {
           const section = headingSectionAtPosition(
@@ -399,15 +416,6 @@ function selectionHeadIsInSectionBody(
   return selection.head >= section.bodyFrom && selection.head < section.bodyTo;
 }
 
-function selectionTouchesSectionBody(
-  selection: SelectionRange,
-  section: HeadingSection
-): boolean {
-  return selection.empty
-    ? selection.head >= section.bodyFrom && selection.head < section.bodyTo
-    : selection.from < section.bodyTo && selection.to > section.bodyFrom;
-}
-
 class HeadingFoldWidget extends WidgetType {
   constructor(
     private readonly section: HeadingSection,
@@ -449,19 +457,13 @@ class HeadingFoldWidget extends WidgetType {
       event.preventDefault();
       event.stopPropagation();
       const willCollapse = !this.collapsed;
-      const selectionTouchesBody = willCollapse && view.state.selection.ranges.some(
-        ( range ) => selectionTouchesSectionBody( range, this.section )
-      );
 
       view.dispatch({
         effects: setHeadingCollapsedEffect.of({
           collapsed: willCollapse,
           from: this.section.from
         }),
-        ...( selectionTouchesBody
-          ? { selection: EditorSelection.cursor( this.section.contentTo ) }
-          : {}),
-        scrollIntoView: true,
+        selection: EditorSelection.cursor( this.section.contentTo ),
         userEvent: 'select.heading-fold'
       });
       view.focus();
