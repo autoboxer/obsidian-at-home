@@ -13,21 +13,6 @@ import type { LiveMarkdownBlock } from './liveMarkdown';
 import type { ParsedMarkdownImage } from './markdownImages';
 
 const UNORDERED_LIST_MARKERS = [ '•', '◦', '▪' ] as const;
-const ROMAN_NUMERALS: ReadonlyArray<readonly [number, string]> = [
-  [ 1_000, 'm' ],
-  [ 900, 'cm' ],
-  [ 500, 'd' ],
-  [ 400, 'cd' ],
-  [ 100, 'c' ],
-  [ 90, 'xc' ],
-  [ 50, 'l' ],
-  [ 40, 'xl' ],
-  [ 10, 'x' ],
-  [ 9, 'ix' ],
-  [ 5, 'v' ],
-  [ 4, 'iv' ],
-  [ 1, 'i' ]
-];
 
 export class ListMarkerWidget extends WidgetType {
   constructor(
@@ -714,15 +699,7 @@ export function renderedListMarker( block: LiveMarkdownBlock ): string {
     return UNORDERED_LIST_MARKERS[ block.list.depth % 3 ]!;
   }
 
-  const number = block.list.number ?? 1;
-  if ( block.list.depth % 3 === 1 ) {
-    return `${ alphabeticListMarker( number ) }.`;
-  }
-  if ( block.list.depth % 3 === 2 ) {
-    return `${ romanListMarker( number ) }.`;
-  }
-
-  return `${ number }.`;
+  return `${ block.list.number ?? 1 }.`;
 }
 
 function revealWidgetSource(
@@ -821,37 +798,4 @@ function createCheckIcon( document: Document ): SVGSVGElement {
   icon.append( path );
 
   return icon;
-}
-
-function alphabeticListMarker( number: number ): string {
-  if ( number < 1 ) {
-    return String( number );
-  }
-
-  let value = number;
-  let marker = '';
-  while ( value > 0 ) {
-    value -= 1;
-    marker = String.fromCharCode( 97 + ( value % 26 ) ) + marker;
-    value = Math.floor( value / 26 );
-  }
-
-  return marker;
-}
-
-function romanListMarker( number: number ): string {
-  if ( number < 1 || number > 3_999 ) {
-    return String( number );
-  }
-
-  let remaining = number;
-  let marker = '';
-  for ( const [ value, numeral ] of ROMAN_NUMERALS ) {
-    while ( remaining >= value ) {
-      marker += numeral;
-      remaining -= value;
-    }
-  }
-
-  return marker;
 }
