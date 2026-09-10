@@ -57,12 +57,12 @@ A target can use the visible heading text or its lowercase, hyphenated slug. Mat
   - Nested bullets change shape at each level
     - Keep pressing Tab to nest further
 1. Numbered item
-  1. Nested ordered items use letters
-    1. The next level uses lowercase Roman numerals
+  1. Nested ordered items start at one
+    1. Every level uses numbers
 - [ ] Open task
 - [x] Completed task
 
-Press Enter at the end of a list item to continue the list. Press Tab or Shift+Tab to move the current item in or out one level.
+Press Enter at the end of a list item to continue the list. Press Tab or Shift+Tab to move the current item in or out one level. New nested numbered lists start at one.
 
 ### 4. Tables and app features
 
