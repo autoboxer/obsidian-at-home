@@ -44,6 +44,7 @@ import {
   literalApostropheExtension
 } from '../lib/codeMirrorApostrophe';
 import { tableDelimiterHyphenExtension } from '../lib/codeMirrorTableDelimiter';
+import { codeMirrorMultiCursorExtension } from '../lib/codeMirrorMultiCursor';
 import {
   liveMarkdownExtension,
   orderedListRenumberingExtension,
@@ -932,6 +933,7 @@ onMounted( () => {
     historyCompartment.of( history() ),
     drawSelection(),
     dropCursor(),
+    codeMirrorMultiCursorExtension,
     EditorState.tabSize.of( 4 ),
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({

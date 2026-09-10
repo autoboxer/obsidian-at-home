@@ -1,4 +1,5 @@
 import { EditorView, WidgetType } from '@codemirror/view';
+import { isMultiCursorGesture } from './codeMirrorMultiCursor';
 import { NOTE_IMAGE_DRAG_MIME } from './imageEmbeds';
 import {
   markdownAttachmentIsArchive,
@@ -14,7 +15,14 @@ import type { ParsedMarkdownImage } from './markdownImages';
 
 const UNORDERED_LIST_MARKERS = [ '•', '◦', '▪' ] as const;
 
-export class ListMarkerWidget extends WidgetType {
+// Modifier gestures belong to CodeMirror even when they start on a widget.
+export abstract class LiveMarkdownWidget extends WidgetType {
+  ignoreEvent( event: Event ): boolean {
+    return !( event instanceof MouseEvent && isMultiCursorGesture( event ) );
+  }
+}
+
+export class ListMarkerWidget extends LiveMarkdownWidget {
   constructor(
     private readonly source: string,
     private readonly marker: string,
@@ -55,7 +63,7 @@ export class ListMarkerWidget extends WidgetType {
   }
 }
 
-export class TaskWidget extends WidgetType {
+export class TaskWidget extends LiveMarkdownWidget {
   constructor(
     private readonly source: string,
     private readonly checked: boolean,
@@ -103,12 +111,19 @@ export class TaskWidget extends WidgetType {
       revealWidgetSource( view, control, event, this.from, this.to )
     );
     checkbox.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
     });
     checkbox.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
       view.dispatch({
         changes: {
           from: this.checkFrom,
@@ -125,7 +140,7 @@ export class TaskWidget extends WidgetType {
   }
 }
 
-export class QuoteMarkerWidget extends WidgetType {
+export class QuoteMarkerWidget extends LiveMarkdownWidget {
   constructor(
     private readonly source: string,
     private readonly depth: number,
@@ -156,7 +171,7 @@ export class QuoteMarkerWidget extends WidgetType {
   }
 }
 
-export class HorizontalRuleWidget extends WidgetType {
+export class HorizontalRuleWidget extends LiveMarkdownWidget {
   constructor(
     private readonly from: number,
     private readonly to: number
@@ -180,7 +195,7 @@ export class HorizontalRuleWidget extends WidgetType {
   }
 }
 
-export class WikiLinkWidget extends WidgetType {
+export class WikiLinkWidget extends LiveMarkdownWidget {
   constructor(
     private readonly display: string,
     private readonly target: string,
@@ -226,12 +241,19 @@ export class WikiLinkWidget extends WidgetType {
       link.dataset.embedded = 'true';
     }
     link.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
     });
     link.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
       const target = this.target.trim();
       if ( target || this.heading ) {
         this.openWiki( target, this.heading );
@@ -260,7 +282,7 @@ export type MarkdownAttachmentRenameAction = (
   fileName: string
 ) => Promise<boolean>;
 
-export class MarkdownAttachmentWidget extends WidgetType {
+export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
   constructor(
     private readonly attachment: ParsedMarkdownAttachment,
     private readonly metadata: MarkdownAttachmentMetadata | null | undefined,
@@ -342,12 +364,19 @@ export class MarkdownAttachmentWidget extends WidgetType {
         ? 'Save the archive outside the vault'
         : 'Open with the default application';
       action.addEventListener( 'mousedown', ( event ) => {
+        if ( isMultiCursorGesture( event ) ) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
       });
       action.addEventListener( 'click', ( event ) => {
         event.preventDefault();
         event.stopPropagation();
+        if ( isMultiCursorGesture( event ) ) {
+          return;
+        }
         this.activateAttachment?.( this.attachment, this.metadata );
       });
       actions.append( action );
@@ -380,12 +409,19 @@ export class MarkdownAttachmentWidget extends WidgetType {
       rename.textContent = 'Rename';
       rename.title = `Rename ${ fileName }`;
       rename.addEventListener( 'mousedown', ( event ) => {
+        if ( isMultiCursorGesture( event ) ) {
+          return;
+        }
+
         event.preventDefault();
         event.stopPropagation();
       });
       rename.addEventListener( 'click', ( event ) => {
         event.preventDefault();
         event.stopPropagation();
+        if ( isMultiCursorGesture( event ) ) {
+          return;
+        }
         const form = document.createElement( 'span' );
         const input = document.createElement( 'input' );
         const save = document.createElement( 'button' );
@@ -456,6 +492,9 @@ export class MarkdownAttachmentWidget extends WidgetType {
         save.addEventListener( 'click', ( saveEvent ) => {
           saveEvent.preventDefault();
           saveEvent.stopPropagation();
+          if ( isMultiCursorGesture( saveEvent ) ) {
+            return;
+          }
           submitRename();
         });
         cancel.className = 'attachment-card__action';
@@ -464,14 +503,27 @@ export class MarkdownAttachmentWidget extends WidgetType {
         cancel.addEventListener( 'click', ( cancelEvent ) => {
           cancelEvent.preventDefault();
           cancelEvent.stopPropagation();
+          if ( isMultiCursorGesture( cancelEvent ) ) {
+            return;
+          }
           if ( !submitting ) {
             restoreCard();
           }
         });
         form.addEventListener( 'mousedown', ( formEvent ) => {
+          if ( isMultiCursorGesture( formEvent ) ) {
+            return;
+          }
+
           formEvent.stopPropagation();
         });
         form.addEventListener( 'click', ( formEvent ) => {
+          if ( isMultiCursorGesture( formEvent ) ) {
+            formEvent.preventDefault();
+            formEvent.stopPropagation();
+            return;
+          }
+
           formEvent.stopPropagation();
         });
         form.addEventListener( 'keydown', ( keyEvent ) => {
@@ -508,6 +560,10 @@ export class MarkdownAttachmentWidget extends WidgetType {
       card.append( actions );
     }
     card.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       if ( event.button === 0 ) {
         event.stopPropagation();
         view.focus();
@@ -536,12 +592,19 @@ function createAttachmentLocationAction(
   button.setAttribute( 'aria-label', label );
   button.append( createAttachmentLocationIcon( document, icon ) );
   button.addEventListener( 'mousedown', ( event ) => {
+    if ( isMultiCursorGesture( event ) ) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
   });
   button.addEventListener( 'click', ( event ) => {
     event.preventDefault();
     event.stopPropagation();
+    if ( isMultiCursorGesture( event ) ) {
+      return;
+    }
     activate();
   });
 
@@ -591,7 +654,7 @@ function createAttachmentLocationIcon(
   return svg;
 }
 
-export class MarkdownImageWidget extends WidgetType {
+export class MarkdownImageWidget extends LiveMarkdownWidget {
   constructor(
     private readonly image: ParsedMarkdownImage,
     private readonly resolveSource: MarkdownImageSourceResolver | undefined,
@@ -645,6 +708,10 @@ export class MarkdownImageWidget extends WidgetType {
       );
     }, { once: true });
     frame.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       if ( event.button === 0 ) {
         // Keep CodeMirror from replacing the widget before the browser can
         // decide whether this pointer gesture is a click or a native drag.
@@ -709,6 +776,9 @@ function revealWidgetSource(
   from: number,
   to: number
 ): void {
+  if ( isMultiCursorGesture( event ) ) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   const bounds = element.getBoundingClientRect();

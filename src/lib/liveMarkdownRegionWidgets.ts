@@ -1,14 +1,16 @@
 import { EditorSelection } from '@codemirror/state';
-import { EditorView, WidgetType } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
+import { isMultiCursorGesture } from './codeMirrorMultiCursor';
 import {
   CODE_LANGUAGE_OPTIONS,
   findCodeLanguageOption
 } from './highlight';
+import { LiveMarkdownWidget } from './liveMarkdownCodeMirrorWidgets';
 import { writeClipboardText } from '../services/native';
 import type { CodeLanguageOption } from './highlight';
 import type { LiveMarkdownCodeFence } from './liveMarkdownCode';
 
-export class CodeFenceHeaderWidget extends WidgetType {
+export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
   private resetCopyStatusTimer: number | undefined;
 
   constructor(
@@ -47,6 +49,10 @@ export class CodeFenceHeaderWidget extends WidgetType {
 
     root.className = 'live-code-header-widget';
     root.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       if ( event.target === root ) {
         revealSource( view, event, this.from, this.to );
       }
@@ -70,7 +76,11 @@ export class CodeFenceHeaderWidget extends WidgetType {
 
     picker.className = 'live-code-language-picker';
     picker.hidden = true;
-    picker.addEventListener( 'mousedown', ( event ) => event.stopPropagation() );
+    picker.addEventListener( 'mousedown', ( event ) => {
+      if ( !isMultiCursorGesture( event ) ) {
+        event.stopPropagation();
+      }
+    });
 
     searchLabel.className = 'live-code-language-search';
     searchLabel.append( createSearchIcon( document ), search );
@@ -184,7 +194,11 @@ export class CodeFenceHeaderWidget extends WidgetType {
           }
           search.setAttribute( 'aria-activedescendant', optionButton.id );
         });
-        optionButton.addEventListener( 'click', () => chooseLanguage( option ) );
+        optionButton.addEventListener( 'click', ( event ) => {
+          if ( !isMultiCursorGesture( event ) ) {
+            chooseLanguage( option );
+          }
+        });
 
         return optionButton;
       }) );
@@ -206,12 +220,19 @@ export class CodeFenceHeaderWidget extends WidgetType {
     };
 
     button.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
     });
     button.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
       const opening = picker.hidden;
       if ( !opening ) {
         closePicker();
@@ -225,12 +246,19 @@ export class CodeFenceHeaderWidget extends WidgetType {
       search.focus();
     });
     copyButton.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
     });
     copyButton.addEventListener( 'click', async ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
       closePicker();
       try {
         await writeClipboardText( this.fence.code );
@@ -294,7 +322,7 @@ export class CodeFenceHeaderWidget extends WidgetType {
   }
 }
 
-export class CodeFenceFooterWidget extends WidgetType {
+export class CodeFenceFooterWidget extends LiveMarkdownWidget {
   constructor(
     private readonly from: number,
     private readonly to: number
@@ -318,7 +346,7 @@ export class CodeFenceFooterWidget extends WidgetType {
   }
 }
 
-export class TableDelimiterWidget extends WidgetType {
+export class TableDelimiterWidget extends LiveMarkdownWidget {
   constructor(
     private readonly from: number,
     private readonly to: number
@@ -335,6 +363,10 @@ export class TableDelimiterWidget extends WidgetType {
     divider.className = 'live-table-divider';
     divider.setAttribute( 'aria-hidden', 'true' );
     divider.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       view.dispatch({
@@ -351,7 +383,7 @@ export class TableDelimiterWidget extends WidgetType {
   }
 }
 
-export class EmptyTableCellWidget extends WidgetType {
+export class EmptyTableCellWidget extends LiveMarkdownWidget {
   constructor(
     private readonly position: number,
     private readonly columnIndex: number,
@@ -376,6 +408,10 @@ export class EmptyTableCellWidget extends WidgetType {
     cell.textContent = '\u00a0';
     cell.setAttribute( 'aria-hidden', 'true' );
     cell.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       view.dispatch({
@@ -403,7 +439,7 @@ export class EmptyTableCellWidget extends WidgetType {
   }
 }
 
-export class TableCellBreakWidget extends WidgetType {
+export class TableCellBreakWidget extends LiveMarkdownWidget {
   eq( other: TableCellBreakWidget ): boolean {
     return other instanceof TableCellBreakWidget;
   }
@@ -430,6 +466,9 @@ function revealSource(
   from: number,
   to: number
 ): void {
+  if ( isMultiCursorGesture( event ) ) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget;

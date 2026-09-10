@@ -4,16 +4,14 @@ import {
   StateEffect,
   StateField
 } from '@codemirror/state';
-import {
-  Decoration,
-  EditorView,
-  WidgetType
-} from '@codemirror/view';
+import { Decoration, EditorView } from '@codemirror/view';
+import { isMultiCursorGesture } from './codeMirrorMultiCursor';
 import {
   markdownHeadingSlug,
   markdownHeadingText
 } from './headingLinks';
 import { liveMarkdownDocumentModel } from './liveMarkdownDocumentModel';
+import { LiveMarkdownWidget } from './liveMarkdownCodeMirrorWidgets';
 import type {
   ChangeDesc,
   EditorState,
@@ -251,7 +249,7 @@ function normalizedCollapsedHeadings(
       section
       && !seenPositions.has( section.from )
       && !selections.some( ( range ) =>
-        selectionHeadIsInSectionBody( range, section )
+        selectionTouchesSectionBody( range, section )
       )
     ) {
       collapsed.push( collapsedHeading( section ) );
@@ -409,14 +407,16 @@ function sameCollapsedHeadings(
   );
 }
 
-function selectionHeadIsInSectionBody(
+function selectionTouchesSectionBody(
   selection: SelectionRange,
   section: HeadingSection
 ): boolean {
-  return selection.head >= section.bodyFrom && selection.head < section.bodyTo;
+  return selection.empty
+    ? selection.head >= section.bodyFrom && selection.head < section.bodyTo
+    : selection.from < section.bodyTo && selection.to > section.bodyFrom;
 }
 
-class HeadingFoldWidget extends WidgetType {
+class HeadingFoldWidget extends LiveMarkdownWidget {
   constructor(
     private readonly section: HeadingSection,
     private readonly collapsed: boolean
@@ -450,12 +450,19 @@ class HeadingFoldWidget extends WidgetType {
     button.append( chevron );
 
     button.addEventListener( 'mousedown', ( event ) => {
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
     });
     button.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+      if ( isMultiCursorGesture( event ) ) {
+        return;
+      }
       const willCollapse = !this.collapsed;
 
       view.dispatch({

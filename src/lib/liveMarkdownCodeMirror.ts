@@ -13,6 +13,7 @@ import {
   ViewPlugin
 } from '@codemirror/view';
 import { documentSearchMatches } from './codeMirrorDocumentSearch';
+import { isMultiCursorGesture } from './codeMirrorMultiCursor';
 import { parseMarkdownHeadingTarget } from './headingLinks';
 import { highlightCodeRanges } from './highlight';
 import { parsePairedInlineMarkup } from './inlineMarkup';
@@ -246,6 +247,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
         if ( !link ) {
           return false;
         }
+        if ( isMultiCursorGesture( event ) ) {
+          event.preventDefault();
+
+          return true;
+        }
 
         const rawHref = link.dataset.liveHref ?? '';
         const href = rawHref.startsWith( '//' ) ? `https:${ rawHref }` : rawHref;
@@ -264,7 +270,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
       },
       mousedown( event, view ) {
         const link = renderedMarkdownLink( event.target, view );
-        if ( !link || event.button !== 0 ) {
+        if ( !link || event.button !== 0 || isMultiCursorGesture( event ) ) {
           return false;
         }
 
@@ -547,20 +553,24 @@ export function liveMarkdownExtension( options: LiveMarkdownOptions ): Extension
     liveMarkdownDocumentModelField,
     liveMarkdownHeadingFoldingExtension( options.documentId ),
     tableCellCaretAssociation,
-    boundarySelectionRendering,
+    selectionRendering,
     liveMarkdownPlugin.of( options ),
     EditorView.mouseSelectionStyle.of( inlineMarkupMouseSelection )
   ];
 }
 
-const boundarySelectionRendering = EditorView.editorAttributes.compute(
+const selectionRendering = EditorView.editorAttributes.compute(
   [ liveMarkdownDocumentModelField, 'selection' ],
   ( state ): Record<string, string> => selectionNeedsDrawnHighlight( state )
-    ? { class: 'live-drawn-boundary-selection' }
+    ? { class: 'live-drawn-selection' }
     : {}
 );
 
 function selectionNeedsDrawnHighlight( state: EditorState ): boolean {
+  // The browser can only paint the primary selection.
+  if ( state.selection.ranges.length > 1 ) {
+    return true;
+  }
   const selectedLineBoundaries = new Set<number>();
   for ( const range of state.selection.ranges ) {
     if ( range.empty ) {
