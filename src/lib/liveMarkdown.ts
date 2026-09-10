@@ -32,6 +32,15 @@ export interface LiveMarkdownList {
   number?: number;
 }
 
+export interface LiveMarkdownListGroup {
+  depth: number;
+  indentation: number;
+  ordered: boolean;
+  delimiter: string;
+  items: LiveMarkdownBlock[];
+  parent?: LiveMarkdownListGroup;
+}
+
 export interface LiveMarkdownQuote {
   depth: number;
 }
@@ -139,39 +148,6 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
   arrangeListItems( blocks );
 
   return blocks;
-}
-
-export function normalizeOrderedListMarkers(
-  value: string
-): { edits: LiveMarkdownTextEdit[]; value: string } {
-  const edits = parseLiveMarkdownBlocks( value ).flatMap( ( block ) => {
-    if ( !block.list?.ordered ) {
-      return [];
-    }
-    if ( block.list.depth > 0 ) {
-      return [];
-    }
-
-    const marker = value.slice( block.list.marker.from, block.list.marker.to );
-    const delimiter = marker.at( -1 );
-    const expected = `${ block.list.number ?? 1 }${ delimiter }`;
-    if ( marker === expected ) {
-      return [];
-    }
-
-    return [{
-      from: block.list.marker.from,
-      to: block.list.marker.to,
-      insert: expected
-    }];
-  });
-
-  let normalized = value;
-  for ( const edit of [ ...edits ].reverse() ) {
-    normalized = `${ normalized.slice( 0, edit.from ) }${ edit.insert }${ normalized.slice( edit.to ) }`;
-  }
-
-  return { edits, value: normalized };
 }
 
 export function findLiveMarkdownBlock(
@@ -429,24 +405,44 @@ function createListMetadata(
       to: markerFrom + sourceMarker.length
     },
     ...( orderedMarker
-      ? { number: Math.max( 1, Number.parseInt( orderedMarker[ 1 ]!, 10 ) ) }
+      ? { number: Number.parseInt( orderedMarker[ 1 ]!, 10 ) }
       : {})
   };
-}
-
-interface ListLevel {
-  indentation: number;
-  ordered: boolean;
-  number?: number;
 }
 
 const MAX_ORDERED_LIST_NUMBER = 999_999_999;
 
 function arrangeListItems( blocks: readonly LiveMarkdownBlock[]): void {
-  const levels: ListLevel[] = [];
+  for ( const group of liveMarkdownListGroups( blocks ) ) {
+    // Repeated 1. is conventional Markdown. Otherwise show explicit numbers,
+    // including nested starting numbers and deliberate resets in the source.
+    const repeatedOnes = group.ordered && group.items.every( ( block ) => block.list!.number === 1 );
+    for ( const [ index, block ] of group.items.entries() ) {
+      block.list!.depth = group.depth;
+      if ( repeatedOnes ) {
+        block.list!.number = index + 1;
+      }
+    }
+  }
+}
+
+export function nextOrderedListNumber( number: number ): number {
+  return number >= MAX_ORDERED_LIST_NUMBER ? 1 : number + 1;
+}
+
+export function liveMarkdownListGroups(
+  blocks: readonly LiveMarkdownBlock[]
+): LiveMarkdownListGroup[] {
+  const levels: LiveMarkdownListGroup[] = [];
+  const groups: LiveMarkdownListGroup[] = [];
 
   for ( const block of blocks ) {
     if ( !block.list ) {
+      // Without a blank separator, plain text can continue an item. This also
+      // keeps following siblings together when a user removes a marker.
+      if ( block.type === 'text' ) {
+        continue;
+      }
       levels.length = 0;
 
       continue;
@@ -466,38 +462,26 @@ function arrangeListItems( blocks: readonly LiveMarkdownBlock[]): void {
 
       levels.length = parentDepth + 1;
       depth = levels.length;
-      levels.push( createListLevel( list, depth ) );
     }
 
-    let level = levels[ depth ]!;
-    if ( level.ordered !== list.ordered ) {
-      level = createListLevel( list, depth );
+    const delimiter = block.source[ list.marker.to - block.from - 1 ]!;
+    let level = levels[ depth ];
+    if ( !level || level.ordered !== list.ordered || level.delimiter !== delimiter ) {
+      level = {
+        depth,
+        indentation: list.indentation,
+        ordered: list.ordered,
+        delimiter,
+        items: [],
+        parent: levels[ depth - 1 ]
+      };
       levels[ depth ] = level;
-    } else if ( matchingLevel >= 0 && level.ordered ) {
-      const currentNumber = level.number ?? 0;
-      const nextNumber = currentNumber >= MAX_ORDERED_LIST_NUMBER
-        ? 1
-        : currentNumber + 1;
-      level.number = depth === 0
-        ? Math.max( nextNumber, list.number ?? 1 )
-        : nextNumber;
+      groups.push( level );
     }
-
-    list.depth = depth;
-    if ( list.ordered ) {
-      list.number = level.number ?? 1;
-    }
+    level.items.push( block );
   }
-}
 
-function createListLevel( list: LiveMarkdownList, depth: number ): ListLevel {
-  return {
-    indentation: list.indentation,
-    ordered: list.ordered,
-    ...( list.ordered
-      ? { number: depth === 0 ? list.number ?? 1 : 1 }
-      : {})
-  };
+  return groups;
 }
 
 function indentationWidth( indentation: string ): number {

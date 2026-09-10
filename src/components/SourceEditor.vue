@@ -44,9 +44,9 @@ import {
   literalApostropheExtension
 } from '../lib/codeMirrorApostrophe';
 import { tableDelimiterHyphenExtension } from '../lib/codeMirrorTableDelimiter';
-import { normalizeOrderedListMarkers } from '../lib/liveMarkdown';
 import {
   liveMarkdownExtension,
+  orderedListRenumberingExtension,
   refreshLiveMarkdownEffect
 } from '../lib/liveMarkdownCodeMirror';
 import { liveMarkdownDocumentModel } from '../lib/liveMarkdownDocumentModel';
@@ -96,7 +96,6 @@ import type { Extension, SelectionRange } from '@codemirror/state';
 import type { Command, ViewUpdate } from '@codemirror/view';
 import type { MarkdownSelectionEdit } from '../lib/markdownFormatting';
 import type { ParsedMarkdownImage } from '../lib/markdownImages';
-import type { LiveMarkdownTextEdit } from '../lib/liveMarkdown';
 import type {
   AttachmentInsertionCapture,
   EmbeddedAttachment,
@@ -202,12 +201,6 @@ interface ListLine {
   spacing: string;
   contentOffset: number;
   task: boolean;
-}
-
-interface TextEdit {
-  start: number;
-  removed: number;
-  added: number;
 }
 
 const suggestions = computed( () => {
@@ -959,6 +952,7 @@ onMounted( () => {
     }),
     literalApostropheExtension,
     tableDelimiterHyphenExtension,
+    orderedListRenumberingExtension( ( transaction ) => Boolean( transaction.annotation( externalUpdate ) ) ),
     liveMarkdownExtension({
       acceptExtensionlessAttachment: isKnownExtensionlessAttachment,
       activateAttachment: activateLiveMarkdownAttachment,
@@ -2014,23 +2008,13 @@ function handleSmartEnter( view: EditorView ): boolean {
   const taskPrefix = item.task ? '[ ] ' : '';
   const continuation = `${ item.indent }${ marker }${ item.spacing }${ taskPrefix }`;
   const separatorLength = bodyAfter.match( /^[ \t]+/ )?.[ 0 ].length ?? 0;
-  const next = `${ value.slice( 0, insertionPosition ) }\n${ continuation }${ value.slice(
-    insertionPosition + separatorLength
-  ) }`;
   const cursor = insertionPosition + 1 + continuation.length;
-  const normalized = item.ordered
-    ? normalizeOrderedListMarkers( next )
-    : { edits: [], value: next };
-  const normalizedCursor = mapPositionThroughLiveMarkdownEdits(
-    cursor,
-    normalized.edits
-  );
-  applyFullDocumentEdit(
-    view,
-    normalized.value,
-    normalizedCursor,
-    normalizedCursor
-  );
+  view.dispatch({
+    changes: { from: insertionPosition, to: insertionPosition + separatorLength, insert: `\n${ continuation }` },
+    selection: EditorSelection.cursor( cursor ),
+    scrollIntoView: true,
+    userEvent: 'input'
+  });
 
   return true;
 }
@@ -2135,87 +2119,37 @@ function adjustSelectedLines( view: EditorView, outdent: boolean ): boolean {
   const lastLine = view.state.doc.lineAt( effectiveEnd );
   const block = value.slice( firstLine.from, lastLine.to );
   const lines = block.split( '\n' );
-  const orderedListChanged = lines.some( ( line ) =>
-    matchEditableListLine( line )?.ordered
-  );
-  const edits: TextEdit[] = [];
+  const edits: { from: number; to: number; insert: string }[] = [];
   let sourceOffset = firstLine.from;
 
-  const transformed = lines.map( ( line ) => {
+  for ( const line of lines ) {
     if ( !outdent ) {
-      edits.push({ start: sourceOffset, removed: 0, added: INDENT.length });
+      edits.push({ from: sourceOffset, to: sourceOffset, insert: INDENT });
       sourceOffset += line.length + 1;
 
-      return `${ INDENT }${ line }`;
+      continue;
     }
 
     const removable = line.startsWith( '\t' ) ? 1 : line.match( /^ {1,2}/ )?.[ 0 ].length ?? 0;
     if ( removable ) {
-      edits.push({ start: sourceOffset, removed: removable, added: 0 });
+      edits.push({ from: sourceOffset, to: sourceOffset + removable, insert: '' });
     }
     sourceOffset += line.length + 1;
-
-    return line.slice( removable );
-  }).join( '\n' );
+  }
 
   if ( !edits.length ) {
     return true;
   }
 
-  const adjusted = `${ value.slice( 0, firstLine.from ) }${ transformed }${ value.slice( lastLine.to ) }`;
-  const mappedStart = mapPositionThroughEdits( selectionStart, edits );
-  const mappedEnd = mapPositionThroughEdits( selectionEnd, edits );
-  const normalized = orderedListChanged
-    ? normalizeOrderedListMarkers( adjusted )
-    : { edits: [], value: adjusted };
-  const normalizedStart = mapPositionThroughLiveMarkdownEdits(
-    mappedStart,
-    normalized.edits
-  );
-  const normalizedEnd = mapPositionThroughLiveMarkdownEdits(
-    mappedEnd,
-    normalized.edits
-  );
-  const backward = selection.anchor > selection.head;
+  const changes = view.state.changes( edits );
   view.dispatch({
-    changes: minimalDocumentChange( value, normalized.value ),
-    selection: backward
-      ? EditorSelection.range( normalizedEnd, normalizedStart )
-      : EditorSelection.range( normalizedStart, normalizedEnd ),
+    changes,
+    selection: view.state.selection.map( changes, 1 ),
     scrollIntoView: true,
     userEvent: 'input.indent'
   });
 
   return true;
-}
-
-function mapPositionThroughEdits( position: number, edits: TextEdit[]): number {
-  let delta = 0;
-  for ( const edit of edits ) {
-    if ( position < edit.start ) {
-      break;
-    }
-    if ( position <= edit.start + edit.removed ) {
-      return edit.start + delta + edit.added;
-    }
-    delta += edit.added - edit.removed;
-  }
-
-  return position + delta;
-}
-
-function mapPositionThroughLiveMarkdownEdits(
-  position: number,
-  edits: readonly LiveMarkdownTextEdit[]
-): number {
-  return mapPositionThroughEdits(
-    position,
-    edits.map( ( edit ) => ({
-      start: edit.from,
-      removed: edit.to - edit.from,
-      added: edit.insert.length
-    }) )
-  );
 }
 
 function blockPendingEditorInteraction( event: Event ): void {
