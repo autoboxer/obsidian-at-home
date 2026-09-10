@@ -1,3 +1,4 @@
+import type { LiveMarkdownTextEdit } from './liveMarkdown';
 import { parseLiveMarkdownTables } from './liveMarkdownTable';
 import type {
   LiveMarkdownTable,
@@ -11,6 +12,8 @@ export type LiveMarkdownTableNavigation =
   | 'up-row';
 
 export interface LiveMarkdownTableEdit {
+  // Preserve the source location when batching edits to identical rows.
+  change?: LiveMarkdownTextEdit;
   value: string;
   selectionStart: number;
   selectionEnd: number;
@@ -86,7 +89,8 @@ export function insertLiveMarkdownTableRow(
   const rowIndex = location.role === 'delimiter' || location.rowIndex === 0
     ? 0
     : location.rowIndex;
-  const nextValue = insertEmptyTableRow( value, table, rowIndex );
+  const change = insertEmptyTableRow( value, table, rowIndex );
+  const nextValue = applyTableChange( value, change );
   const nextTable = reparsedTable( nextValue, table );
   const targetCell = nextTable?.rows[ rowIndex ]?.cells[ 0 ];
   if ( !targetCell ) {
@@ -95,6 +99,7 @@ export function insertLiveMarkdownTableRow(
 
   return {
     value: nextValue,
+    change,
     selectionStart: targetCell.from,
     selectionEnd: targetCell.from
   };
@@ -148,6 +153,7 @@ export function deleteEmptyLiveMarkdownTableRow(
 
   return {
     value: nextValue,
+    change: { from: deletionFrom, to: row.end, insert: '' },
     selectionStart: previousCell.to,
     selectionEnd: previousCell.to
   };
@@ -192,6 +198,7 @@ export function insertLiveMarkdownTableLineBreak(
 
   return {
     value: nextValue,
+    change: { from: selectionStart, to: selectionEnd, insert: lineBreak },
     selectionStart: cursor,
     selectionEnd: cursor
   };
@@ -441,11 +448,13 @@ function moveToTableCell(
   selectionOffset?: number
 ): LiveMarkdownTableEdit | undefined {
   let nextValue = value;
+  let change: LiveMarkdownTextEdit | undefined;
   let nextTable = table;
   let editableRows = [ nextTable.header, ...nextTable.rows ];
 
   if ( rowIndex >= editableRows.length ) {
-    nextValue = appendEmptyTableRow( nextValue, nextTable );
+    change = appendEmptyTableRow( nextValue, nextTable );
+    nextValue = applyTableChange( nextValue, change );
     const reparsed = reparsedTable( nextValue, table );
     if ( !reparsed ) {
       return undefined;
@@ -459,7 +468,8 @@ function moveToTableCell(
     return undefined;
   }
   if ( !targetRow.cells[ columnIndex ]) {
-    nextValue = expandTableRow( nextValue, nextTable, targetRow );
+    change = expandTableRow( nextValue, nextTable, targetRow );
+    nextValue = applyTableChange( nextValue, change );
     const reparsed = reparsedTable( nextValue, table );
     if ( !reparsed ) {
       return undefined;
@@ -485,6 +495,7 @@ function moveToTableCell(
 
   return {
     value: nextValue,
+    change,
     selectionStart,
     selectionEnd
   };
@@ -507,6 +518,7 @@ function moveBelowTable(
 
   return {
     value: nextValue,
+    change: { from: value.length, to: value.length, insert: preferredLineEnding( value, table ) },
     selectionStart: nextValue.length,
     selectionEnd: nextValue.length
   };
@@ -516,7 +528,7 @@ function insertEmptyTableRow(
   value: string,
   table: LiveMarkdownTable,
   rowIndex: number
-): string {
+): LiveMarkdownTextEdit {
   const nextRow = table.rows[ rowIndex ];
   if ( !nextRow ) {
     return appendEmptyTableRow( value, table );
@@ -525,27 +537,21 @@ function insertEmptyTableRow(
   const row = emptyTableRow( value, table );
   const lineEnding = preferredLineEnding( value, table );
 
-  return `${ value.slice( 0, nextRow.from ) }${ row }${ lineEnding }${
-    value.slice( nextRow.from )
-  }`;
+  return { from: nextRow.from, to: nextRow.from, insert: `${ row }${ lineEnding }` };
 }
 
 function appendEmptyTableRow(
   value: string,
   table: LiveMarkdownTable
-): string {
+): LiveMarkdownTextEdit {
   const lastRow = table.rows.at( -1 ) ?? table.delimiter;
   const row = emptyTableRow( value, table );
   const existingLineEnding = value.slice( lastRow.to, lastRow.end );
   if ( existingLineEnding ) {
-    return `${ value.slice( 0, lastRow.end ) }${ row }${ existingLineEnding }${
-      value.slice( lastRow.end )
-    }`;
+    return { from: lastRow.end, to: lastRow.end, insert: `${ row }${ existingLineEnding }` };
   }
 
-  return `${ value.slice( 0, lastRow.to ) }${ preferredLineEnding( value, table ) }${
-    row
-  }${ value.slice( lastRow.to ) }`;
+  return { from: lastRow.to, to: lastRow.to, insert: `${ preferredLineEnding( value, table ) }${ row }` };
 }
 
 function emptyTableRow(
@@ -562,7 +568,7 @@ function expandTableRow(
   value: string,
   table: LiveMarkdownTable,
   row: LiveMarkdownTableRow
-): string {
+): LiveMarkdownTextEdit {
   const cells = Array.from(
     { length: table.columnCount },
     ( _, index ) => row.cells[ index ]?.source ?? ''
@@ -570,7 +576,7 @@ function expandTableRow(
   const source = value.slice( row.from, row.to );
   const replacement = formatTableRow( cells, source );
 
-  return `${ value.slice( 0, row.from ) }${ replacement }${ value.slice( row.to ) }`;
+  return { from: row.from, to: row.to, insert: replacement };
 }
 
 function formatTableRow( cells: readonly string[], example: string ): string {
@@ -639,4 +645,8 @@ function trailingTableCellPaddingFrom(
   }
 
   return cell.editableTo - 1;
+}
+
+function applyTableChange( value: string, change: LiveMarkdownTextEdit ): string {
+  return `${ value.slice( 0, change.from ) }${ change.insert }${ value.slice( change.to ) }`;
 }

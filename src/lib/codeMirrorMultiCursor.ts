@@ -1,3 +1,4 @@
+import { addCursorAbove, addCursorBelow } from '@codemirror/commands';
 import { EditorSelection, EditorState } from '@codemirror/state';
 import {
   EditorView,
@@ -5,8 +6,83 @@ import {
   rectangularSelection,
   ViewPlugin
 } from '@codemirror/view';
-import type { Extension, SelectionRange } from '@codemirror/state';
+import type { ChangeSet, Extension, SelectionRange } from '@codemirror/state';
 import type { Command } from '@codemirror/view';
+import type { LiveMarkdownTextEdit } from './liveMarkdown';
+
+export interface MultiCursorEdit {
+  changes: readonly LiveMarkdownTextEdit[];
+  // Like changeByRange, this range is relative to this edit's own result.
+  range: SelectionRange;
+}
+
+export function multiCursorChanges(
+  state: EditorState,
+  edits: readonly MultiCursorEdit[]
+): { changes: ChangeSet; selection: EditorSelection } | undefined {
+  const key = ( change: LiveMarkdownTextEdit ): string => JSON.stringify([ change.from, change.to, change.insert ]);
+  const unique = new Map( edits.flatMap( ( edit ) => edit.changes )
+    .filter( ( change ) => change.from !== change.to || change.insert )
+    .map( ( change ) => [ key( change ), change ]) );
+  const ordered = [ ...unique.values() ].sort( ( a, b ) => a.from - b.from || a.to - b.to );
+  const merged: { change: LiveMarkdownTextEdit; keys: string[] }[] = [];
+  for ( const change of ordered ) {
+    const previous = merged.at( -1 );
+    if ( previous && ( previous.change.to > change.from || previous.change.from === change.from ) ) {
+      if ( previous.change.insert || change.insert ) {
+        // Conflicting structural edits cannot be applied independently.
+        return undefined;
+      }
+      previous.change.to = Math.max( previous.change.to, change.to );
+      previous.keys.push( key( change ) );
+    } else {
+      merged.push({ change: { ...change }, keys: [ key( change ) ] });
+    }
+  }
+
+  const changes = state.changes( merged.map( ( item ) => item.change ) );
+  const starts = new Map<string, number>();
+  let offset = 0;
+  for ( const { change, keys } of merged ) {
+    for ( const id of keys ) {
+      starts.set( id, change.from + offset );
+    }
+    offset += change.insert.length - ( change.to - change.from );
+  }
+  const ranges = edits.map( ( edit ) => {
+    const ownChanges = [ ...edit.changes ].sort( ( a, b ) => a.from - b.from || a.to - b.to );
+    const mapPosition = ( position: number, assoc: number ): number => {
+      let ownOffset = 0;
+      for ( const change of ownChanges ) {
+        const start = change.from + ownOffset;
+        if ( position < start ) {
+          break;
+        }
+        const mappedStart = starts.get( key( change ) );
+        if ( mappedStart !== undefined && position <= start + change.insert.length ) {
+          return mappedStart + position - start;
+        }
+        ownOffset += change.insert.length - ( change.to - change.from );
+      }
+
+      return changes.mapPos( position - ownOffset, assoc );
+    };
+    const { range } = edit;
+    const head = mapPosition( range.head, range.assoc || 1 );
+
+    return range.empty
+      ? EditorSelection.cursor( head, range.assoc, range.bidiLevel ?? undefined, range.goalColumn )
+      : EditorSelection.range(
+        mapPosition( range.anchor, range.anchor < range.head ? 1 : -1 ),
+        head,
+        range.goalColumn,
+        range.bidiLevel ?? undefined,
+        range.assoc
+      );
+  });
+
+  return { changes, selection: EditorSelection.create( ranges, state.selection.mainIndex ) };
+}
 
 export const selectNextOccurrence: Command = ( view ) => {
   if ( view.composing ) {
@@ -126,6 +202,9 @@ export const codeMirrorMultiCursorExtension: Extension = [
   EditorView.contentAttributes.of( ( view ) => view.plugin( rectangularSelectionCursor )?.active
     ? { style: 'cursor: crosshair' } : null ),
   keymap.of([
+    // Linux desktops commonly reserve Ctrl+Alt+arrows for workspace switching.
+    { linux: 'Ctrl-Shift-ArrowUp', run: addCursorAbove, preventDefault: true },
+    { linux: 'Ctrl-Shift-ArrowDown', run: addCursorBelow, preventDefault: true },
     { key: 'Mod-d', run: selectNextOccurrence, preventDefault: true },
     { key: 'Mod-Shift-l', run: selectAllOccurrences, preventDefault: true }
   ])

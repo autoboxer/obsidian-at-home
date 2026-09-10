@@ -482,6 +482,8 @@
   min-height: 0;
   flex: 1;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, max-content) 1fr;
+  align-items: start;
   gap: 12px;
   padding: 18px 20px 22px;
   overflow-y: auto;
@@ -510,12 +512,17 @@
 .shortcut-reference-group.group-editor {
   height: max-content;
   grid-column: 2;
-  grid-row: 2 / span 2;
+  grid-row: 2 / span 3;
+}
+
+.shortcut-reference-group.group-selection {
+  grid-column: 1;
+  grid-row: 3;
 }
 
 .shortcut-reference-group.group-view {
   grid-column: 1;
-  grid-row: 3;
+  grid-row: 4;
 }
 
 .shortcut-reference-group h3 {
@@ -595,10 +602,13 @@
 @media (max-width: 720px) {
   .shortcut-reference-content {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-rows: max-content;
   }
 
   .shortcut-reference-group.group-workspace,
   .shortcut-reference-group.group-editor,
+  .shortcut-reference-group.group-selection,
   .shortcut-reference-group.group-view {
     grid-column: 1;
     grid-row: auto;

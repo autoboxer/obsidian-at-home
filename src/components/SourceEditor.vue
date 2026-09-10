@@ -12,16 +12,25 @@ import {
   history,
   historyField,
   historyKeymap,
-  insertNewline,
   isolateHistory
 } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { syntaxTreeAvailable } from '@codemirror/language';
+import {
+  getIndentation,
+  getIndentUnit,
+  IndentContext,
+  indentString,
+  syntaxTree,
+  syntaxTreeAvailable
+} from '@codemirror/language';
+import { NodeProp } from '@lezer/common';
 import {
   Annotation,
   Compartment,
+  countColumn,
   EditorSelection,
   EditorState,
+  findClusterBreak,
   Prec,
   Transaction
 } from '@codemirror/state';
@@ -44,7 +53,12 @@ import {
   literalApostropheExtension
 } from '../lib/codeMirrorApostrophe';
 import { tableDelimiterHyphenExtension } from '../lib/codeMirrorTableDelimiter';
-import { codeMirrorMultiCursorExtension } from '../lib/codeMirrorMultiCursor';
+import {
+  codeMirrorMultiCursorExtension,
+  multiCursorChanges,
+  type MultiCursorEdit
+} from '../lib/codeMirrorMultiCursor';
+import { notify } from '../stores/vault';
 import {
   liveMarkdownExtension,
   orderedListRenumberingExtension,
@@ -95,6 +109,7 @@ import { parseMarkdownImageAt } from '../lib/markdownImages';
 import { isTauri, readWorkspaceImage } from '../services/native';
 import type { Extension, SelectionRange } from '@codemirror/state';
 import type { Command, ViewUpdate } from '@codemirror/view';
+import type { LiveMarkdownTextEdit } from '../lib/liveMarkdown';
 import type { MarkdownSelectionEdit } from '../lib/markdownFormatting';
 import type { ParsedMarkdownImage } from '../lib/markdownImages';
 import type {
@@ -274,126 +289,71 @@ const closeSuggestions: Command = ( view ) => {
   return true;
 };
 
-const handleEnter: Command = ( view ) => {
+const handleEnter: Command = ( view ) => enterAtSelections( view, false );
+const handleShiftEnter: Command = ( view ) => enterAtSelections( view, true );
+
+function enterAtSelections( view: EditorView, soft: boolean ): boolean {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
-
   const value = view.state.doc.toString();
-  const selection = view.state.selection.main;
-  const tableEdit = insertLiveMarkdownTableRow(
-    value,
-    liveMarkdownDocumentModel( view.state ).tables,
-    selection.head
-  );
-  if ( tableEdit ) {
-    applyFullDocumentEdit(
-      view,
-      tableEdit.value,
-      tableEdit.selectionStart,
-      tableEdit.selectionEnd,
-      'input.table'
-    );
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
+  const edits = view.state.selection.ranges.map( ( range ) => {
+    const tableEdit = soft
+      ? insertLiveMarkdownTableLineBreak( value, tables, range.anchor, range.head )
+      : insertLiveMarkdownTableRow( value, tables, range.head );
+    return tableEdit
+      ? markdownRangeEdit( value, tableEdit )
+      : soft ? softLineBreakEdit( view, range )
+        : smartEnterEdit( view, range ) ?? replacementRangeEdit( range, '\n' );
+  });
 
-    return true;
-  }
-  if ( handleSmartEnter( view ) ) {
-    return true;
-  }
-
-  return insertNewline( view );
-};
-
-const handleShiftEnter: Command = ( view ) => {
-  if ( view.state.readOnly || view.composing ) {
-    return false;
-  }
-
-  const value = view.state.doc.toString();
-  const selection = view.state.selection.main;
-  const tableEdit = insertLiveMarkdownTableLineBreak(
-    value,
-    liveMarkdownDocumentModel( view.state ).tables,
-    selection.anchor,
-    selection.head
-  );
-  if ( !tableEdit ) {
-    return false;
-  }
-
-  applyFullDocumentEdit(
-    view,
-    tableEdit.value,
-    tableEdit.selectionStart,
-    tableEdit.selectionEnd,
-    'input.table'
-  );
-
-  return true;
-};
+  return applyRangeEdits( view, edits, 'input' );
+}
 
 function applyTableNavigation(
   view: EditorView,
   navigation: LiveMarkdownTableNavigation
 ): boolean {
   const value = view.state.doc.toString();
-  const tableEdit = navigateLiveMarkdownTable(
-    value,
-    liveMarkdownDocumentModel( view.state ).tables,
-    view.state.selection.main.head,
-    navigation
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
+  const edits = view.state.selection.ranges.map( ( range ) =>
+    navigateLiveMarkdownTable( value, tables, range.head, navigation )
   );
-  if ( !tableEdit || ( view.state.readOnly && tableEdit.value !== value ) ) {
+  if ( !edits.some( ( edit ) => edit ) ) {
     return false;
   }
 
-  applyFullDocumentEdit(
-    view,
-    tableEdit.value,
-    tableEdit.selectionStart,
-    tableEdit.selectionEnd,
-    tableEdit.value === value ? 'select.table' : 'input.table'
-  );
-
-  return true;
+  return applyRangeEdits( view, edits.map( ( edit, index ) => {
+    const range = view.state.selection.ranges[ index ]!;
+    if ( edit && ( !view.state.readOnly || edit.value === value ) ) {
+      return markdownRangeEdit( value, edit );
+    }
+    const down = navigation === 'down-row';
+    return { changes: [], range: view.moveVertically( range, down ) };
+  }), 'select.table' );
 }
 
-const handleTab: Command = ( view ) => {
+const handleTab: Command = ( view ) => indentSelections( view, false );
+const handleShiftTab: Command = ( view ) => indentSelections( view, true );
+
+function indentSelections( view: EditorView, outdent: boolean ): boolean {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
-
-  const selection = view.state.selection.main;
-  if ( applyTableNavigation( view, 'next-cell' ) ) {
-    return true;
-  }
-  if ( adjustSelectedLines( view, false ) ) {
-    return true;
-  }
-
-  view.dispatch({
-    changes: { from: selection.from, to: selection.to, insert: INDENT },
-    selection: EditorSelection.cursor( selection.from + INDENT.length ),
-    scrollIntoView: true,
-    userEvent: 'input'
-  });
-
-  return true;
-};
-
-const handleShiftTab: Command = ( view ) => {
-  if ( view.state.readOnly || view.composing ) {
-    return false;
-  }
-
-  if ( applyTableNavigation( view, 'previous-cell' ) ) {
-    return true;
-  }
-
-  adjustSelectedLines( view, true );
-
-  return true;
-};
+  const value = view.state.doc.toString();
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
+  return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) => {
+    const tableEdit = navigateLiveMarkdownTable(
+      value, tables, range.head, outdent ? 'previous-cell' : 'next-cell'
+    );
+    if ( tableEdit ) {
+      return markdownRangeEdit( value, tableEdit );
+    }
+    return selectedLineEdits( view, range, outdent ) ??
+      ( outdent ? { changes: [], range } : replacementRangeEdit( range, INDENT ) );
+  }), 'input.indent' );
+}
 
 const handleTableArrowDown: Command = ( view ) => {
   if ( view.composing ) {
@@ -411,308 +371,235 @@ const handleTableArrowUp: Command = ( view ) => {
   return applyTableNavigation( view, 'up-row' );
 };
 
-const deleteEmptyTableRow: Command = ( view ) => {
-  if (
-    view.composing ||
-    view.state.readOnly ||
-    view.state.selection.ranges.length !== 1 ||
-    !view.state.selection.main.empty
-  ) {
+function deleteAtTableSelections(
+  view: EditorView,
+  forward: boolean,
+  unit: 'character' | 'word' | 'line'
+): boolean {
+  if ( view.composing || view.state.readOnly ) {
     return false;
   }
-
   const value = view.state.doc.toString();
-  const tableEdit = deleteEmptyLiveMarkdownTableRow(
-    value,
-    liveMarkdownDocumentModel( view.state ).tables,
-    view.state.selection.main.head
-  );
-  if ( !tableEdit ) {
-    return false;
-  }
-
-  const selection = EditorSelection.cursor( tableEdit.selectionStart, -1 );
-  view.dispatch({
-    annotations: isolateHistory.of( 'full' ),
-    changes: minimalDocumentChange( value, tableEdit.value ),
-    selection,
-    scrollIntoView: true,
-    userEvent: 'delete.backward'
-  });
-  // CodeMirror stores the selection before a history change by default. Add
-  // the intentional post-change caret so redo returns to the editable cell
-  // boundary rather than mapping the old row position onto a hidden pipe.
-  view.dispatch({
-    selection,
-    userEvent: 'select.table'
-  });
-
-  return true;
-};
-
-function atTableCellBoundary(
-  view: EditorView,
-  boundary: 'end' | 'start'
-): boolean {
-  if ( view.composing ) {
-    return false;
-  }
-
   const tables = liveMarkdownDocumentModel( view.state ).tables;
-
-  return view.state.selection.ranges.some( ( range ) =>
-    range.empty && isLiveMarkdownTableCellBoundary(
-      tables,
-      range.head,
-      boundary
-    )
-  );
-}
-
-const protectTableCellStart: Command = ( view ) =>
-  atTableCellBoundary( view, 'start' );
-const protectTableCellEnd: Command = ( view ) =>
-  atTableCellBoundary( view, 'end' );
-
-function protectTableCellSelectionBoundary(
-  view: EditorView,
-  direction: 'left' | 'right'
-): boolean {
-  if ( view.composing ) {
-    return false;
-  }
-
-  const tables = liveMarkdownDocumentModel( view.state ).tables;
-
-  return view.state.selection.ranges.some( ( range ) => {
-    const leftToStart = view.textDirectionAt( range.head ) === Direction.LTR;
-    const boundary = ( direction === 'left' ) === leftToStart ? 'start' : 'end';
-
-    return isLiveMarkdownTableCellBoundary( tables, range.head, boundary );
-  });
-}
-
-const protectTableCellSelectionLeft: Command = ( view ) =>
-  protectTableCellSelectionBoundary( view, 'left' );
-const protectTableCellSelectionRight: Command = ( view ) =>
-  protectTableCellSelectionBoundary( view, 'right' );
-
-function deleteToTableCellLineBoundary(
-  view: EditorView,
-  boundary: 'end' | 'start'
-): boolean {
-  if (
-    view.composing ||
-    view.state.readOnly ||
-    view.state.selection.ranges.some( ( range ) => !range.empty )
-  ) {
-    return false;
-  }
-
-  const tables = liveMarkdownDocumentModel( view.state ).tables;
-  const bounds = view.state.selection.ranges.map( ( range ) =>
+  if ( !view.state.selection.ranges.some( ( range ) =>
     liveMarkdownTableCellTextBounds( tables, range.head )
-  );
-  if ( bounds.every( ( cell ) => !cell ) ) {
+  ) ) {
     return false;
   }
-
-  const forward = boundary === 'end';
-  const changes = view.state.changeByRange( ( range ) => {
-    let target = view.moveToLineBoundary( range, forward ).head;
-    target = forward
-      ? ( range.head < target
-        ? target
-        : Math.min( view.state.doc.length, range.head + 1 ) )
-      : ( range.head > target ? target : Math.max( 0, range.head - 1 ) );
-
-    const cell = liveMarkdownTableCellTextBounds( tables, range.head );
-    if ( cell ) {
-      target = forward
-        ? Math.max( range.head, Math.min( target, cell.to ) )
-        : Math.min( range.head, Math.max( target, cell.from ) );
-    }
-
-    const from = Math.min( range.head, target );
-    const to = Math.max( range.head, target );
-
-    return from === to
-      ? { range }
-      : {
-        changes: { from, to },
-        range: EditorSelection.cursor( from, forward ? 1 : -1 )
-      };
-  });
-
-  if ( !changes.changes.empty ) {
-    view.dispatch(
-      changes,
-      {
-        scrollIntoView: true,
-        userEvent: forward ? 'delete.forward' : 'delete.backward'
-      }
-    );
-  }
-
-  return true;
-}
-
-const deleteToTableCellTextStart: Command = ( view ) =>
-  deleteToTableCellLineBoundary( view, 'start' );
-const deleteToTableCellTextEnd: Command = ( view ) =>
-  deleteToTableCellLineBoundary( view, 'end' );
-
-function moveAcrossTableCellBoundary(
-  view: EditorView,
-  direction: 'left' | 'right'
-): boolean {
-  if ( view.composing || view.state.selection.ranges.length !== 1 ) {
-    return false;
-  }
-
-  const selection = view.state.selection.main;
-  if ( !selection.empty ) {
-    return false;
-  }
-
-  const value = view.state.doc.toString();
-  const target = moveAcrossLiveMarkdownTableCellBoundary(
-    value,
-    liveMarkdownDocumentModel( view.state ).tables,
-    selection.head,
-    direction
-  );
-  if ( !target ) {
-    return false;
-  }
-
-  view.dispatch({
-    selection: EditorSelection.create([
-      EditorSelection.cursor( target.position, target.assoc )
-    ]),
-    scrollIntoView: true,
-    userEvent: 'select.table'
-  });
-
-  return true;
-}
-
-const moveAcrossTableCellLeft: Command = ( view ) =>
-  moveAcrossTableCellBoundary( view, 'left' );
-const moveAcrossTableCellRight: Command = ( view ) =>
-  moveAcrossTableCellBoundary( view, 'right' );
-
-function setTableCellTextBoundary(
-  view: EditorView,
-  boundary: 'end' | 'start',
-  extend: boolean
-): boolean {
-  if ( view.composing ) {
-    return false;
-  }
-
-  const tables = liveMarkdownDocumentModel( view.state ).tables;
-  const ranges: SelectionRange[] = [];
-  for ( const range of view.state.selection.ranges ) {
-    const bounds = liveMarkdownTableCellTextBounds( tables, range.head );
-    if ( !bounds ) {
-      return false;
-    }
-    if ( extend ) {
-      const anchorBounds = liveMarkdownTableCellTextBounds(
-        tables,
-        range.anchor
-      );
-      if (
-        !anchorBounds ||
-        anchorBounds.from !== bounds.from ||
-        anchorBounds.to !== bounds.to
-      ) {
-        return false;
+  const deletedRows = !forward && unit === 'character'
+    ? view.state.selection.ranges.flatMap( ( range ) => {
+      const edit = range.empty ? deleteEmptyLiveMarkdownTableRow( value, tables, range.head ) : undefined;
+      return edit?.change ? [ edit ] : [];
+    }) : [];
+  const survivingRowTarget = ( position: number ): number => {
+    for ( let index = deletedRows.length - 1; index >= 0; index -= 1 ) {
+      const edit = deletedRows[ index ]!;
+      if ( edit.change!.from <= position && position < edit.change!.to ) {
+        position = edit.selectionStart;
       }
     }
-
-    const forward = boundary === 'end';
-    const line = view.lineBlockAt( range.head );
-    // Keep any native boundary inside rendered cell content, but clamp raw
-    // row boundaries so hidden table syntax never enters the selection.
-    let nativeTarget = view.moveToLineBoundary( range, forward );
-    if (
-      nativeTarget.head === range.head &&
-      nativeTarget.head !== ( forward ? line.to : line.from )
-    ) {
-      nativeTarget = view.moveToLineBoundary( range, forward, false );
+    return position;
+  };
+  const skipAtomic = ( position: number, after: boolean ): number => {
+    for ( const ranges of view.state.facet( EditorView.atomicRanges ) ) {
+      ranges( view ).between( position, position, ( from, to ) => {
+        if ( from < position && position < to ) {
+          position = after ? to : from;
+        }
+      });
     }
-
-    const position = Math.max(
-      bounds.from,
-      Math.min( nativeTarget.head, bounds.to )
-    );
-    let assoc = nativeTarget.assoc;
-    if ( bounds.from === bounds.to ) {
-      assoc = forward ? -1 : 1;
-    } else if ( position === bounds.from ) {
-      assoc = 1;
-    } else if ( position === bounds.to ) {
-      assoc = -1;
+    return position;
+  };
+  return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) => {
+    if ( range.empty && !forward && unit === 'character' ) {
+      const rowEdit = deleteEmptyLiveMarkdownTableRow( value, tables, range.head );
+      if ( rowEdit ) {
+        const edit = markdownRangeEdit( value, rowEdit );
+        edit.range = EditorSelection.cursor( survivingRowTarget( rowEdit.selectionStart ), -1 );
+        return edit;
+      }
+      const target = survivingRowTarget( range.head );
+      if ( target !== range.head ) {
+        return { changes: [], range: EditorSelection.cursor( target, -1 ) };
+      }
     }
-
-    ranges.push( extend
-      ? EditorSelection.range(
-        range.anchor,
-        position,
-        nativeTarget.goalColumn,
-        nativeTarget.bidiLevel ?? undefined,
-        assoc
-      )
-      : EditorSelection.cursor( position, assoc ) );
-  }
-
-  const selection = EditorSelection.create(
-    ranges,
-    view.state.selection.mainIndex
-  );
-  if ( !selection.eq( view.state.selection, true ) ) {
-    view.dispatch({
-      selection,
-      scrollIntoView: true,
-      userEvent: 'select.table'
-    });
-  }
-
-  return true;
+    let from = range.from;
+    let to = range.to;
+    if ( range.empty ) {
+      const line = view.state.doc.lineAt( range.head );
+      let target = range.head;
+      if ( unit === 'line' ) {
+        target = view.moveToLineBoundary( range, forward ).head;
+      } else if ( unit === 'word' ) {
+        const categorize = view.state.charCategorizer( range.head );
+        let category: ReturnType<typeof categorize> | undefined;
+        while ( target !== ( forward ? line.to : line.from ) ) {
+          const next = line.from + findClusterBreak( line.text, target - line.from, forward );
+          const text = value.slice( Math.min( target, next ), Math.max( target, next ) );
+          const nextCategory = categorize( text );
+          if ( category !== undefined && category !== nextCategory ) {
+            break;
+          }
+          if ( text !== ' ' || target !== range.head ) {
+            category = nextCategory;
+          }
+          target = next;
+        }
+      } else {
+        target = line.from + findClusterBreak( line.text, range.head - line.from, forward, forward );
+        const before = line.text.slice( 0, range.head - line.from );
+        if ( !forward && before.length && before.length < 200 && !/[^ \t]/.test( before ) ) {
+          const unit = getIndentUnit( view.state );
+          const drop = countColumn( before, view.state.tabSize ) % unit || unit;
+          target = range.head;
+          for ( let index = 0; index < drop && before[ before.length - 1 - index ] === ' '; index += 1 ) {
+            target -= 1;
+          }
+          if ( before.endsWith( '\t' ) ) {
+            target -= 1;
+          }
+        } else if ( !forward && /[\ufe00-\ufe0f]/.test( value.slice( target, range.head ) ) ) {
+          target = line.from + findClusterBreak( line.text, target - line.from, false, false );
+        }
+      }
+      if ( target === range.head ) {
+        target = Math.max( 0, Math.min( value.length, target + ( forward ? 1 : -1 ) ) );
+      }
+      const bounds = liveMarkdownTableCellTextBounds( tables, range.head );
+      target = bounds
+        ? forward
+          ? Math.max( range.head, Math.min( target, bounds.to ) )
+          : Math.min( range.head, Math.max( target, bounds.from ) )
+        : skipAtomic( target, forward );
+      from = Math.min( range.head, target );
+      to = Math.max( range.head, target );
+    } else {
+      from = skipAtomic( from, false );
+      to = skipAtomic( to, true );
+    }
+    return {
+      changes: from === to ? [] : [{ from, to, insert: '' }],
+      range: from === to ? range : EditorSelection.cursor( from, forward ? 1 : -1 )
+    };
+  }), forward ? 'delete.forward' : 'delete.backward' );
 }
 
-const moveToTableCellTextStart: Command = ( view ) =>
-  setTableCellTextBoundary( view, 'start', false );
-const selectToTableCellTextStart: Command = ( view ) =>
-  setTableCellTextBoundary( view, 'start', true );
-const moveToTableCellTextEnd: Command = ( view ) =>
-  setTableCellTextBoundary( view, 'end', false );
-const selectToTableCellTextEnd: Command = ( view ) =>
-  setTableCellTextBoundary( view, 'end', true );
+const deleteTableBackward: Command = ( view ) => deleteAtTableSelections( view, false, 'character' );
+const deleteTableForward: Command = ( view ) => deleteAtTableSelections( view, true, 'character' );
+const deleteTableWordBackward: Command = ( view ) => deleteAtTableSelections( view, false, 'word' );
+const deleteTableWordForward: Command = ( view ) => deleteAtTableSelections( view, true, 'word' );
+const deleteToTableCellTextStart: Command = ( view ) => deleteAtTableSelections( view, false, 'line' );
+const deleteToTableCellTextEnd: Command = ( view ) => deleteAtTableSelections( view, true, 'line' );
 
-function setTableCellHorizontalBoundary(
+function moveHorizontal(
   view: EditorView,
   direction: 'left' | 'right',
-  extend: boolean
+  extend = false
 ): boolean {
-  const leftToStart = view.textDirectionAt(
-    view.state.selection.main.head
-  ) === Direction.LTR;
-  const boundary = ( direction === 'left' ) === leftToStart ? 'start' : 'end';
-
-  return setTableCellTextBoundary( view, boundary, extend );
+  if ( view.composing ) {
+    return false;
+  }
+  const value = view.state.doc.toString();
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
+  let handled = false;
+  const ranges = view.state.selection.ranges.map( ( range ) => {
+    const forward = ( direction === 'right' ) === ( view.textDirectionAt( range.head ) === Direction.LTR );
+    const boundary = forward ? 'end' : 'start';
+    if ( extend && isLiveMarkdownTableCellBoundary( tables, range.head, boundary ) ) {
+      handled = true;
+      return range;
+    }
+    const tableTarget = range.empty && !extend
+      ? moveAcrossLiveMarkdownTableCellBoundary( value, tables, range.head, direction )
+      : undefined;
+    const line = view.state.doc.lineAt( range.head );
+    const offset = renderedListTextOffset( line.text );
+    const revealList = !extend && range.empty && !forward && offset !== undefined &&
+      range.head === line.from + offset && offset > 0;
+    let target: SelectionRange;
+    if ( tableTarget ) {
+      handled = true;
+      target = EditorSelection.cursor( tableTarget.position, tableTarget.assoc );
+    } else if ( revealList ) {
+      handled = true;
+      target = EditorSelection.cursor( range.head - 1 );
+    } else {
+      target = range.empty || extend
+        ? view.moveByChar( range, forward )
+        : EditorSelection.cursor( forward ? range.to : range.from );
+    }
+    return extend
+      ? EditorSelection.range( range.anchor, target.head, target.goalColumn, target.bidiLevel ?? undefined, target.assoc )
+      : target;
+  });
+  return handled && applyRangeEdits( view, ranges.map( ( range ) => ({ changes: [], range }) ), 'select' );
 }
 
-const moveToTableCellTextLeft: Command = ( view ) =>
-  setTableCellHorizontalBoundary( view, 'left', false );
-const selectToTableCellTextLeft: Command = ( view ) =>
-  setTableCellHorizontalBoundary( view, 'left', true );
-const moveToTableCellTextRight: Command = ( view ) =>
-  setTableCellHorizontalBoundary( view, 'right', false );
-const selectToTableCellTextRight: Command = ( view ) =>
-  setTableCellHorizontalBoundary( view, 'right', true );
+const moveAcrossTableCellLeft: Command = ( view ) => moveHorizontal( view, 'left' );
+const moveAcrossTableCellRight: Command = ( view ) => moveHorizontal( view, 'right' );
+const protectTableCellSelectionLeft: Command = ( view ) => moveHorizontal( view, 'left', true );
+const protectTableCellSelectionRight: Command = ( view ) => moveHorizontal( view, 'right', true );
+
+function setTextBoundary(
+  view: EditorView,
+  boundary: 'end' | 'start' | 'left' | 'right',
+  extend: boolean
+): boolean {
+  if ( view.composing ) {
+    return false;
+  }
+  const tables = liveMarkdownDocumentModel( view.state ).tables;
+  let handled = false;
+  const ranges = view.state.selection.ranges.map( ( range ) => {
+    const forward = boundary === 'end' || ( boundary === 'left' || boundary === 'right' ) &&
+      ( ( boundary === 'right' ) === ( view.textDirectionAt( range.head ) === Direction.LTR ) );
+    const block = view.lineBlockAt( range.head );
+    let target = view.moveToLineBoundary( range, forward );
+    if ( target.head === range.head && target.head !== ( forward ? block.to : block.from ) ) {
+      target = view.moveToLineBoundary( range, forward, false );
+    }
+    let position = target.head;
+    let assoc = target.assoc;
+    const bounds = liveMarkdownTableCellTextBounds( tables, range.head );
+    const anchorBounds = extend ? liveMarkdownTableCellTextBounds( tables, range.anchor ) : bounds;
+    const line = view.state.doc.lineAt( range.head );
+    const offset = renderedListTextOffset( line.text );
+    if ( bounds && anchorBounds && bounds.from === anchorBounds.from && bounds.to === anchorBounds.to ) {
+      handled = true;
+      position = Math.max( bounds.from, Math.min( position, bounds.to ) );
+      if ( bounds.from === bounds.to ) {
+        assoc = forward ? -1 : 1;
+      } else if ( position === bounds.from ) {
+        assoc = 1;
+      } else if ( position === bounds.to ) {
+        assoc = -1;
+      }
+    } else if ( !forward && offset !== undefined && position <= line.from + offset ) {
+      handled = true;
+      const textStart = line.from + offset;
+      position = range.head < textStart || range.head === textStart && ( extend || range.empty )
+        ? line.from : textStart;
+    } else if ( !forward && position === block.from && block.length ) {
+      const whitespace = view.state.sliceDoc( block.from, block.to ).match( /^\s*/ )![ 0 ].length;
+      if ( whitespace && range.head !== block.from + whitespace ) {
+        position += whitespace;
+      }
+    }
+    return extend
+      ? EditorSelection.range( range.anchor, position, target.goalColumn, target.bidiLevel ?? undefined, assoc )
+      : EditorSelection.cursor( position, assoc );
+  });
+  return handled && applyRangeEdits( view, ranges.map( ( range ) => ({ changes: [], range }) ), 'select' );
+}
+
+const moveToTableCellTextStart: Command = ( view ) => setTextBoundary( view, 'start', false );
+const selectToTableCellTextStart: Command = ( view ) => setTextBoundary( view, 'start', true );
+const moveToTableCellTextEnd: Command = ( view ) => setTextBoundary( view, 'end', false );
+const selectToTableCellTextEnd: Command = ( view ) => setTextBoundary( view, 'end', true );
+const moveToTableCellTextLeft: Command = ( view ) => setTextBoundary( view, 'left', false );
+const selectToTableCellTextLeft: Command = ( view ) => setTextBoundary( view, 'left', true );
+const moveToTableCellTextRight: Command = ( view ) => setTextBoundary( view, 'right', false );
+const selectToTableCellTextRight: Command = ( view ) => setTextBoundary( view, 'right', true );
 
 const toggleBold: Command = ( view ) => toggleSelectionFormatting( view, '**', [ '__' ]);
 const toggleItalic: Command = ( view ) => toggleSelectionFormatting( view, '*', [ '_' ]);
@@ -736,110 +623,21 @@ const wrapSelectionAsInlineCode: Command = ( view ) => {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
-
-  const selection = view.state.selection.main;
-  if ( selection.empty ) {
-    return false;
-  }
-
-  return applyMarkdownSelectionEdit(
-    view,
-    wrapInlineCode(
-      view.state.doc.toString(),
-      selection.from,
-      selection.to
-    )
-  );
+  const value = view.state.doc.toString();
+  return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) =>
+    range.empty ? replacementRangeEdit( range, '`' ) :
+      markdownRangeEdit( value, wrapInlineCode( value, range.from, range.to ), range )
+  ), 'input.format' );
 };
 const wrapSelectionAsMarkdownLink: Command = ( view ) => {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
-
-  const selection = view.state.selection.main;
-
-  return applyMarkdownSelectionEdit(
-    view,
-    wrapMarkdownLink(
-      view.state.doc.toString(),
-      selection.from,
-      selection.to
-    )
-  );
+  const value = view.state.doc.toString();
+  return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) =>
+    markdownRangeEdit( value, wrapMarkdownLink( value, range.from, range.to ), range )
+  ), 'input.format' );
 };
-
-const moveToRenderedListTextStart: Command = ( view ) => setRenderedListTextStart( view, false );
-const selectRenderedListTextStart: Command = ( view ) => setRenderedListTextStart( view, true );
-const revealRenderedListSourceFromRight: Command = ( view ) => {
-  if ( view.composing || view.state.selection.ranges.length !== 1 ) {
-    return false;
-  }
-
-  const selection = view.state.selection.main;
-  if ( !selection.empty ) {
-    return false;
-  }
-
-  const line = view.state.doc.lineAt( selection.head );
-  const textOffset = renderedListTextOffset( line.text );
-  if ( textOffset === undefined ) {
-    return false;
-  }
-
-  const textStart = line.from + textOffset;
-  if ( selection.head !== textStart || textStart <= line.from ) {
-    return false;
-  }
-
-  view.dispatch({
-    selection: EditorSelection.cursor( textStart - 1 ),
-    scrollIntoView: true,
-    userEvent: 'select'
-  });
-
-  return true;
-};
-
-function setRenderedListTextStart(
-  view: EditorView,
-  extendSelection: boolean
-): boolean {
-  if ( view.composing || view.state.selection.ranges.length !== 1 ) {
-    return false;
-  }
-
-  const selection = view.state.selection.main;
-  const line = view.state.doc.lineAt( selection.head );
-  const textOffset = renderedListTextOffset( line.text );
-  if ( textOffset === undefined ) {
-    return false;
-  }
-
-  const textStart = line.from + textOffset;
-  if ( selection.head < textStart ) {
-    // Keep a repeated selection from shrinking back to the indentation.
-    return extendSelection && selection.head === line.from;
-  }
-  if (
-    selection.head > textStart
-    && previousLineBoundary( view, selection ) > textStart
-  ) {
-    return false;
-  }
-  const target = selection.head === textStart && ( extendSelection || selection.empty )
-    ? line.from
-    : textStart;
-
-  view.dispatch({
-    selection: extendSelection
-      ? EditorSelection.range( selection.anchor, target )
-      : EditorSelection.cursor( target ),
-    scrollIntoView: true,
-    userEvent: 'select'
-  });
-
-  return true;
-}
 
 async function resolveLiveMarkdownImageSource(
   image: ParsedMarkdownImage
@@ -982,18 +780,17 @@ onMounted( () => {
       { key: 'Enter', run: handleEnter },
       { key: 'Tab', run: handleTab },
       { key: 'Shift-Tab', run: handleShiftTab },
-      { key: 'Backspace', run: deleteEmptyTableRow },
-      { key: 'Backspace', run: protectTableCellStart },
-      { key: 'Delete', run: protectTableCellEnd },
+      { key: 'Backspace', run: deleteTableBackward, shift: deleteTableBackward },
+      { key: 'Delete', run: deleteTableForward },
       {
         key: 'Mod-Backspace',
         mac: 'Alt-Backspace',
-        run: protectTableCellStart
+        run: deleteTableWordBackward
       },
       {
         key: 'Mod-Delete',
         mac: 'Alt-Delete',
-        run: protectTableCellEnd
+        run: deleteTableWordForward
       },
       { mac: 'Mod-Backspace', run: deleteToTableCellTextStart },
       { mac: 'Mod-Delete', run: deleteToTableCellTextEnd },
@@ -1036,18 +833,7 @@ onMounted( () => {
       { key: "'", run: insertLiteralApostrophe },
       { key: '"', run: insertLiteralDoubleQuote },
       { key: '-', run: insertLiteralHyphen },
-      { key: '`', run: wrapSelectionAsInlineCode },
-      { key: 'ArrowLeft', run: revealRenderedListSourceFromRight },
-      {
-        key: 'Home',
-        run: moveToRenderedListTextStart,
-        shift: selectRenderedListTextStart
-      },
-      {
-        mac: 'Cmd-ArrowLeft',
-        run: moveToRenderedListTextStart,
-        shift: selectRenderedListTextStart
-      }
+      { key: '`', run: wrapSelectionAsInlineCode }
     ]) ),
     keymap.of([ ...defaultKeymap, ...historyKeymap ]),
     EditorView.updateListener.of( ( update ) => {
@@ -1122,7 +908,7 @@ onMounted( () => {
       ],
       changes: minimalDocumentChange( savedState.doc, editableDocument.body ),
       selection: frontmatterVisibilitySelection(
-        state.selection.main,
+        state.selection,
         currentBodyStart,
         editableDocument
       )
@@ -1235,7 +1021,7 @@ watch(
     );
     const selection = visibilityChanged
       ? frontmatterVisibilitySelection(
-        view.state.selection.main,
+        view.state.selection,
         currentBodyStart,
         editableDocument
       )
@@ -1461,7 +1247,11 @@ function focusDocumentOffset( offset: number ): boolean {
 function captureImageInsertion(
   view = editorView.value
 ): ImageInsertionCapture | undefined {
-  if ( props.readOnly || !view || view.state.selection.ranges.length !== 1 ) {
+  if ( props.readOnly || !view ) {
+    return undefined;
+  }
+  if ( view.state.selection.ranges.length !== 1 ) {
+    notify( 'Use a single selection to insert an image or file.', 'neutral' );
     return undefined;
   }
 
@@ -1513,6 +1303,11 @@ function insertEmbeddedImage(
     return false;
   }
 
+  if ( view.state.selection.ranges.length !== 1 ) {
+    notify( 'Use a single selection to insert an image or file.', 'neutral' );
+    return false;
+  }
+
   const cursor = insertion.from + markdownImage.length;
   view.dispatch({
     changes: {
@@ -1532,7 +1327,7 @@ function insertEmbeddedImage(
 function requestImageEmbed( view: EditorView ): boolean {
   const capture = captureImageInsertion( view );
   if ( !capture ) {
-    return false;
+    return view.state.selection.ranges.length > 1;
   }
   emit( 'requestEmbedImage', capture );
 
@@ -1559,7 +1354,7 @@ function insertEmbeddedAttachment(
 function requestAttachmentEmbed( view: EditorView ): boolean {
   const capture = captureAttachmentInsertion( view );
   if ( !capture ) {
-    return false;
+    return view.state.selection.ranges.length > 1;
   }
   emit( 'requestEmbedAttachment', capture );
 
@@ -1578,7 +1373,7 @@ defineExpose({
 
 function updateSuggestions( view: EditorView ): void {
   const selection = view.state.selection.main;
-  if ( props.readOnly || !selection.empty ) {
+  if ( props.readOnly || view.state.selection.ranges.length !== 1 || !selection.empty ) {
     suggestionQuery.value = null;
 
     return;
@@ -1593,7 +1388,7 @@ function updateSuggestions( view: EditorView ): void {
 
 function insertSuggestion( title: string ): void {
   const view = editorView.value;
-  if ( props.readOnly || !view || suggestionQuery.value === null ) {
+  if ( props.readOnly || !view || view.state.selection.ranges.length !== 1 || suggestionQuery.value === null ) {
     return;
   }
 
@@ -1619,59 +1414,98 @@ function toggleSelectionFormatting(
     return false;
   }
 
-  const selection = view.state.selection.main;
-
-  return applyMarkdownSelectionEdit(
-    view,
-    toggleInlineFormatting(
-      view.state.doc.toString(),
-      selection.from,
-      selection.to,
-      marker,
-      alternatives
-    )
-  );
+  const value = view.state.doc.toString();
+  return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) =>
+    markdownRangeEdit( value, toggleInlineFormatting(
+      value, range.from, range.to, marker, alternatives
+    ), range )
+  ), 'input.format' );
 }
 
-function applyMarkdownSelectionEdit(
-  view: EditorView,
-  edit: MarkdownSelectionEdit
-): boolean {
-  if ( view.state.readOnly ) {
-    return false;
+function replacementRangeEdit( range: SelectionRange, insert: string ): MultiCursorEdit {
+  return {
+    changes: [{ from: range.from, to: range.to, insert }],
+    range: EditorSelection.cursor( range.from + insert.length )
+  };
+}
+
+function softLineBreakEdit( view: EditorView, range: SelectionRange ): MultiCursorEdit {
+  const { state } = view;
+  let { from, to } = range;
+  const line = state.doc.lineAt( from );
+  let brackets: { from: number; to: number } | undefined;
+  if ( range.empty ) {
+    if ( /\(\)|\[\]|\{\}/.test( state.sliceDoc( Math.max( 0, from - 1 ), from + 1 ) ) ) {
+      brackets = { from, to };
+    } else {
+      const context = syntaxTree( state ).resolveInner( from );
+      const before = context.childBefore( from );
+      const after = context.childAfter( from );
+      if ( before && after && before.to <= from && after.from >= from &&
+        before.type.prop( NodeProp.closedBy )?.includes( after.name ) &&
+        state.doc.lineAt( before.to ).from === state.doc.lineAt( after.from ).from &&
+        !/\S/.test( state.sliceDoc( before.to, after.from ) ) ) {
+        brackets = { from: before.to, to: after.from };
+      }
+    }
   }
-  const value = view.state.doc.toString();
-  if ( edit.value === value ) {
+  const context = new IndentContext( state, { simulateBreak: from, simulateDoubleBreak: Boolean( brackets ) });
+  const indentation = getIndentation( context, from ) ??
+    countColumn( line.text.match( /^\s*/ )![ 0 ], state.tabSize );
+  while ( to < line.to && /\s/.test( line.text[ to - line.from ]! ) ) {
+    to += 1;
+  }
+  if ( brackets ) {
+    ({ from, to } = brackets );
+  } else if ( from > line.from && !/\S/.test( state.sliceDoc( line.from, from ) ) ) {
+    from = line.from;
+  }
+  const indent = indentString( state, indentation );
+  const closing = brackets ? `\n${ indentString( state, context.lineIndent( line.from, -1 ) ) }` : '';
+  return {
+    changes: [{ from, to, insert: `\n${ indent }${ closing }` }],
+    range: EditorSelection.cursor( from + 1 + indent.length )
+  };
+}
+
+function markdownRangeEdit(
+  value: string,
+  edit: MarkdownSelectionEdit & { change?: LiveMarkdownTextEdit },
+  original?: SelectionRange
+): MultiCursorEdit {
+  return {
+    changes: value === edit.value ? [] : [ edit.change ?? minimalDocumentChange( value, edit.value ) ],
+    range: original && original.anchor > original.head
+      ? EditorSelection.range( edit.selectionEnd, edit.selectionStart )
+      : EditorSelection.range( edit.selectionStart, edit.selectionEnd )
+  };
+}
+
+function applyRangeEdits(
+  view: EditorView,
+  edits: readonly MultiCursorEdit[],
+  userEvent: string
+): boolean {
+  const result = multiCursorChanges( view.state, edits );
+  if ( !result ) {
+    notify( 'These selections affect the same text. Adjust the selections and try again.', 'neutral' );
     return true;
   }
-
-  const change = minimalDocumentChange( value, edit.value );
-  const backward = view.state.selection.main.anchor > view.state.selection.main.head;
-  view.dispatch({
-    changes: change,
-    selection: backward
-      ? EditorSelection.range( edit.selectionEnd, edit.selectionStart )
-      : EditorSelection.range( edit.selectionStart, edit.selectionEnd ),
+  if ( view.state.readOnly && !result.changes.empty ) {
+    return false;
+  }
+  const docChanged = !result.changes.empty;
+  view.dispatch( result, {
+    annotations: docChanged ? isolateHistory.of( 'full' ) : undefined,
     scrollIntoView: true,
-    userEvent: 'input.format'
+    userEvent: docChanged && userEvent.startsWith( 'select.' ) ? 'input.table' : userEvent
   });
-
+  if ( docChanged ) {
+    // Record the final ranges after transaction filters (including renumbering)
+    // so redo restores the intentional caret positions in every edited range.
+    view.dispatch({ selection: view.state.selection, userEvent: 'select' });
+  }
   return true;
-}
-
-function applyFullDocumentEdit(
-  view: EditorView,
-  value: string,
-  selectionStart: number,
-  selectionEnd = selectionStart,
-  userEvent = 'input'
-): void {
-  view.dispatch({
-    changes: minimalDocumentChange( view.state.doc.toString(), value ),
-    selection: EditorSelection.range( selectionStart, selectionEnd ),
-    scrollIntoView: true,
-    userEvent
-  });
 }
 
 function minimalDocumentChange(
@@ -1754,19 +1588,18 @@ function restorableEditorHistory(
 }
 
 function frontmatterVisibilitySelection(
-  selection: SelectionRange,
+  selection: EditorSelection,
   currentBodyStart: number,
   editableDocument: ReturnType<typeof projectEditableDocument>
-): SelectionRange {
+): EditorSelection {
   const clamp = ( position: number ): number => Math.min(
     editableDocument.body.length,
     Math.max( 0, position + currentBodyStart - editableDocument.bodyStart )
   );
 
-  return EditorSelection.range(
-    clamp( selection.anchor ),
-    clamp( selection.head )
-  );
+  return EditorSelection.create( selection.ranges.map( ( range ) =>
+    EditorSelection.range( clamp( range.anchor ), clamp( range.head ) )
+  ), selection.mainIndex );
 }
 
 function changeTouchesLeadingFrontmatter( update: ViewUpdate ): boolean {
@@ -1940,10 +1773,9 @@ function restoreLineEndings(
   return lineEnding === '\n' ? value : value.replace( /\n/g, lineEnding );
 }
 
-function handleSmartEnter( view: EditorView ): boolean {
-  const selection = view.state.selection.main;
-  if ( props.readOnly || !selection.empty ) {
-    return false;
+function smartEnterEdit( view: EditorView, selection: SelectionRange ): MultiCursorEdit | undefined {
+  if ( !selection.empty ) {
+    return undefined;
   }
 
   const value = view.state.doc.toString();
@@ -1967,23 +1799,19 @@ function handleSmartEnter( view: EditorView ): boolean {
     const insertion = closesFence
       ? `\n${ indent }`
       : `\n${ indent }\n${ indent }${ marker }`;
-    view.dispatch({
-      changes: { from: position, insert: insertion },
-      selection: EditorSelection.cursor( position + 1 + indent.length ),
-      scrollIntoView: true,
-      userEvent: 'input'
-    });
-
-    return true;
+    return {
+      changes: [{ from: position, to: position, insert: insertion }],
+      range: EditorSelection.cursor( position + 1 + indent.length )
+    };
   }
 
   if ( activeFenceBefore( value, line.from ) ) {
-    return false;
+    return undefined;
   }
 
   const item = matchEditableListLine( source );
   if ( !item ) {
-    return false;
+    return undefined;
   }
 
   const contentStart = line.from + item.contentOffset;
@@ -1994,14 +1822,10 @@ function handleSmartEnter( view: EditorView ): boolean {
 
   if ( !fullBody.trim() && insertionPosition === line.to ) {
     const replacement = item.indent;
-    view.dispatch({
-      changes: { from: line.from, to: line.to, insert: replacement },
-      selection: EditorSelection.cursor( line.from + replacement.length ),
-      scrollIntoView: true,
-      userEvent: 'input'
-    });
-
-    return true;
+    return {
+      changes: [{ from: line.from, to: line.to, insert: replacement }],
+      range: EditorSelection.cursor( line.from + replacement.length )
+    };
   }
 
   const marker = item.ordered
@@ -2011,14 +1835,10 @@ function handleSmartEnter( view: EditorView ): boolean {
   const continuation = `${ item.indent }${ marker }${ item.spacing }${ taskPrefix }`;
   const separatorLength = bodyAfter.match( /^[ \t]+/ )?.[ 0 ].length ?? 0;
   const cursor = insertionPosition + 1 + continuation.length;
-  view.dispatch({
-    changes: { from: insertionPosition, to: insertionPosition + separatorLength, insert: `\n${ continuation }` },
-    selection: EditorSelection.cursor( cursor ),
-    scrollIntoView: true,
-    userEvent: 'input'
-  });
-
-  return true;
+  return {
+    changes: [{ from: insertionPosition, to: insertionPosition + separatorLength, insert: `\n${ continuation }` }],
+    range: EditorSelection.cursor( cursor )
+  };
 }
 
 function matchEditableListLine( line: string ): ListLine | undefined {
@@ -2053,19 +1873,6 @@ function renderedListTextOffset( line: string ): number | undefined {
   return item.contentOffset;
 }
 
-function previousLineBoundary(
-  view: EditorView,
-  selection: SelectionRange
-): number {
-  const line = view.lineBlockAt( selection.head );
-  let boundary = view.moveToLineBoundary( selection, false );
-  if ( boundary.head === selection.head && boundary.head !== line.from ) {
-    boundary = view.moveToLineBoundary( selection, false, false );
-  }
-
-  return boundary.head;
-}
-
 function activeFenceBefore(
   value: string,
   position: number
@@ -2097,12 +1904,12 @@ function activeFenceBefore(
   return active;
 }
 
-function adjustSelectedLines( view: EditorView, outdent: boolean ): boolean {
-  if ( view.state.readOnly ) {
-    return false;
-  }
+function selectedLineEdits(
+  view: EditorView,
+  selection: SelectionRange,
+  outdent: boolean
+): MultiCursorEdit | undefined {
   const value = view.state.doc.toString();
-  const selection = view.state.selection.main;
   const selectionStart = selection.from;
   const selectionEnd = selection.to;
   const hasSelection = !selection.empty;
@@ -2110,7 +1917,7 @@ function adjustSelectedLines( view: EditorView, outdent: boolean ): boolean {
 
   if ( !hasSelection && !matchEditableListLine( firstLine.text ) ) {
     if ( !outdent || !/^[ \t]/.test( firstLine.text ) ) {
-      return false;
+      return undefined;
     }
   }
 
@@ -2139,19 +1946,7 @@ function adjustSelectedLines( view: EditorView, outdent: boolean ): boolean {
     sourceOffset += line.length + 1;
   }
 
-  if ( !edits.length ) {
-    return true;
-  }
-
-  const changes = view.state.changes( edits );
-  view.dispatch({
-    changes,
-    selection: view.state.selection.map( changes, 1 ),
-    scrollIntoView: true,
-    userEvent: 'input.indent'
-  });
-
-  return true;
+  return { changes: edits, range: selection.map( view.state.changes( edits ), 1 ) };
 }
 
 function blockPendingEditorInteraction( event: Event ): void {
@@ -2183,12 +1978,12 @@ function handleSourceEditorPaste( event: ClipboardEvent ): void {
     return;
   }
 
+  event.preventDefault();
+  event.stopImmediatePropagation();
   const capture = captureImageInsertion();
   if ( !capture ) {
     return;
   }
-  event.preventDefault();
-  event.stopImmediatePropagation();
   emit( 'pasteImage', capture, imageItem?.getAsFile() ?? undefined );
 }
 
