@@ -309,7 +309,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
     });
 
     picker.append( searchLabel, options );
-    root.append( button, copyButton, picker );
+    root.append( copyButton, button, picker );
     renderLanguageOptions();
 
     return root;
