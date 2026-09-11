@@ -410,11 +410,36 @@
 }
 
 .source-editor .source-textarea {
+  --reading-margin-left: clamp(24px, 3.5vw, 50px);
+  --reading-margin-right: clamp(25px, 4vw, 62px);
+
+  position: relative;
   min-height: 100%;
-  padding: 32px clamp(25px, 4vw, 62px) 90px clamp(24px, 3.5vw, 50px);
+  /* Keep reading space outside the bounds used to draw text selections. */
+  margin: 0 var(--reading-margin-right) 0 var(--reading-margin-left);
+  padding: 32px 0 90px;
   caret-color: var(--editor-text);
   color: var(--editor-text);
   tab-size: 4;
+}
+
+.source-editor .source-textarea::before,
+.source-editor .source-textarea::after {
+  /* Empty hit areas retain CodeMirror's margin clicks and selection drags. */
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.source-editor .source-textarea::before {
+  left: calc(-1 * var(--reading-margin-left));
+  width: var(--reading-margin-left);
+}
+
+.source-editor .source-textarea::after {
+  right: calc(-1 * var(--reading-margin-right));
+  width: var(--reading-margin-right);
 }
 
 .source-editor .cm-line {
