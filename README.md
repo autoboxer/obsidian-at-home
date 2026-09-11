@@ -26,7 +26,7 @@ This is not a complete Obsidian replacement: cloud sync, graph view, automation,
 - Create, open, and switch between vaults of ordinary `.md` and `.markdown` files.
 - Organize notes in nested folders with drag-and-drop and right-click file actions.
 - Write in a unified live Markdown editor with inline formatting, interactive task checkboxes, tables, spellcheck, syntax-highlighted fenced code blocks, and find-in-note.
-- Embed local images or other files, resize images in Markdown, and keep assets with the vault.
+- Embed local images and attachments, resize images, and keep assets with the vault.
 - Move through note history with back and forward controls, or revisit notes from **Recent notes**.
 - Return to each note's cursor and scroll position, even after restarting the app.
 - Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
@@ -47,24 +47,6 @@ Open an existing Markdown or Obsidian vault directly, or use Settings to:
 - **Export portable vault** creates an Obsidian-compatible copy of notes, image files, non-image attachments, templates, and CSS snippets without overwriting existing folders.
 
 Neither option copies Canvas files, themes, plugins, hotkeys, or workspace settings. They are not backup or sync tools.
-
-### Embedded images
-
-Use the image button, press `Ctrl/Cmd` + `Shift` + `I`, or paste an image from the clipboard. Images use standard Markdown paths such as `![Diagram](Assets/Diagram.png)`. Optional Obsidian-compatible alt-text suffixes set the displayed width, height, or both: `![Diagram|300](...)`, `![Diagram|x200](...)`, and `![Diagram|300x200](...)`.
-
-Settings can store new images at the vault root, beside the containing note, or in a chosen vault-relative folder. App-created references include an `#oah-image=...` fragment so the app can recover a uniquely identifiable renamed or moved image while retaining a portable relative path for other Markdown readers.
-
-Supported image files appear in the left file tree. Drag an image from the tree into a note to insert another reference without duplicating the file, or drag a rendered image within its note to move the reference. Images can be renamed from the tree or dragged between folders; references update with the file. Removing the final reference does not delete the image, so an unused image remains available in the tree until it is removed from the vault explicitly.
-
-### Embedded files
-
-Use the file button or press `Ctrl/Cmd` + `Shift` + `A` to copy a non-image file into the vault. Attachments use ordinary Markdown links such as `[Report.pdf](Attachments/Report.pdf)`, so other Markdown readers retain a usable path. App-created links also include an `#oah-asset=...` fragment that lets Obsidian At Home recover a uniquely identifiable attachment after it is renamed or moved.
-
-You can also drag up to 100 files at a time from Finder, File Explorer, or a Linux file manager directly to their intended position in a note. Supported images use the image pipeline; other regular files use the attachment pipeline. Folders and unavailable items are skipped, and multiple files retain their drop order.
-
-Attachment cards work on their own and inside lists, tasks, blockquotes, and tables. Use **Rename** on a rendered card or in the file tree to rename the stored file and update its references throughout the vault. Editing a Markdown link label changes only its displayed text. Ordinary documents open in their operating-system default app only after an explicit click. Archives use **Save archive as…** instead of opening or extracting inside the vault; the destination must be outside the active vault. Executables and installers cannot be opened from the app.
-
-Settings provide the same root, beside-note, and chosen-folder storage options used by images. Attachments appear in the left file tree and can be dragged into notes or organized between folders while their references update. Removing the final reference does not delete the attachment.
 
 ## Build and install
 
@@ -126,7 +108,7 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/*.rpm
 | `npm run dev` | Preview the interface at `http://localhost:1420` |
 | `npm run build` | Type-check and build the frontend |
 | `npm run desktop:build` | Build desktop artifacts for the current platform |
-| `npm run check` | Build the frontend and run `cargo check` |
+| `npm run check` | Lint, build the frontend, and run `cargo check` |
 
 The browser preview cannot open arbitrary folders or use native import/export. It uses a separate `localStorage` vault that is not shared with the desktop app.
 
