@@ -10,7 +10,7 @@ interface Shortcut {
 }
 
 interface ShortcutGroup {
-  id: 'workspace' | 'editor' | 'view';
+  id: 'workspace' | 'editor' | 'selection' | 'view';
   title: string;
   shortcuts: Shortcut[];
 }
@@ -20,6 +20,8 @@ const referenceButton = ref<HTMLButtonElement>();
 const closeButton = ref<HTMLButtonElement>();
 const referenceDialog = ref<HTMLElement>();
 const commandKey = shortcutCommandKey();
+const optionKey = commandKey === '⌘' ? 'Option' : 'Alt';
+const verticalCursorModifier = /Linux|X11/.test( globalThis.navigator?.platform ?? '' ) ? 'Shift' : optionKey;
 const shortcutGroups: ShortcutGroup[] = [
   {
     id: 'workspace',
@@ -57,6 +59,21 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: 'Add a line break in a table cell', keys: [ 'Shift', 'Enter' ] },
       { label: 'Move up a table column', keys: [ '↑' ] },
       { label: 'Move down a table column', detail: 'Exits below the final row', keys: [ '↓' ] }
+    ]
+  },
+  {
+    id: 'selection',
+    title: 'Multiple cursors',
+    shortcuts: [
+      { label: 'Select word or next occurrence', detail: 'First press selects the word at the caret; select a phrase first to match it', keys: [ commandKey, 'D' ] },
+      { label: 'Select all occurrences', detail: 'Matches the selected text or word at the caret; reveals folded matches', keys: [ commandKey, 'Shift', 'L' ] },
+      { label: 'Add a cursor', keys: [ optionKey, 'Click' ] },
+      { label: 'Select a rectangle', keys: [ optionKey, 'Shift', 'Drag' ] },
+      { label: 'Add a cursor above', keys: [ commandKey, verticalCursorModifier, '↑' ] },
+      { label: 'Add a cursor below', keys: [ commandKey, verticalCursorModifier, '↓' ] },
+      { label: 'Undo selection', keys: [ commandKey, 'U' ] },
+      { label: 'Redo selection', keys: commandKey === '⌘' ? [ commandKey, 'Shift', 'U' ] : [ optionKey, 'U' ] },
+      { label: 'Keep the main selection', detail: 'Press again to leave a single caret', keys: [ 'Escape' ] }
     ]
   },
   {

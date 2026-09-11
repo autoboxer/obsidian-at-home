@@ -512,12 +512,18 @@
   background: var(--selection-bg) !important;
 }
 
-.source-editor .cm-editor.live-drawn-boundary-selection .cm-selectionBackground {
+.source-editor .cm-editor.live-drawn-selection .cm-selectionLayer {
+  /* Keep highlights visible over opaque code and table backgrounds. */
+  z-index: 1 !important;
+  pointer-events: none;
+}
+
+.source-editor .cm-editor.live-drawn-selection .cm-selectionBackground {
   background: var(--selection-bg) !important;
 }
 
-.source-editor .cm-editor.live-drawn-boundary-selection .cm-content::selection,
-.source-editor .cm-editor.live-drawn-boundary-selection .cm-content ::selection {
+.source-editor .cm-editor.live-drawn-selection .cm-content::selection,
+.source-editor .cm-editor.live-drawn-selection .cm-content ::selection {
   background: transparent !important;
   color: inherit !important;
 }
