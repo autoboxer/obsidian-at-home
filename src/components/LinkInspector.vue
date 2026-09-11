@@ -32,12 +32,6 @@ const uniqueOutgoing = computed( () => {
   });
 });
 
-const wordCount = computed( () => {
-  const content = activeNote.value?.content.trim() ?? '';
-
-  return content ? content.split( /\s+/ ).length : 0;
-});
-
 function canCreateTarget( link: NoteLink ): boolean {
   return canEditVault.value && !( 'destination' in link );
 }
@@ -164,12 +158,6 @@ function formatDate( timestamp?: number ): string {
           </div>
           <div class="info-row">
             <span>Folder</span><strong>{{ activeNote.folderId ? folderPath( activeNote.folderId ) : 'Vault root' }}</strong>
-          </div>
-          <div class="info-row">
-            <span>Words</span><strong>{{ wordCount.toLocaleString() }}</strong>
-          </div>
-          <div class="info-row">
-            <span>Characters</span><strong>{{ activeNote.content.length.toLocaleString() }}</strong>
           </div>
         </section>
         <section class="info-tags">

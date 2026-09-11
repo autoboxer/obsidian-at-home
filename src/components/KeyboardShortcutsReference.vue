@@ -7,6 +7,7 @@ interface Shortcut {
   label: string;
   detail?: string;
   keys: string[];
+  keyLabel?: string;
 }
 
 interface ShortcutGroup {
@@ -45,7 +46,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: 'Embed a file', detail: 'Choose a non-image file', keys: [ commandKey, 'Shift', 'A' ] },
       { label: 'Embed an image', detail: 'Choose an image file', keys: [ commandKey, 'Shift', 'I' ] },
       { label: 'Embed a clipboard image', detail: 'When the clipboard contains an image', keys: [ commandKey, 'V' ] },
-      { label: 'Wrap as inline code', detail: 'With text selected', keys: [ 'Backtick' ] },
+      { label: 'Wrap as inline code', detail: 'With text selected', keys: [ '`' ], keyLabel: 'Backtick' },
       { label: 'Find in the current note', keys: [ commandKey, 'F' ] },
       { label: 'Next find result', detail: 'Find field: Enter also works. Anywhere: F3', keys: [ 'Tab' ] },
       { label: 'Previous find result', detail: 'Find field: Shift+Enter also works. Anywhere: Shift+F3', keys: [ 'Shift', 'Tab' ] },
@@ -108,7 +109,9 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
 
     return;
   }
-  if ( event.key !== 'Tab' || !referenceDialog.value ) {
+  // WebKitGTK can report Shift+Tab as Unidentified while retaining its code.
+  const isTab = event.key === 'Tab' || event.key === 'Unidentified' && event.code === 'Tab';
+  if ( !isTab || !referenceDialog.value ) {
     return;
   }
 
@@ -208,7 +211,7 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
                 <dd
                   class="shortcut-reference-keys"
                   role="group"
-                  :aria-label="shortcut.keys.join( ' plus ' )"
+                  :aria-label="shortcut.keyLabel ?? shortcut.keys.join( ' plus ' )"
                 >
                   <template v-for="( key, index ) in shortcut.keys" :key="`${shortcut.label}-${key}`">
                     <span v-if="index" aria-hidden="true">+</span>
@@ -219,16 +222,6 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
             </dl>
           </section>
         </div>
-
-        <footer>
-          <button
-            type="button"
-            class="primary-action-button small"
-            @click="closeReference"
-          >
-            Done
-          </button>
-        </footer>
       </section>
     </div>
   </Transition>

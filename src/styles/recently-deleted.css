@@ -158,6 +158,23 @@
   -webkit-line-clamp: 3;
 }
 
+.recently-deleted-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recently-deleted-tags .tag-chip {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+  padding: 3px 7px;
+  overflow-wrap: anywhere;
+}
+
 .recently-deleted-details {
   display: grid;
   margin: 17px 0 0;
