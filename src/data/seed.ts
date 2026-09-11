@@ -218,11 +218,11 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     {
       id: 'snippet-wide-page',
       name: 'Wide editor',
-      description: 'Reduce side padding for notes that benefit from more room.',
+      description: 'Give notes more horizontal room.',
       enabled: false,
       builtIn: true,
       createdAt: now - 30 * DAY,
-      css: `.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`
+      css: `.source-editor .cm-content.source-textarea {\n  --reading-margin-right: clamp(24px, 2.4vw, 38px);\n  --reading-margin-left: clamp(24px, 2.4vw, 38px);\n}`
     }
   ];
 

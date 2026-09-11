@@ -86,8 +86,9 @@
   }
 
   .source-editor .source-textarea {
-    padding-right: 28px;
-    padding-left: 25px;
+    --reading-margin-right: 28px;
+    --reading-margin-left: 25px;
+
     font-size: 12px;
   }
 
