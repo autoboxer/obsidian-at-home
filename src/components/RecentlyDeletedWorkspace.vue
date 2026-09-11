@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
+import { splitLeadingFrontmatter } from '../lib/frontmatter';
 import {
   canEditVault,
   emptyRecentlyDeletedNotes,
@@ -98,7 +99,7 @@ function displayTitle( entry: RecentlyDeletedNote ): string {
 }
 
 function contentPreview( content: string ): string {
-  return content
+  return splitLeadingFrontmatter( content ).body
     .slice( 0, 2_000 )
     .replace( /[#*_>`[\]]/g, ' ' )
     .replace( /\s+/g, ' ' )
@@ -218,6 +219,20 @@ function loadMore(): void {
             <p class="recently-deleted-preview">
               {{ contentPreview( entry.note.content ) }}
             </p>
+
+            <ul
+              v-if="entry.note.tags.length"
+              class="recently-deleted-tags"
+              aria-label="Tags"
+            >
+              <li
+                v-for="tag in entry.note.tags"
+                :key="tag"
+                class="tag-chip"
+              >
+                <span aria-hidden="true">#</span>{{ tag }}
+              </li>
+            </ul>
 
             <dl class="recently-deleted-details">
               <div>
