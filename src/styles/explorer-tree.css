@@ -390,17 +390,6 @@
   white-space: nowrap;
 }
 
-.vault-tree-root-row > small {
-  flex: none;
-  color: var(--text-faint);
-  font-size: 8.5px;
-  letter-spacing: 0.01em;
-}
-
-.vault-tree-root-row.drop-active > small {
-  color: var(--violet-bright);
-}
-
 .vault-tree-folder {
   width: max-content;
   min-width: 100%;
@@ -832,6 +821,16 @@
   top: 26px;
   right: -2px;
   min-width: 188px;
+}
+
+.vault-tree-image-popover:focus-visible,
+.vault-tree-attachment-popover:focus-visible {
+  outline: none;
+}
+
+.vault-tree-image-popover button:focus-visible,
+.vault-tree-attachment-popover button:focus-visible {
+  background: var(--surface-control-hover);
 }
 
 .vault-tree-image-popover button:disabled,

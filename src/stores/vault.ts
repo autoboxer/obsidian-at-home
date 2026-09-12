@@ -82,8 +82,6 @@ import {
   canEditVault,
   recentlyDeletedState,
   uiState,
-  vaultAttachmentInsertRequest,
-  vaultImageInsertRequest,
   vaultSession,
   vaultState,
   vaultTreeRevealTarget,
@@ -97,8 +95,6 @@ export {
   searchState,
   treeDragState,
   uiState,
-  vaultAttachmentInsertRequest,
-  vaultImageInsertRequest,
   vaultSession,
   vaultState,
   vaultTreeRevealTarget
@@ -1382,19 +1378,6 @@ function folderContainsAssets( folderId: string ): boolean {
   return folderContainsVaultAssets( vaultState, folderPath( folderId ) );
 }
 
-export function requestInsertVaultImage( image: VaultImageFile ): void {
-  if ( !canEditVault.value ) {
-    return;
-  }
-  if ( vaultSession.backend !== 'native' || !vaultSession.path || !activeNote.value ) {
-    notify( 'Open a note in a desktop vault before inserting an image', 'warning' );
-
-    return;
-  }
-  vaultImageInsertRequest.relativePath = image.relativePath;
-  vaultImageInsertRequest.id += 1;
-}
-
 export async function renameVaultImage(
   image: VaultImageFile,
   fileName: string
@@ -1545,19 +1528,6 @@ function applyRelocatedImageResult(
     });
   });
   applyWorkspaceSaveResult( result );
-}
-
-export function requestInsertVaultAttachment( attachment: VaultAttachmentFile ): void {
-  if ( !canEditVault.value ) {
-    return;
-  }
-  if ( vaultSession.backend !== 'native' || !vaultSession.path || !activeNote.value ) {
-    notify( 'Open a note in a desktop vault before inserting a file', 'warning' );
-
-    return;
-  }
-  vaultAttachmentInsertRequest.relativePath = attachment.relativePath;
-  vaultAttachmentInsertRequest.id += 1;
 }
 
 export async function renameVaultAttachment(
