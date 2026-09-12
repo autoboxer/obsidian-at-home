@@ -1,6 +1,6 @@
 use crate::workspace::{
-    copy_attachment_file_for_transfer, is_supported_image_path, validate_image_bytes,
-    MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES,
+    copy_attachment_file_for_transfer, is_finder_metadata_path, is_supported_image_path,
+    validate_image_bytes, MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -191,7 +191,9 @@ fn should_visit_note_entry(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
         return true;
     }
-    if entry.file_type().is_symlink() {
+    if entry.file_type().is_symlink()
+        || entry.file_type().is_file() && is_finder_metadata_path(entry.path())
+    {
         return false;
     }
     if entry.file_type().is_dir() {
@@ -893,6 +895,9 @@ fn checked_relative_attachment_path(path: &str) -> Result<PathBuf, String> {
         return Err("absolute paths and backslashes are not allowed".to_owned());
     }
     let candidate = Path::new(path);
+    if is_finder_metadata_path(candidate) {
+        return Err("Finder metadata files are not attachments".to_owned());
+    }
     if is_markdown_path(candidate) {
         return Err("Markdown files are notes, not attachments".to_owned());
     }

@@ -474,11 +474,18 @@ pub(super) fn validate_parent_directory(input: &str) -> Result<PathBuf, String> 
         .map_err(|error| format!("The parent folder could not be resolved: {error}"))
 }
 
+pub(crate) fn is_finder_metadata_path(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".DS_Store"))
+}
+
 pub(super) fn should_visit_workspace_entry(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
         return true;
     }
-    if entry.file_type().is_symlink() {
+    if entry.file_type().is_symlink()
+        || entry.file_type().is_file() && is_finder_metadata_path(entry.path())
+    {
         return false;
     }
     if is_nested_vault_directory(entry) {
@@ -492,7 +499,9 @@ pub(super) fn should_visit_revision_entry(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
         return true;
     }
-    if entry.file_type().is_symlink() {
+    if entry.file_type().is_symlink()
+        || entry.file_type().is_file() && is_finder_metadata_path(entry.path())
+    {
         return false;
     }
     if is_nested_vault_directory(entry) {

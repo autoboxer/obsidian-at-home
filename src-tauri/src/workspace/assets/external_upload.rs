@@ -70,6 +70,9 @@ pub(in crate::workspace) fn safe_external_file_name(file_name: &str) -> Result<S
         return Err("The dropped file name is not safe.".to_owned());
     }
     let path = Path::new(file_name);
+    if is_finder_metadata_path(path) {
+        return Err("Finder metadata files cannot be embedded.".to_owned());
+    }
     let stem = safe_file_stem(
         path.file_stem()
             .and_then(|value| value.to_str())

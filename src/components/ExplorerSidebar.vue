@@ -623,7 +623,6 @@ function handleRootKeydown( event: KeyboardEvent ): void {
                 <AppIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
                 <span>Vault root</span>
               </button>
-              <small v-if="canEditVault">Drop here</small>
             </div>
 
             <Transition name="collapse-fade">
