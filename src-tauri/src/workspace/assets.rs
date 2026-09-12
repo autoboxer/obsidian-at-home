@@ -1154,6 +1154,7 @@ pub(in crate::workspace) fn reconcile_image_assets(
     assets: &mut BTreeMap<String, StoredVaultAsset>,
     warnings: &mut WarningCollector,
 ) -> Vec<EmbeddedImage> {
+    assets.retain(|_, asset| !is_finder_metadata_path(Path::new(&asset.relative_path)));
     if assets.len() > MAX_VAULT_ASSETS {
         warnings.push(format!(
             "Only the first {MAX_VAULT_ASSETS} embedded image records were loaded."

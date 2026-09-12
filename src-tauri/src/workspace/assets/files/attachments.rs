@@ -485,6 +485,9 @@ pub(in crate::workspace) fn save_workspace_attachment_copy(
 
 pub(in crate::workspace) fn safe_attachment_file_name(file_name: &str) -> Result<String, String> {
     let path = Path::new(file_name);
+    if is_finder_metadata_path(path) {
+        return Err("Finder metadata files cannot be embedded.".to_owned());
+    }
     let stem = safe_file_stem(
         path.file_stem()
             .and_then(|value| value.to_str())
@@ -587,6 +590,9 @@ pub(in crate::workspace) fn validate_attachment_relative_path(
 ) -> Result<(), String> {
     validate_relative_path(relative_path, false)?;
     let path = Path::new(relative_path);
+    if is_finder_metadata_path(path) {
+        return Err("Finder metadata files cannot be embedded.".to_owned());
+    }
     if is_markdown_path(path) {
         return Err(
             "Markdown notes should be linked as notes, not embedded as attachments.".to_owned(),
