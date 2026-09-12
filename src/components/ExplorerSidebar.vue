@@ -40,6 +40,7 @@ const rootExpanded = ref( true );
 const rootDropActive = ref( false );
 const rootDropInvalid = ref( false );
 const fileTree = ref<HTMLElement>();
+const treePointerFocus = ref( false );
 let revealFrame: number | undefined;
 
 const vaultMonogram = computed( () => {
@@ -424,6 +425,30 @@ function handleRootKeydown( event: KeyboardEvent ): void {
     rootExpanded.value = false;
   }
 }
+
+function handleTreeKeydown( event: KeyboardEvent ): void {
+  if (
+    event.key === 'Enter'
+    && event.target instanceof HTMLElement
+    && event.target.matches(
+      '.vault-tree-root-main, .vault-tree-folder-main, .vault-tree-note-main, .vault-tree-image-main, .vault-tree-attachment-main'
+    )
+  ) {
+    // Enter on a row is inert. Keep pointer focus from gaining an outline
+    // that resembles the filename input; actual keyboard navigation restores it.
+    event.preventDefault();
+    event.stopPropagation();
+
+    return;
+  }
+  treePointerFocus.value = false;
+}
+
+function handleTreeFocusOut( event: FocusEvent ): void {
+  if ( !( event.relatedTarget instanceof Node ) || !fileTree.value?.contains( event.relatedTarget ) ) {
+    treePointerFocus.value = false;
+  }
+}
 </script>
 
 <template>
@@ -587,7 +612,11 @@ function handleRootKeydown( event: KeyboardEvent ): void {
         <div
           ref="fileTree"
           class="vault-file-tree"
+          :class="{ 'has-pointer-focus': treePointerFocus }"
           :aria-label="treeAriaLabel"
+          @pointerdown.capture="treePointerFocus = true"
+          @keydown.capture="handleTreeKeydown"
+          @focusout="handleTreeFocusOut"
         >
           <template v-if="vaultState.selectedFolderId === 'recent'">
             <VaultTreeNote
@@ -623,7 +652,6 @@ function handleRootKeydown( event: KeyboardEvent ): void {
                 <AppIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
                 <span>Vault root</span>
               </button>
-              <small v-if="canEditVault">Drop here</small>
             </div>
 
             <Transition name="collapse-fade">

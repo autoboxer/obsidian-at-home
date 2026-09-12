@@ -82,6 +82,17 @@ const {
 defineExpose({ openNoteLink, storeAndInsertAttachment });
 
 const noteLinkTargets = computed( () => wikiLinkSuggestions( vaultState.notes, noteLinkPaths.value ) );
+
+function noteLinkForId( noteId: string ): string | undefined {
+  const path = noteLinkPaths.value.get( noteId );
+  if ( !path ) {
+    return undefined;
+  }
+  // A dropped file identifies an exact note, even among duplicate names
+  // or notes whose only difference is their Markdown extension.
+  return '[[/' + path.replace( /[\\|#[\]]/g, '\\$&' ) + ']]';
+}
+
 const wikiLinkIsResolved = computed( () => {
   const paths = noteLinkPaths.value;
   const sourceNote = activeNote.value;
@@ -731,6 +742,7 @@ watch( tagInput, () => {
             :note-id="activeNote.id"
             :note-relative-path="activeNote.relativePath"
             :note-link-targets="noteLinkTargets"
+            :note-link-for-id="noteLinkForId"
             :wiki-link-is-resolved="wikiLinkIsResolved"
             :rename-attachment="renameVaultAttachment"
             :read-only="!canEditVault"

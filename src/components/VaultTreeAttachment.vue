@@ -9,7 +9,6 @@ import {
   canEditVault,
   activateVaultAttachment,
   renameVaultAttachment,
-  requestInsertVaultAttachment,
   showVaultItemInFolder,
   treeDragState,
   vaultTreeItemIsRevealed
@@ -28,7 +27,7 @@ const renameInput = ref<HTMLInputElement>();
 const menuOpen = ref( false );
 const menuPosition = ref<{ x: number; y: number }>();
 const menu = ref<HTMLElement>();
-const menuButton = ref<HTMLButtonElement>();
+const mainButton = ref<HTMLButtonElement>();
 
 const fileName = computed( () =>
   props.attachment.relativePath.split( '/' ).at( -1 ) || 'Attachment'
@@ -51,7 +50,7 @@ const actionLabel = computed( () => {
   return archive.value ? 'Save archive as…' : 'Open file';
 });
 const rowTitle = computed( () =>
-  !canEditVault.value ? props.attachment.relativePath : `${ props.attachment.relativePath } · Press Enter to embed or drag into the editor or onto a folder`
+  !canEditVault.value ? props.attachment.relativePath : `${ props.attachment.relativePath } · Drag into the editor to insert or onto a folder to move`
 );
 const revealed = computed( () => vaultTreeItemIsRevealed({
   assetId: props.attachment.assetId,
@@ -85,11 +84,6 @@ function finishDrag(): void {
   if ( treeDragState.attachmentPath === props.attachment.relativePath ) {
     treeDragState.attachmentPath = null;
   }
-}
-
-function insertIntoActiveNote(): void {
-  closeMenu();
-  requestInsertVaultAttachment( props.attachment );
 }
 
 function activateAttachment(): void {
@@ -137,36 +131,85 @@ function saveRename(): void {
 function cancelRename(): void {
   editing.value = false;
   editValue.value = fileName.value;
+  nextTick( () => mainButton.value?.focus() );
 }
 
-function toggleMenu(): void {
-  if ( menuOpen.value ) {
-    closeMenu( true );
+function handleRowKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'F2' && !event.altKey && !event.ctrlKey && !event.metaKey ) {
+    event.preventDefault();
+    beginRename();
 
     return;
   }
-  menuPosition.value = undefined;
-  menuOpen.value = true;
-  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
+  if ( event.key === 'ContextMenu' || ( event.key === 'F10' && event.shiftKey ) ) {
+    event.preventDefault();
+    const bounds = mainButton.value?.getBoundingClientRect();
+    if ( bounds ) {
+      openContextMenu({ clientX: bounds.left, clientY: bounds.bottom });
+    }
+  }
 }
 
-function openContextMenu( event: MouseEvent ): void {
+function openContextMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void {
   const menuWidth = 190;
-  const menuHeight = 164;
+  const menuHeight = 108;
   menuPosition.value = {
     x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
     y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
   };
   menuOpen.value = true;
-  nextTick( () => menu.value?.querySelector<HTMLButtonElement>( 'button:not(:disabled)' )?.focus() );
+  nextTick( () => menu.value?.focus() );
 }
 
 function closeMenu( restoreFocus = false ): void {
   menuOpen.value = false;
   menuPosition.value = undefined;
   if ( restoreFocus ) {
-    nextTick( () => menuButton.value?.focus() );
+    nextTick( () => mainButton.value?.focus() );
   }
+}
+
+function handleMenuKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' ) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu( true );
+
+    return;
+  }
+  if (
+    ( event.key === 'Tab' || ( event.key === 'Unidentified' && event.code === 'Tab' ) )
+    && event.shiftKey
+    && (
+      document.activeElement === menu.value
+      || document.activeElement === menu.value?.querySelector( 'button:not(:disabled)' )
+    )
+  ) {
+    event.preventDefault();
+    closeMenu( true );
+
+    return;
+  }
+  if ( ![ 'ArrowDown', 'ArrowUp', 'Home', 'End' ].includes( event.key ) ) {
+    return;
+  }
+  const items = Array.from( menu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []);
+  if ( !items.length ) {
+    return;
+  }
+  event.preventDefault();
+  const currentIndex = items.indexOf( document.activeElement as HTMLButtonElement );
+  let nextIndex: number;
+  if ( event.key === 'Home' ) {
+    nextIndex = 0;
+  } else if ( event.key === 'End' || ( event.key === 'ArrowUp' && currentIndex < 0 ) ) {
+    nextIndex = items.length - 1;
+  } else if ( event.key === 'ArrowDown' ) {
+    nextIndex = ( currentIndex + 1 ) % items.length;
+  } else {
+    nextIndex = ( currentIndex - 1 + items.length ) % items.length;
+  }
+  items[ nextIndex ]?.focus();
 }
 
 function handleMenuFocusOut( event: FocusEvent ): void {
@@ -188,17 +231,21 @@ function handleMenuFocusOut( event: FocusEvent ): void {
     :style="{ '--tree-depth': depth }"
     :title="rowTitle"
     @contextmenu.prevent.stop="openContextMenu"
+    @focusout="handleMenuFocusOut"
   >
     <template v-if="!editing">
       <button
-        :disabled="!canEditVault"
+        ref="mainButton"
         type="button"
         class="vault-tree-attachment-main"
         data-vault-item-primary
         :draggable="canEditVault"
         :aria-current="revealed ? 'true' : undefined"
-        :aria-label="`Insert ${fileName} into the active note`"
-        @click="insertIntoActiveNote"
+        :aria-label="fileName"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        @click="closeMenu()"
+        @keydown="handleRowKeydown"
         @dragstart="startDrag"
         @dragend="finishDrag"
       >
@@ -209,18 +256,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
         />
         <span class="vault-tree-attachment-title">{{ fileName }}</span>
       </button>
-      <div class="vault-tree-attachment-menu-anchor" @focusout="handleMenuFocusOut">
-        <button
-          ref="menuButton"
-          type="button"
-          class="vault-tree-attachment-more"
-          :aria-label="`Actions for ${fileName}`"
-          aria-haspopup="menu"
-          :aria-expanded="menuOpen"
-          @click.stop="toggleMenu"
-        >
-          <AppIcon name="more" :size="14" />
-        </button>
+      <div class="vault-tree-attachment-menu-anchor">
         <Transition name="popover-fade">
           <div
             v-if="menuOpen"
@@ -229,18 +265,10 @@ function handleMenuFocusOut( event: FocusEvent ): void {
             :class="{ 'tree-context-menu': menuPosition }"
             :style="menuPosition ? { left: `${menuPosition.x}px`, top: `${menuPosition.y}px`, right: 'auto' } : undefined"
             role="menu"
+            tabindex="-1"
             :aria-label="`Actions for ${fileName}`"
-            @keydown.esc.prevent="closeMenu( true )"
+            @keydown="handleMenuKeydown"
           >
-            <button
-              :disabled="!canEditVault"
-              type="button"
-              role="menuitem"
-              @click="insertIntoActiveNote"
-            >
-              <AppIcon name="paperclip" :size="14" />
-              Insert into active note
-            </button>
             <button
               type="button"
               role="menuitem"

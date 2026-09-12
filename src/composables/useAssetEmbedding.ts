@@ -1,5 +1,4 @@
 import {
-  nextTick,
   onBeforeUnmount,
   ref,
   watch,
@@ -44,8 +43,6 @@ import {
   notify,
   revealVaultItemInTree,
   showVaultItemInFolder,
-  vaultAttachmentInsertRequest,
-  vaultImageInsertRequest,
   vaultSession,
   vaultState
 } from '../stores/vault';
@@ -782,36 +779,6 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     }
   }
 
-  async function insertRequestedVaultImage(): Promise<void> {
-    if ( !canEditVault.value ) {
-      return;
-    }
-    const relativePath = vaultImageInsertRequest.relativePath;
-    await nextTick();
-    const capture = sourceEditor.value?.captureImageInsertion();
-    if ( !capture || !relativePath ) {
-      notify( 'Place the cursor in an open note before inserting an image', 'warning' );
-
-      return;
-    }
-    await embedImageFromVault( capture, relativePath );
-  }
-
-  async function insertRequestedVaultAttachment(): Promise<void> {
-    if ( !canEditVault.value ) {
-      return;
-    }
-    const relativePath = vaultAttachmentInsertRequest.relativePath;
-    await nextTick();
-    const capture = sourceEditor.value?.captureAttachmentInsertion();
-    if ( !capture || !relativePath ) {
-      notify( 'Place the cursor in an open note before inserting a file', 'warning' );
-
-      return;
-    }
-    await embedAttachmentFromVault( capture, relativePath );
-  }
-
   function activateEmbeddedAttachment(
     assetId: string | undefined,
     relativePath: string,
@@ -851,16 +818,6 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   watch(
     [ () => vaultSession.path, () => activeNote.value?.id, () => canEditVault.value ],
     () => externalFileDropAbort?.abort()
-  );
-
-  watch(
-    () => vaultImageInsertRequest.id,
-    () => void insertRequestedVaultImage()
-  );
-
-  watch(
-    () => vaultAttachmentInsertRequest.id,
-    () => void insertRequestedVaultAttachment()
   );
 
   onBeforeUnmount( () => externalFileDropAbort?.abort() );
