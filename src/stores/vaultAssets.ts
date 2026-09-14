@@ -12,12 +12,108 @@ import {
 } from '../lib/markdownAttachments';
 import type {
   Folder,
+  RecentlyDeletedNote,
   VaultAttachmentFile,
   VaultData,
-  VaultImageFile
+  VaultImageFile,
+  WorkspaceImageNoteUpdate
 } from '../types';
 
 type MarkdownReplacement = { from: number; to: number; value: string };
+
+export type VaultAssetKind = 'image' | 'attachment';
+export type VaultAssetIdentity = { assetId?: string; relativePath: string };
+
+export interface VaultAssetDeletionPlan {
+  referenceCount: number;
+  recoveryReferenceCount: number;
+  noteUpdates: WorkspaceImageNoteUpdate[];
+  recoveryUpdates: WorkspaceImageNoteUpdate[];
+}
+
+/** Use the same parsed references for the confirmation count and replacement text. */
+export function planVaultAssetDeletion(
+  vault: VaultData,
+  recentlyDeleted: readonly RecentlyDeletedNote[],
+  kind: VaultAssetKind,
+  asset: VaultAssetIdentity
+): VaultAssetDeletionPlan {
+  const files = kind === 'image' ? vault.imageFiles : vault.attachmentFiles;
+  const embedded = kind === 'image' ? vault.embeddedImages : vault.embeddedAttachments;
+  const paths = new Set( files.map( ( file ) => file.relativePath ) );
+  const portablePaths = new Map<string, string | undefined>();
+  for ( const path of paths ) {
+    const key = path.toLocaleLowerCase();
+    portablePaths.set( key, portablePaths.has( key ) ? undefined : path );
+  }
+  const tracked = new Map( files.flatMap( ( file ) =>
+    file.assetId ? [ [ file.assetId, file.relativePath ] as const ] : []
+  ) );
+  for ( const file of embedded ) {
+    tracked.set( file.id, file.relativePath );
+  }
+  const resolvePath = ( destination: string, notePath: string ): string | undefined => {
+    const resolved = resolveMarkdownImagePath( notePath, destination );
+    if ( !resolved || paths.has( resolved ) ) {
+      return resolved;
+    }
+    return portablePaths.get( resolved.toLocaleLowerCase() );
+  };
+  const name = asset.relativePath.split( '/' ).at( -1 ) || 'attachment';
+  const marker = `Reference to ${ name } deleted`.replace(
+    /[\\`*_{}[\]()#+.!|<>~-]/gu,
+    '\\$&'
+  );
+  const updates = (
+    notes: readonly { id: string; relativePath: string; content: string }[]
+  ): { count: number; updates: WorkspaceImageNoteUpdate[] } => {
+    let count = 0;
+    const updates = notes.flatMap( ( note ): WorkspaceImageNoteUpdate[] => {
+      const references = kind === 'image'
+        ? parseMarkdownImages( note.content )
+        : parseMarkdownAttachments( note.content, {
+          acceptExtensionless: ( destination ) => Boolean(
+            resolvePath( destination, note.relativePath )
+          )
+        });
+      const matches = references.filter( ( reference ) => {
+        const trackedPath = reference.assetId ? tracked.get( reference.assetId ) : undefined;
+        const resolved = trackedPath ?? resolvePath( reference.destination, note.relativePath );
+
+        return resolved === asset.relativePath;
+      });
+      count += matches.length;
+      if ( !matches.length ) {
+        return [];
+      }
+
+      return [{
+        noteId: note.id,
+        relativePath: note.relativePath,
+        expectedContent: note.content,
+        content: applyMarkdownReplacements( note.content, matches.map( ( reference ) => ({
+          from: reference.start,
+          to: reference.end + 1,
+          value: marker
+        }) ) )
+      }];
+    });
+
+    return { count, updates };
+  };
+  const active = updates( vault.notes );
+  const recovery = updates( recentlyDeleted.map( ( deleted ) => ({
+    ...deleted.note,
+    id: deleted.id
+  }) ) );
+
+  return {
+    referenceCount: active.count + recovery.count,
+    recoveryReferenceCount: recovery.count,
+    noteUpdates: active.updates,
+    recoveryUpdates: recovery.updates
+  };
+}
 
 export function folderContainsVaultAssets(
   vault: VaultData,

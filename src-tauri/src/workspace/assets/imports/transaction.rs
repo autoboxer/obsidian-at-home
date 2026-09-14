@@ -171,6 +171,7 @@ pub(in crate::workspace) fn apply_workspace_image_import(
         originals: Vec::new(),
         targets,
         recovery_targets: Vec::new(),
+        asset_deletion: None,
         folder_case_renames: Vec::new(),
         created_directories,
     };
@@ -255,6 +256,7 @@ pub(in crate::workspace) fn pending_workspace_image_import(
         || manifest.phase != TransactionPhase::Applying
         || !manifest.originals.is_empty()
         || !manifest.recovery_targets.is_empty()
+        || manifest.asset_deletion.is_some()
         || !manifest.folder_case_renames.is_empty()
         || manifest.targets.is_empty()
         || manifest

@@ -48,7 +48,7 @@ const RECENTLY_DELETED_SNAPSHOT_VERSION: u32 = 1;
 const STATE_VERSION: u32 = 4;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
-const TRANSACTION_VERSION: u32 = 5;
+const TRANSACTION_VERSION: u32 = 6;
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -682,8 +682,27 @@ struct TransactionManifest {
     targets: Vec<TransactionTarget>,
     #[serde(default)]
     recovery_targets: Vec<TransactionRecoveryTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asset_deletion: Option<AssetDeletionTransaction>,
     folder_case_renames: Vec<FolderCaseRename>,
     created_directories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AssetDeletionTransaction {
+    kind: VaultAssetKind,
+    relative_path: String,
+    fingerprint: FileFingerprint,
+    recovery_updates: Vec<AssetDeletionRecoveryUpdate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AssetDeletionRecoveryUpdate {
+    id: String,
+    original_fingerprint: FileFingerprint,
+    fingerprint: FileFingerprint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

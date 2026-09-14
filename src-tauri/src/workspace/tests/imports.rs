@@ -542,6 +542,7 @@ fn image_import_consistency_rolls_back_only_imported_files() {
         originals: Vec::new(),
         targets: vec![target.clone()],
         recovery_targets: Vec::new(),
+        asset_deletion: None,
         folder_case_renames: Vec::new(),
         created_directories: vec!["Assets".to_owned()],
     };
@@ -594,6 +595,7 @@ fn image_import_rollback_preserves_an_unowned_matching_file() {
         originals: Vec::new(),
         targets: vec![target],
         recovery_targets: Vec::new(),
+        asset_deletion: None,
         folder_case_renames: Vec::new(),
         created_directories: Vec::new(),
     };

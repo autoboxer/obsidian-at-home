@@ -1,3 +1,522 @@
+fn asset_deletion_fixture() -> (TestWorkspace, Note, WorkspaceImageNoteUpdate) {
+    let workspace = TestWorkspace::new("asset-deletion");
+    let note = test_note("[Custom label](Report.pdf#oah-asset=attachment-report)");
+    let mut state = write_saved_note(&workspace, &note);
+    let path = workspace.root.join("Report.pdf");
+    fs::write(&path, b"report bytes").unwrap();
+    state.assets.insert(
+        "attachment-report".to_owned(),
+        StoredVaultAsset {
+            kind: VaultAssetKind::Attachment,
+            relative_path: "Report.pdf".to_owned(),
+            media_type: "application/pdf".to_owned(),
+            fingerprint: fingerprint_attachment_file(&path).unwrap(),
+            modified_nanos: file_modified_nanos_for_path(&path).unwrap(),
+        },
+    );
+    write_workspace_state(&workspace.root, &state).unwrap();
+    let update = WorkspaceImageNoteUpdate {
+        note_id: note.id.clone(),
+        relative_path: note.relative_path.clone(),
+        expected_content: note.content.clone(),
+        content: "Reference to Report.pdf deleted".to_owned(),
+    };
+    (workspace, note, update)
+}
+
+fn asset_deletion_recovery_fixture(
+) -> (TestWorkspace, RecentlyDeletedNote, WorkspaceImageNoteUpdate) {
+    let (workspace, note, update) = asset_deletion_fixture();
+    let (_, deleted) = save_workspace_files_with_archive(
+        &workspace.root,
+        &empty_vault("Test vault"),
+        revision_for_root(&workspace.root).unwrap(),
+        Some(PendingNoteArchive {
+            note,
+            original_folder_path: String::new(),
+            editor_position: Some(editor_position(3)),
+        }),
+    )
+    .unwrap();
+    let deleted = deleted.unwrap();
+    let update = WorkspaceImageNoteUpdate {
+        note_id: deleted.id.clone(),
+        ..update
+    };
+    (workspace, deleted, update)
+}
+
+#[test]
+fn asset_deletion_commits_markers_and_removes_only_the_selected_file() {
+    let (workspace, note, update) = asset_deletion_fixture();
+    fs::write(workspace.root.join("Other.pdf"), "other bytes").unwrap();
+    let saved = delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[update.clone()],
+        &[],
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    assert!(!workspace.root.join("Report.pdf").exists());
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("Other.pdf")).unwrap(),
+        "other bytes"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        update.content
+    );
+    let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_eq!(loaded.vault.notes[0].content, update.content);
+    assert!(loaded.vault.embedded_attachments.is_empty());
+    assert_eq!(saved.revision, revision_for_root(&workspace.root).unwrap());
+    assert!(!workspace
+        .root
+        .join(STATE_DIRECTORY)
+        .join(TRANSACTIONS_DIRECTORY)
+        .exists());
+}
+
+#[test]
+fn asset_deletion_rejects_stale_content_revision_and_identity() {
+    let (workspace, note, update) = asset_deletion_fixture();
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let metadata = fs::read(workspace_state_path(&workspace.root)).unwrap();
+    for (id, candidate, expected_revision) in [
+        (Some("attachment-report"), update.clone(), revision + 1),
+        (Some("missing-id"), update.clone(), revision),
+        (
+            Some("attachment-report"),
+            WorkspaceImageNoteUpdate {
+                expected_content: "stale".to_owned(),
+                ..update.clone()
+            },
+            revision,
+        ),
+    ] {
+        assert!(delete_workspace_asset(
+            &workspace.root,
+            ExternalFileUploadKind::Attachment,
+            "Report.pdf",
+            id,
+            &[candidate],
+            &[],
+            expected_revision
+        )
+        .is_err());
+    }
+    assert!(delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Other.pdf",
+        Some("attachment-report"),
+        &[update.clone()],
+        &[],
+        revision
+    )
+    .is_err());
+    assert!(delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[update.clone(), update],
+        &[],
+        revision
+    )
+    .is_err());
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        note.content
+    );
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+    assert_eq!(
+        fs::read(workspace_state_path(&workspace.root)).unwrap(),
+        metadata
+    );
+}
+
+#[test]
+fn asset_deletion_accepts_untracked_images_and_extensionless_files() {
+    let workspace = TestWorkspace::new("asset-deletion-untracked");
+    for (path, kind) in [
+        ("Photo.png", ExternalFileUploadKind::Image),
+        ("LICENSE", ExternalFileUploadKind::Attachment),
+    ] {
+        fs::write(workspace.root.join(path), "unreferenced bytes").unwrap();
+        delete_workspace_asset(
+            &workspace.root,
+            kind,
+            path,
+            None,
+            &[],
+            &[],
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .unwrap();
+        assert!(!workspace.root.join(path).exists());
+    }
+}
+
+#[test]
+fn asset_deletion_retains_recovery_metadata_and_rejects_stale_snapshots() {
+    let (workspace, deleted, update) = asset_deletion_recovery_fixture();
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let snapshot_path = recently_deleted_snapshot_path(&workspace.root, &deleted.id).unwrap();
+    let original_bytes = fs::read(&snapshot_path).unwrap();
+    let stale = WorkspaceImageNoteUpdate {
+        expected_content: "stale".to_owned(),
+        ..update.clone()
+    };
+    assert!(delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[],
+        &[stale],
+        revision
+    )
+    .is_err());
+    assert_eq!(fs::read(&snapshot_path).unwrap(), original_bytes);
+    delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[],
+        &[update.clone()],
+        revision,
+    )
+    .unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    let mut expected = deleted.clone();
+    expected.note.content = update.content;
+    expected.editor_position = None;
+    assert_eq!(loaded.recently_deleted_notes, vec![expected]);
+    assert!(loaded.vault.attachment_files.is_empty());
+}
+
+#[test]
+fn asset_deletion_rolls_back_each_precommit_failure() {
+    for stage in ["prepared", "references-written", "asset-removed"] {
+        let (workspace, note, update) = asset_deletion_fixture();
+        let state_bytes = fs::read(workspace_state_path(&workspace.root)).unwrap();
+        let error = delete_workspace_asset_with_hook(
+            &workspace.root,
+            ExternalFileUploadKind::Attachment,
+            "Report.pdf",
+            Some("attachment-report"),
+            &[update],
+            &[],
+            revision_for_root(&workspace.root).unwrap(),
+            |checkpoint| {
+                if checkpoint == stage {
+                    Err("Injected write failure".to_owned())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Injected write failure"), "{stage}: {error}");
+        assert!(error.contains("rolled back"), "{stage}: {error}");
+        assert_eq!(
+            fs::read(workspace_state_path(&workspace.root)).unwrap(),
+            state_bytes
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+            note.content
+        );
+        assert_eq!(
+            fs::read(workspace.root.join("Report.pdf")).unwrap(),
+            b"report bytes"
+        );
+        load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    }
+}
+
+#[test]
+fn asset_deletion_rolls_back_recovery_and_live_references_together() {
+    let (workspace, deleted, recovery_update) = asset_deletion_recovery_fixture();
+    fs::write(workspace.root.join("Live.md"), &deleted.note.content).unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    let live = &loaded.vault.notes[0];
+    let update = WorkspaceImageNoteUpdate {
+        note_id: live.id.clone(),
+        relative_path: live.relative_path.clone(),
+        expected_content: live.content.clone(),
+        content: recovery_update.content.clone(),
+    };
+    let snapshot_path = recently_deleted_snapshot_path(&workspace.root, &deleted.id).unwrap();
+    let snapshot_bytes = fs::read(&snapshot_path).unwrap();
+    let error = delete_workspace_asset_with_hook(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[update],
+        &[recovery_update],
+        loaded.revision,
+        |checkpoint| {
+            if checkpoint == "asset-removed" {
+                Err("Injected write failure".to_owned())
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("Injected write failure"), "{error}");
+    assert!(error.contains("rolled back"), "{error}");
+    assert_eq!(fs::read(&snapshot_path).unwrap(), snapshot_bytes);
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("Live.md")).unwrap(),
+        live.content
+    );
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+}
+
+#[test]
+fn asset_deletion_recovers_interrupted_deletions_and_retains_committed_ones() {
+    for stage in ["references-written", "asset-removed", "committed"] {
+        let (workspace, deleted, update) = asset_deletion_recovery_fixture();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            delete_workspace_asset_with_hook(
+                &workspace.root,
+                ExternalFileUploadKind::Attachment,
+                "Report.pdf",
+                Some("attachment-report"),
+                &[],
+                &[update.clone()],
+                revision_for_root(&workspace.root).unwrap(),
+                |checkpoint| {
+                    assert_ne!(checkpoint, stage, "Simulated interruption");
+                    Ok(())
+                },
+            )
+        }));
+        assert!(result.is_err());
+        let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+        assert_eq!(
+            workspace.root.join("Report.pdf").exists(),
+            stage != "committed"
+        );
+        assert_eq!(
+            loaded.recently_deleted_notes[0].note.content,
+            if stage == "committed" {
+                update.content.clone()
+            } else {
+                deleted.note.content.clone()
+            }
+        );
+        if stage != "committed" {
+            assert_eq!(loaded.recently_deleted_notes[0], deleted);
+        }
+    }
+}
+
+#[test]
+fn asset_deletion_preserves_concurrently_edited_notes_and_backups() {
+    let (workspace, note, update) = asset_deletion_fixture();
+    let error = delete_workspace_asset_with_hook(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[update],
+        &[],
+        revision_for_root(&workspace.root).unwrap(),
+        |checkpoint| {
+            if checkpoint == "references-written" {
+                fs::write(workspace.root.join(&note.relative_path), "External edit").unwrap();
+            }
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("could not be fully rolled back"), "{error}");
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        "External edit"
+    );
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+    assert!(workspace
+        .root
+        .join(STATE_DIRECTORY)
+        .join(TRANSACTIONS_DIRECTORY)
+        .exists());
+}
+
+#[test]
+fn asset_deletion_detects_unrelated_external_changes() {
+    let (workspace, note, update) = asset_deletion_fixture();
+    let error = delete_workspace_asset_with_hook(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[update],
+        &[],
+        revision_for_root(&workspace.root).unwrap(),
+        |checkpoint| {
+            if checkpoint == "references-written" {
+                fs::write(workspace.root.join("Other.md"), "External note").unwrap();
+            }
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("vault changed"), "{error}");
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        note.content
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("Other.md")).unwrap(),
+        "External note"
+    );
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn asset_deletion_rolls_back_after_a_real_metadata_write_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let (workspace, note, update) = asset_deletion_fixture();
+    let directory = workspace.root.join(STATE_DIRECTORY);
+    let permissions = fs::metadata(&directory).unwrap().permissions();
+    let result = delete_workspace_asset_with_hook(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[update],
+        &[],
+        revision_for_root(&workspace.root).unwrap(),
+        |checkpoint| {
+            if checkpoint == "asset-removed" {
+                fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+            }
+            Ok(())
+        },
+    );
+    fs::set_permissions(&directory, permissions).unwrap();
+    assert!(
+        result.is_err(),
+        "metadata replacement must fail without directory write permission"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        note.content
+    );
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+}
+
+#[test]
+fn asset_deletion_refuses_unknown_metadata_and_unreadable_recovery() {
+    let (workspace, deleted, _) = asset_deletion_recovery_fixture();
+    let path = recently_deleted_snapshot_path(&workspace.root, &deleted.id).unwrap();
+    fs::write(path, "damaged snapshot").unwrap();
+    assert!(delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        Some("attachment-report"),
+        &[],
+        &[],
+        revision_for_root(&workspace.root).unwrap()
+    )
+    .is_err());
+    fs::write(workspace_state_path(&workspace.root), "{\"version\":999}").unwrap();
+    assert!(delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "Report.pdf",
+        None,
+        &[],
+        &[],
+        revision_for_root(&workspace.root).unwrap()
+    )
+    .is_err());
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn asset_deletion_rejects_unsafe_targets_and_keeps_case_siblings() {
+    let (workspace, note, _) = asset_deletion_fixture();
+    let outside = TestWorkspace::new("asset-deletion-outside");
+    fs::write(outside.root.join("Outside.pdf"), "outside bytes").unwrap();
+    std::os::unix::fs::symlink(
+        outside.root.join("Outside.pdf"),
+        workspace.root.join("Link.pdf"),
+    )
+    .unwrap();
+    fs::write(workspace.root.join(".DS_Store"), "Finder state").unwrap();
+    fs::write(workspace.root.join("report.pdf"), "case sibling").unwrap();
+    for path in [
+        note.relative_path.as_str(),
+        "Link.pdf",
+        "../Outside.pdf",
+        ".DS_Store",
+    ] {
+        assert!(
+            delete_workspace_asset(
+                &workspace.root,
+                ExternalFileUploadKind::Attachment,
+                path,
+                None,
+                &[],
+                &[],
+                revision_for_root(&workspace.root).unwrap()
+            )
+            .is_err(),
+            "{path}"
+        );
+    }
+    delete_workspace_asset(
+        &workspace.root,
+        ExternalFileUploadKind::Attachment,
+        "report.pdf",
+        None,
+        &[],
+        &[],
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(workspace.root.join("Report.pdf")).unwrap(),
+        b"report bytes"
+    );
+    assert_eq!(
+        fs::read_to_string(outside.root.join("Outside.pdf")).unwrap(),
+        "outside bytes"
+    );
+}
+
 #[test]
 fn finder_metadata_is_removed_from_loaded_attachment_inventories() {
     let workspace = TestWorkspace::new("finder-metadata-inventory");
