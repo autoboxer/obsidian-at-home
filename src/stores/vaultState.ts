@@ -57,6 +57,17 @@ export interface RecentlyDeletedState {
   error: string | null;
 }
 
+export const assetDeletionState = reactive<{
+  request: {
+    kind: 'image' | 'attachment';
+    assetId?: string;
+    relativePath: string;
+    referenceCount: number;
+    recoveryReferenceCount: number;
+    changed: boolean;
+  } | null;
+}>({ request: null });
+
 export const treeDragState = reactive<{
   attachmentPath: string | null;
   noteId: string | null;

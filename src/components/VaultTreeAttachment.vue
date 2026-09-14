@@ -7,6 +7,7 @@ import {
 } from '../lib/markdownAttachments';
 import {
   canEditVault,
+  requestVaultAssetDeletion,
   activateVaultAttachment,
   renameVaultAttachment,
   showVaultItemInFolder,
@@ -100,6 +101,16 @@ function showInFolder(): void {
   });
 }
 
+async function deleteAsset(): Promise<void> {
+  closeMenu();
+  await requestVaultAssetDeletion( 'attachment', props.attachment );
+  await nextTick();
+  const target = mainButton.value?.isConnected
+    ? mainButton.value
+    : document.querySelector<HTMLButtonElement>( '.vault-tree-root-main' );
+  target?.focus({ preventScroll: true });
+}
+
 function beginRename(): void {
   if ( !canEditVault.value ) {
     return;
@@ -152,7 +163,7 @@ function handleRowKeydown( event: KeyboardEvent ): void {
 
 function openContextMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void {
   const menuWidth = 190;
-  const menuHeight = 108;
+  const menuHeight = 140;
   menuPosition.value = {
     x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
     y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
@@ -294,6 +305,16 @@ function handleMenuFocusOut( event: FocusEvent ): void {
             >
               <AppIcon name="folder-open" :size="14" />
               Show in folder
+            </button>
+            <button
+              :disabled="!canEditVault"
+              type="button"
+              role="menuitem"
+              class="danger"
+              @click="deleteAsset"
+            >
+              <AppIcon name="trash" :size="14" />
+              Delete
             </button>
           </div>
         </Transition>

@@ -59,11 +59,7 @@ export function planVaultAssetDeletion(
     }
     return portablePaths.get( resolved.toLocaleLowerCase() );
   };
-  const name = asset.relativePath.split( '/' ).at( -1 ) || 'attachment';
-  const marker = `Reference to ${ name } deleted`.replace(
-    /[\\`*_{}[\]()#+.!|<>~-]/gu,
-    '\\$&'
-  );
+  const marker = 'File Deleted';
   const updates = (
     notes: readonly { id: string; relativePath: string; content: string }[]
   ): { count: number; updates: WorkspaceImageNoteUpdate[] } => {

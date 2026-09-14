@@ -718,6 +718,32 @@ onMounted( () => {
     editableDocument.body.length,
     editableDocument.bodyStart
   );
+  const historySession = openNoteEditorHistory(
+    props.vaultId,
+    props.noteId,
+    () => {
+      frontmatterHistoryChanged = false;
+      const view = editorView.value;
+      if ( view ) {
+        view.dispatch({ effects: historyCompartment.reconfigure([]) });
+        view.dispatch({ effects: historyCompartment.reconfigure( history() ) });
+      }
+    }
+  );
+  closeEditorHistory = historySession.close;
+  const savedState = restorableEditorHistory(
+    historySession.snapshot,
+    normalizeDocumentText( props.modelValue ),
+    editableDocument
+  );
+  if ( historySession.snapshot && !savedState ) {
+    historySession.discard();
+  }
+  // Keep the restored field inside the compartment so it can actually be reset.
+  // fromJSON with the full editor extensions would install another copy outside it.
+  const restoredState = savedState
+    ? EditorState.fromJSON( savedState, {}, { history: historyField })
+    : undefined;
   const extensions: Extension[] = [
     EditorState.readOnly.of( props.readOnly ),
     EditorView.editable.of( !props.readOnly ),
@@ -729,7 +755,12 @@ onMounted( () => {
     ) ),
     lineNumbersCompartment.of( editorLineNumbers( frontmatterLineOffset ) ),
     highlightSpecialChars(),
-    historyCompartment.of( history() ),
+    historyCompartment.of([
+      history(),
+      ...( restoredState
+        ? [ historyField.init( () => restoredState.field( historyField ) ) ]
+        : [])
+    ]),
     drawSelection(),
     dropCursor(),
     // Let the drop-cursor observers run before a custom drop consumes the event.
@@ -887,32 +918,13 @@ onMounted( () => {
       scheduleEditorRenderReady( update.view );
     })
   ];
-  const historySession = openNoteEditorHistory(
-    props.vaultId,
-    props.noteId
-  );
-  closeEditorHistory = historySession.close;
-  const savedState = restorableEditorHistory(
-    historySession.snapshot,
-    normalizeDocumentText( props.modelValue ),
-    editableDocument
-  );
-  if ( historySession.snapshot && !savedState ) {
-    historySession.discard();
-  }
-  let state = savedState
-    ? EditorState.fromJSON(
-      savedState,
-      { extensions },
-      { history: historyField }
-    )
-    : EditorState.create({
-      doc: editableDocument.body,
-      selection: initialPosition
-        ? EditorSelection.range( initialPosition.selection.anchor, initialPosition.selection.head )
-        : undefined,
-      extensions
-    });
+  let state = EditorState.create({
+    doc: restoredState?.doc ?? editableDocument.body,
+    selection: restoredState?.selection ?? ( initialPosition
+      ? EditorSelection.range( initialPosition.selection.anchor, initialPosition.selection.head )
+      : undefined ),
+    extensions
+  });
   if ( savedState && savedState.doc !== editableDocument.body ) {
     const currentBodyStart = markdownBodyStart( savedState.prefix, savedState.doc );
     state = state.update({

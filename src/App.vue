@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ActivityRail from './components/ActivityRail.vue';
 import AppIcon from './components/AppIcon.vue';
 import CommandPalette from './components/CommandPalette.vue';
@@ -15,6 +15,10 @@ import VaultChooser from './components/VaultChooser.vue';
 import { applyAppZoom } from './services/native';
 import {
   activeNote,
+  assetDeletionState,
+  cancelVaultAssetDeletion,
+  canEditVault,
+  confirmVaultAssetDeletion,
   createNote,
   openQuickSearch,
   resetZoom,
@@ -27,6 +31,76 @@ import {
 import type { ToolView } from './types';
 
 const editorWorkspace = ref<InstanceType<typeof EditorWorkspace>>();
+const assetDeletionDialog = ref<HTMLElement>();
+const assetDeletionCancel = ref<HTMLButtonElement>();
+let assetDeletionReturnFocus: HTMLElement | null = null;
+const assetDeletionName = computed( () => assetDeletionState.request?.relativePath.split( '/' ).at( -1 ) );
+const assetDeletionReferenceSummary = computed( () => {
+  const request = assetDeletionState.request;
+  if ( !request ) {
+    return '';
+  }
+  const recovery = request.recoveryReferenceCount
+    ? `, including ${ request.recoveryReferenceCount } in Recently Deleted`
+    : '';
+
+  return `This file has ${ request.referenceCount } ${ request.referenceCount === 1 ? 'reference' : 'references' }${ recovery }.`;
+});
+
+watch(
+  () => assetDeletionState.request,
+  async ( request, previous ) => {
+    if ( !request ) {
+      return;
+    }
+    if ( !previous ) {
+      const row = Array.from( document.querySelectorAll<HTMLElement>( '[data-vault-item-kind]' ) ).find(
+        ( element ) => element.dataset.vaultItemKind === request.kind
+          && element.dataset.vaultItemRelativePath === request.relativePath
+      );
+      assetDeletionReturnFocus = row?.querySelector<HTMLElement>( '[data-vault-item-primary]' ) ?? null;
+    }
+    await nextTick();
+    assetDeletionCancel.value?.focus({ preventScroll: true });
+  }
+);
+
+function restoreAssetDeletionFocus(): void {
+  if ( assetDeletionState.request || vaultChooserVisible.value ) {
+    return;
+  }
+  const target = assetDeletionReturnFocus?.isConnected
+    ? assetDeletionReturnFocus
+    : document.querySelector<HTMLElement>( '.vault-tree-root-main' );
+  target?.focus({ preventScroll: true });
+  assetDeletionReturnFocus = null;
+}
+
+function handleAssetDeletionKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' ) {
+    event.preventDefault();
+    cancelVaultAssetDeletion();
+
+    return;
+  }
+  const isTab = event.key === 'Tab' || event.key === 'Unidentified' && event.code === 'Tab';
+  if ( !isTab ) {
+    return;
+  }
+  const buttons = Array.from( assetDeletionDialog.value?.querySelectorAll<HTMLButtonElement>( 'button:not(:disabled)' ) ?? []);
+  const first = buttons[ 0 ];
+  const last = buttons.at( -1 );
+  if ( !first || !last ) {
+    event.preventDefault();
+    assetDeletionDialog.value?.focus();
+  } else if ( event.shiftKey && document.activeElement === first ) {
+    event.preventDefault();
+    last.focus();
+  } else if ( !event.shiftKey && document.activeElement === last ) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 const requestedView = new URLSearchParams( window.location.search ).get( 'view' ) as ToolView | null;
 if ( requestedView && [ 'notes', 'search', 'templates', 'snippets', 'settings' ].includes( requestedView ) ) {
@@ -46,6 +120,7 @@ const appInteractionBlocked = computed(
   () => vaultSession.phase !== 'ready'
     || uiState.vaultChooserOpen
     || vaultSession.busy
+    || assetDeletionState.request !== null
 );
 
 function runToastAction(): void {
@@ -268,6 +343,70 @@ onBeforeUnmount( () => {
       <VaultChooser v-if="vaultChooserVisible" />
     </Transition>
 
+    <Transition
+      name="overlay-fade"
+      @after-enter="assetDeletionCancel?.focus( { preventScroll: true } )"
+      @after-leave="restoreAssetDeletionFocus"
+    >
+      <div
+        v-if="assetDeletionState.request"
+        v-modal-scroll-lock
+        class="modal-backdrop"
+        data-ui-region="asset-deletion-dialog"
+        @mousedown.self.prevent="cancelVaultAssetDeletion"
+      >
+        <section
+          ref="assetDeletionDialog"
+          class="editor-modal asset-deletion-dialog"
+          data-modal-scroll-region
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="asset-deletion-title"
+          aria-describedby="asset-deletion-description"
+          :aria-busy="vaultSession.busy"
+          tabindex="-1"
+          @keydown="handleAssetDeletionKeydown"
+        >
+          <header>
+            <h2 id="asset-deletion-title">
+              Delete {{ assetDeletionName }}?
+            </h2>
+          </header>
+          <div id="asset-deletion-description" class="modal-fields">
+            <p v-if="assetDeletionState.request.changed" role="status">
+              The file or its references changed. Review the updated details before deleting.
+            </p>
+            <p>
+              {{ assetDeletionReferenceSummary }}
+              Deleting it permanently removes the file from your vault.
+            </p>
+            <p>
+              Each reference will become “File Deleted”, including in notes restored from Recently Deleted.
+            </p>
+          </div>
+          <footer>
+            <button
+              ref="assetDeletionCancel"
+              type="button"
+              class="secondary-button"
+              :disabled="vaultSession.busy"
+              @click="cancelVaultAssetDeletion"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="settings-button settings-button--danger"
+              :disabled="vaultSession.busy || !canEditVault"
+              @click="confirmVaultAssetDeletion"
+            >
+              {{ vaultSession.busy ? 'Deleting…' : 'Delete file and replace references' }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Transition>
+
     <Transition name="toast">
       <div
         v-if="uiState.toast"
@@ -275,6 +414,7 @@ onBeforeUnmount( () => {
         class="app-toast"
         :class="`tone-${uiState.toast.tone}`"
         data-ui-region="notification"
+        :inert="appInteractionBlocked"
         role="status"
       >
         <span class="toast-icon">
