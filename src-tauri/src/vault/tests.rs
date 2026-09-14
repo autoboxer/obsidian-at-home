@@ -33,6 +33,52 @@ impl Drop for TempDirectory {
 }
 
 #[test]
+fn finder_metadata_is_excluded_from_vault_import_and_export() {
+    let source = TempDirectory::new("finder-metadata-transfer-source");
+    let parent = TempDirectory::new("finder-metadata-transfer-target");
+    fs::create_dir(source.path().join("Assets")).unwrap();
+    for path in [
+        ".DS_Store",
+        "Assets/.ds_store",
+        "Assets/Report.pdf",
+        "Assets/.DS_Store.txt",
+        "Assets/.env",
+    ] {
+        fs::write(source.path().join(path), path.as_bytes()).unwrap();
+    }
+    fs::write(source.path().join("Note.md"), "# Note").unwrap();
+    let imported = import_obsidian_vault(source.path().to_string_lossy().into_owned()).unwrap();
+    assert_eq!(imported.notes.len(), 1);
+    assert_eq!(
+        imported
+            .attachments
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        ["Assets/.DS_Store.txt", "Assets/.env", "Assets/Report.pdf"]
+    );
+    let exported = export_obsidian_vault(
+        parent.path().to_string_lossy().into_owned(),
+        source.path().to_string_lossy().into_owned(),
+        "Portable vault".to_owned(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(exported.attachment_count, 3);
+    let destination = Path::new(&exported.path);
+    for path in [".DS_Store", "Assets/.ds_store"] {
+        assert!(!destination.join(path).exists());
+        assert_eq!(fs::read(source.path().join(path)).unwrap(), path.as_bytes());
+        assert!(checked_relative_attachment_path(path).is_err());
+    }
+    for path in ["Assets/Report.pdf", "Assets/.DS_Store.txt", "Assets/.env"] {
+        assert_eq!(fs::read(destination.join(path)).unwrap(), path.as_bytes());
+    }
+}
+
+#[test]
 fn parses_basic_frontmatter_without_touching_content() {
     let content = "---\r\ntitle: \"A linked idea\"\r\ntags: [garden, 'in progress', '#garden']\r\nextra: keep me\r\n---\r\n# Body\r\n";
     let parsed = parse_basic_frontmatter(content);

@@ -1,5 +1,6 @@
 import { createSeedVault } from '../data/seed';
 import { hasFrontmatterTags, normalizeTags, parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
+import { isFinderMetadataPath } from '../lib/markdownAttachments';
 import type { Note, VaultData, VaultDescriptor } from '../types';
 import type { SmartFolderSelection } from './vaultState';
 
@@ -96,6 +97,7 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       attachment
       && typeof attachment.id === 'string'
       && typeof attachment.relativePath === 'string'
+      && !isFinderMetadataPath( attachment.relativePath )
       && typeof attachment.mediaType === 'string'
       && Number.isSafeInteger( attachment.byteLength )
       && attachment.byteLength >= 0
@@ -107,6 +109,7 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       attachment
       && ( attachment.assetId === undefined || typeof attachment.assetId === 'string' )
       && typeof attachment.relativePath === 'string'
+      && !isFinderMetadataPath( attachment.relativePath )
       && typeof attachment.mediaType === 'string'
       && Number.isSafeInteger( attachment.byteLength )
       && attachment.byteLength >= 0

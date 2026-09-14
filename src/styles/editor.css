@@ -789,7 +789,7 @@
 }
 
 .live-attachment-card {
-  cursor: pointer;
+  cursor: default;
   pointer-events: auto;
   user-select: none;
 }
@@ -797,10 +797,6 @@
 .live-attachment-card:hover {
   border-color: color-mix(in srgb, var(--violet) 35%, var(--border-faint));
   background: color-mix(in srgb, var(--violet-wash) 45%, var(--surface-code));
-}
-
-.live-attachment-card.is-renaming {
-  cursor: default;
 }
 
 .attachment-card__icon {
@@ -848,6 +844,7 @@
 }
 
 .attachment-card__action {
+  cursor: default;
   flex: none;
   padding: 0.34em 0.52em;
   border: 1px solid var(--border-strong);
@@ -930,7 +927,7 @@
   line-height: 1;
   vertical-align: middle;
   pointer-events: auto;
-  cursor: grab;
+  cursor: default;
 }
 
 .live-embedded-image.is-dragging {

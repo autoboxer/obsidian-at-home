@@ -61,6 +61,10 @@ const EXECUTABLE_EXTENSIONS = new Set([
 
 export const VAULT_ATTACHMENT_DRAG_MIME = 'application/x-obsidian-at-home-vault-attachment';
 
+export function isFinderMetadataPath( path: string ): boolean {
+  return /(?:^|[/\\])\.ds_store$/i.test( path );
+}
+
 export interface ParsedMarkdownAttachment {
   assetId?: string;
   destination: string;

@@ -69,16 +69,6 @@ export const treeDragState = reactive<{
   imagePath: null
 });
 
-export const vaultImageInsertRequest = reactive({
-  id: 0,
-  relativePath: ''
-});
-
-export const vaultAttachmentInsertRequest = reactive({
-  id: 0,
-  relativePath: ''
-});
-
 export const vaultTreeRevealTarget = reactive<{
   assetId: string | null;
   kind: WorkspaceVaultItemKind | null;

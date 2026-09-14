@@ -1,4 +1,137 @@
 #[test]
+fn finder_metadata_is_removed_from_loaded_attachment_inventories() {
+    let workspace = TestWorkspace::new("finder-metadata-inventory");
+    fs::create_dir(workspace.root.join("Assets")).unwrap();
+    fs::write(workspace.root.join("Note.md"), "# Note").unwrap();
+    let mut state = WorkspaceState::default();
+    for (index, path) in [".DS_Store", "Assets/.ds_store", "Assets/Report.pdf"]
+        .iter()
+        .enumerate()
+    {
+        fs::write(workspace.root.join(path), path.as_bytes()).unwrap();
+        state.assets.insert(
+            format!("asset-{index}"),
+            StoredVaultAsset {
+                kind: VaultAssetKind::Attachment,
+                relative_path: (*path).to_owned(),
+                media_type: "application/octet-stream".to_owned(),
+                fingerprint: fingerprint_bytes(path.as_bytes()),
+                modified_nanos: 0,
+            },
+        );
+    }
+    fs::write(workspace.root.join("Assets/.DS_Store.txt"), "keep this").unwrap();
+    fs::write(workspace.root.join("Assets/.env"), "also keep this").unwrap();
+    write_workspace_state(&workspace.root, &state).unwrap();
+
+    let loaded = load_workspace(&workspace.root, &empty_vault("Finder metadata")).unwrap();
+    let mut paths = loaded
+        .vault
+        .attachment_files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(
+        paths,
+        ["Assets/.DS_Store.txt", "Assets/.env", "Assets/Report.pdf"]
+    );
+    assert_eq!(loaded.vault.embedded_attachments.len(), 1);
+    assert_eq!(loaded.vault.embedded_attachments[0].id, "asset-2");
+    let (stored, _) = read_workspace_state(&workspace.root, &mut WarningCollector::default());
+    assert_eq!(stored.unwrap().assets.len(), 1);
+    let reopened = load_workspace(&workspace.root, &loaded.vault).unwrap();
+    assert_eq!(reopened.revision, loaded.revision);
+    for path in [".DS_Store", "Assets/.ds_store"] {
+        assert_eq!(
+            fs::read(workspace.root.join(path)).unwrap(),
+            path.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn finder_metadata_changes_do_not_invalidate_note_saves() {
+    let workspace = TestWorkspace::new("finder-metadata-revision");
+    fs::create_dir(workspace.root.join("Assets")).unwrap();
+    fs::write(workspace.root.join("Note.md"), "# Original").unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Finder metadata")).unwrap();
+    for path in [".DS_Store", "Assets/.DS_Store"] {
+        fs::write(workspace.root.join(path), "Finder state").unwrap();
+        assert_eq!(revision_for_root(&workspace.root).unwrap(), loaded.revision);
+        fs::write(workspace.root.join(path), "Updated Finder state").unwrap();
+        assert_eq!(revision_for_root(&workspace.root).unwrap(), loaded.revision);
+        fs::remove_file(workspace.root.join(path)).unwrap();
+        assert_eq!(revision_for_root(&workspace.root).unwrap(), loaded.revision);
+    }
+    fs::write(
+        workspace.root.join("Assets/.DS_Store"),
+        "Final Finder state",
+    )
+    .unwrap();
+    let mut edited = loaded.vault;
+    edited.notes[0].content = "# Edited".to_owned();
+    let saved = save_workspace_files(&workspace.root, &edited, loaded.revision).unwrap();
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("Note.md")).unwrap(),
+        "# Edited"
+    );
+    fs::write(workspace.root.join("Assets/Report.pdf"), "real attachment").unwrap();
+    assert_ne!(revision_for_root(&workspace.root).unwrap(), saved.revision);
+    assert!(save_workspace_files(&workspace.root, &edited, saved.revision).is_err());
+}
+
+#[test]
+fn finder_metadata_insertion_is_rejected_before_copying_or_staging() {
+    let source = TestWorkspace::new("finder-metadata-source");
+    let workspace = TestWorkspace::new("finder-metadata-target");
+    let staging = TestWorkspace::new("finder-metadata-upload");
+    fs::write(workspace.root.join("Note.md"), "# Note").unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Finder metadata")).unwrap();
+    for name in [".DS_Store", ".ds_store", ".DS_STORE"] {
+        let path = source.root.join(name);
+        fs::write(&path, "Finder state").unwrap();
+        assert!(validate_attachment_source_path(&path).is_err());
+        assert!(validate_attachment_relative_path(&format!("Assets/{name}")).is_err());
+        assert!(safe_attachment_file_name(name).is_err());
+        assert!(embed_workspace_attachment(
+            &workspace.root,
+            "Note.md",
+            AttachmentEmbedSettings::default(),
+            &path,
+            None,
+            loaded.revision,
+        )
+        .is_err());
+        assert!(begin_external_file_upload(
+            &staging.root,
+            name.to_owned(),
+            12,
+            ExternalFileUploadKind::Attachment,
+            workspace.root.clone(),
+            "Note.md".to_owned(),
+        )
+        .is_err());
+        assert!(begin_workspace_asset_import(
+            &workspace.root,
+            &source.root,
+            &[],
+            &[name.to_owned()],
+            loaded.revision,
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "Finder state");
+        assert!(!workspace.root.join(name).exists());
+        assert!(!workspace.root.join(name.trim_start_matches('.')).exists());
+    }
+    assert_eq!(fs::read_dir(&staging.root).unwrap().count(), 0);
+    assert_eq!(revision_for_root(&workspace.root).unwrap(), loaded.revision);
+    assert!(validate_attachment_relative_path("Assets/.DS_Store.txt").is_ok());
+    assert!(validate_attachment_relative_path("Assets/.env").is_ok());
+    assert!(validate_attachment_relative_path(".DS_Store/Report.pdf").is_ok());
+}
+
+#[test]
 fn attachment_storage_streams_files_handles_collisions_and_reuses_ids() {
     let source = TestWorkspace::new("embedded-attachment-source");
     let workspace = TestWorkspace::new("embedded-attachment-target");

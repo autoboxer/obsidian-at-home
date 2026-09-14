@@ -58,7 +58,7 @@ import {
   multiCursorChanges,
   type MultiCursorEdit
 } from '../lib/codeMirrorMultiCursor';
-import { notify } from '../stores/vault';
+import { NOTE_DRAG_MIME, notify } from '../stores/vault';
 import {
   liveMarkdownExtension,
   orderedListRenumberingExtension,
@@ -133,6 +133,7 @@ const props = defineProps<{
   noteId: string;
   noteRelativePath: string;
   noteLinkTargets: string[];
+  noteLinkForId: ( noteId: string ) => string | undefined;
   wikiLinkIsResolved: ( target: string ) => boolean;
   renameAttachment: (
     target: MarkdownAttachmentRenameTarget,
@@ -731,6 +732,19 @@ onMounted( () => {
     historyCompartment.of( history() ),
     drawSelection(),
     dropCursor(),
+    // Let the drop-cursor observers run before a custom drop consumes the event.
+    EditorView.domEventHandlers({
+      dragover: ( event ) => {
+        handleSourceEditorDragOver( event );
+
+        return event.defaultPrevented;
+      },
+      drop: ( event ) => {
+        handleSourceEditorDrop( event );
+
+        return event.defaultPrevented;
+      }
+    }),
     codeMirrorMultiCursorExtension,
     EditorState.tabSize.of( 4 ),
     EditorView.lineWrapping,
@@ -1990,6 +2004,7 @@ function handleSourceEditorPaste( event: ClipboardEvent ): void {
 function isExternalFileDrag( event: DragEvent ): boolean {
   const types = Array.from( event.dataTransfer?.types ?? []);
   return types.includes( 'Files' )
+    && !types.includes( NOTE_DRAG_MIME )
     && !types.includes( NOTE_IMAGE_DRAG_MIME )
     && !types.includes( VAULT_IMAGE_DRAG_MIME )
     && !types.includes( VAULT_ATTACHMENT_DRAG_MIME );
@@ -2021,11 +2036,13 @@ function handleSourceEditorDragLeave(): void {
 function handleSourceEditorDragOver( event: DragEvent ): void {
   const types = Array.from( event.dataTransfer?.types ?? []);
   const movingWithinNote = types.includes( NOTE_IMAGE_DRAG_MIME );
+  const vaultNote = types.includes( NOTE_DRAG_MIME );
   const vaultImage = types.includes( VAULT_IMAGE_DRAG_MIME );
   const vaultAttachment = types.includes( VAULT_ATTACHMENT_DRAG_MIME );
   const externalFiles = isExternalFileDrag( event );
   if (
     !movingWithinNote
+    && !vaultNote
     && !vaultImage
     && !vaultAttachment
     && !externalFiles
@@ -2039,6 +2056,16 @@ function handleSourceEditorDragOver( event: DragEvent ): void {
   }
   if ( event.dataTransfer ) {
     event.dataTransfer.dropEffect = props.readOnly ? 'none' : movingWithinNote ? 'move' : 'copy';
+  }
+}
+
+function blockUnavailableEditorDrag( event: DragEvent ): void {
+  if ( props.readOnly || !editorRenderReady.value ) {
+    clearExternalFileDrag();
+    if ( event.dataTransfer ) {
+      event.dataTransfer.dropEffect = 'none';
+    }
+    blockPendingEditorInteraction( event );
   }
 }
 
@@ -2057,13 +2084,16 @@ function handleSourceEditorDrop( event: DragEvent ): void {
     ?.getData( VAULT_ATTACHMENT_DRAG_MIME )
     .trim() ?? '';
   const types = Array.from( transfer?.types ?? []);
+  const vaultNote = types.includes( NOTE_DRAG_MIME );
   const externalFiles = !internalImage
+    && !vaultNote
     && !relativePath
     && !attachmentRelativePath
     && types.includes( 'Files' );
   const view = editorView.value;
   if (
     !internalImage
+    && !vaultNote
     && !relativePath
     && !attachmentRelativePath
     && !externalFiles
@@ -2077,6 +2107,24 @@ function handleSourceEditorDrop( event: DragEvent ): void {
   }
   const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false )
     ?? view.state.selection.main.head;
+  if ( vaultNote ) {
+    const link = props.noteLinkForId( transfer?.getData( NOTE_DRAG_MIME ).trim() ?? '' );
+    if ( !link ) {
+      notify( 'That note is no longer available in this vault', 'warning' );
+
+      return;
+    }
+    view.dispatch({
+      changes: { from: position, insert: link },
+      selection: EditorSelection.cursor( position + link.length ),
+      scrollIntoView: true,
+      annotations: isolateHistory.of( 'full' ),
+      userEvent: 'input.drop'
+    });
+    view.focus();
+
+    return;
+  }
   if ( internalImage ) {
     moveImageReferenceWithinNote( view, internalImage.from, internalImage.to, position );
 
@@ -2247,9 +2295,11 @@ function handleSourceEditorKeydown( event: KeyboardEvent ): void {
     @paste.capture="handleSourceEditorPaste"
     @dragenter.capture="handleSourceEditorDragEnter"
     @dragleave.capture="handleSourceEditorDragLeave"
-    @dragover.capture="handleSourceEditorDragOver"
+    @dragover.capture="blockUnavailableEditorDrag"
+    @dragover="handleSourceEditorDragOver"
     @dragend.capture="clearExternalFileDrag"
-    @drop.capture="handleSourceEditorDrop"
+    @drop.capture="blockUnavailableEditorDrag"
+    @drop="handleSourceEditorDrop"
   >
     <div ref="editorHost" class="code-mirror-host" />
 

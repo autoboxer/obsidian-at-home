@@ -29,6 +29,7 @@ pub(crate) use assets::files::images::{
 };
 use assets::*;
 pub use commands::*;
+pub(crate) use filesystem::is_finder_metadata_path;
 use filesystem::*;
 use persistence::*;
 use registry::*;

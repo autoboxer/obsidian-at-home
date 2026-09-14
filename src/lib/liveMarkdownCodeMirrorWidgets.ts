@@ -15,9 +15,13 @@ import type { ParsedMarkdownImage } from './markdownImages';
 
 const UNORDERED_LIST_MARKERS = [ '•', '◦', '▪' ] as const;
 
-// Modifier gestures belong to CodeMirror even when they start on a widget.
+// Selection gestures and drop feedback belong to CodeMirror over widgets too.
 export abstract class LiveMarkdownWidget extends WidgetType {
   ignoreEvent( event: Event ): boolean {
+    if ([ 'dragover', 'dragleave', 'dragend', 'drop' ].includes( event.type ) ) {
+      return false;
+    }
+
     return !( event instanceof MouseEvent && isMultiCursorGesture( event ) );
   }
 }
