@@ -31,6 +31,9 @@ import {
 import type { ToolView } from './types';
 
 const editorWorkspace = ref<InstanceType<typeof EditorWorkspace>>();
+const commandModalActive = ref( false );
+let commandReturnFocus: HTMLElement | null = null;
+let commandFocusNoteId: string | null = null;
 const assetDeletionDialog = ref<HTMLElement>();
 const assetDeletionCancel = ref<HTMLButtonElement>();
 let assetDeletionReturnFocus: HTMLElement | null = null;
@@ -122,6 +125,90 @@ const appInteractionBlocked = computed(
     || vaultSession.busy
     || assetDeletionState.request !== null
 );
+
+watch( () => uiState.commandOpen, ( open ) => {
+  if ( !open ) {
+    // Opening and closing in one update may never mount a leaving transition.
+    void nextTick( () => {
+      if ( commandModalActive.value && !document.querySelector( '.command-backdrop' ) ) {
+        void finishCommandClose();
+      }
+    });
+
+    return;
+  }
+  // Capture the invoking control before rendering inert blurs the background.
+  const focused = document.activeElement;
+  if ( focused instanceof HTMLElement && focused !== document.body && !focused.closest( '.command-backdrop, [inert]' ) ) {
+    commandReturnFocus = focused;
+  } else if ( !commandModalActive.value ) {
+    commandReturnFocus = null;
+  }
+  commandFocusNoteId = null;
+  commandModalActive.value = true;
+}, { flush: 'sync' });
+
+watch( appInteractionBlocked, ( blocked ) => {
+  if ( blocked ) {
+    // Vault recovery and other blocking operations own focus from this point.
+    uiState.commandOpen = false;
+    commandReturnFocus = null;
+    commandFocusNoteId = null;
+  }
+});
+
+function commandNavigated( noteId: string ): void {
+  commandFocusNoteId = noteId;
+  commandReturnFocus = null;
+}
+
+function restoreCommandFocus(): void {
+  if ( commandModalActive.value || uiState.commandOpen || appInteractionBlocked.value ) {
+    return;
+  }
+  if ( document.querySelector( '[data-modal-scroll-active]' ) ) {
+    commandReturnFocus = null;
+    commandFocusNoteId = null;
+
+    return;
+  }
+  if ( commandFocusNoteId && (
+    uiState.tool !== 'notes'
+    || uiState.notesView !== 'editor'
+    || activeNote.value?.id !== commandFocusNoteId
+  ) ) {
+    commandFocusNoteId = null;
+
+    return;
+  }
+  const previous = commandReturnFocus;
+  if ( !previous && !commandFocusNoteId ) {
+    return;
+  }
+  const target = [
+    previous,
+    document.querySelector<HTMLElement>( '.source-editor .cm-content' ),
+    commandFocusNoteId ? null : document.querySelector<HTMLElement>( '.rail-nav .rail-button.active' )
+  ].find( ( element ) => element?.isConnected
+    && element.getClientRects().length
+    // An outgoing sidebar/tool can still be connected during its transition.
+    && !element.closest( '[inert], :disabled, [hidden], .panel-left-leave-active, .workspace-switch-leave-active' ) );
+  target?.focus({ preventScroll: true });
+  commandReturnFocus = null;
+  // A tool transition can still be mounting the chosen note's editor.
+  if ( target ) {
+    commandFocusNoteId = null;
+  }
+}
+
+async function finishCommandClose(): Promise<void> {
+  if ( uiState.commandOpen ) {
+    return;
+  }
+  commandModalActive.value = false;
+  await nextTick();
+  restoreCommandFocus();
+}
 
 function runToastAction(): void {
   const action = uiState.toast?.action;
@@ -283,7 +370,7 @@ onBeforeUnmount( () => {
       class="desktop-titlebar"
       data-ui-region="titlebar"
       data-tauri-drag-region
-      :inert="appInteractionBlocked"
+      :inert="appInteractionBlocked || commandModalActive"
     >
       <div class="traffic-light-space" data-tauri-drag-region />
       <div class="titlebar-title" data-tauri-drag-region>
@@ -304,10 +391,14 @@ onBeforeUnmount( () => {
       <span>{{ readOnlyReason }}</span>
     </div>
 
-    <div class="app-content" :inert="appInteractionBlocked">
+    <div class="app-content" :inert="appInteractionBlocked || commandModalActive">
       <ActivityRail />
 
-      <Transition name="workspace-switch" mode="out-in">
+      <Transition
+        name="workspace-switch"
+        mode="out-in"
+        @after-enter="restoreCommandFocus"
+      >
         <div
           v-if="uiState.tool === 'notes'"
           key="notes"
@@ -335,8 +426,12 @@ onBeforeUnmount( () => {
       </Transition>
     </div>
 
-    <Transition name="overlay-fade">
-      <CommandPalette v-if="uiState.commandOpen" />
+    <Transition name="overlay-fade" @after-leave="finishCommandClose">
+      <CommandPalette
+        v-if="uiState.commandOpen"
+        :inert="appInteractionBlocked"
+        @navigate="commandNavigated"
+      />
     </Transition>
 
     <Transition name="overlay-fade">
@@ -414,7 +509,7 @@ onBeforeUnmount( () => {
         class="app-toast"
         :class="`tone-${uiState.toast.tone}`"
         data-ui-region="notification"
-        :inert="appInteractionBlocked"
+        :inert="appInteractionBlocked || commandModalActive"
         role="status"
       >
         <span class="toast-icon">
