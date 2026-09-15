@@ -136,6 +136,58 @@
   gap: 7px;
 }
 
+.snippet-editor-header,
+.snippet-header-actions {
+  flex-wrap: wrap;
+}
+
+.snippet-header-actions .secondary-button,
+.snippet-draft-actions .secondary-button {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 10px;
+}
+
+.snippet-draft-notice {
+  flex: none;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--violet-wash);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.snippet-draft-notice p {
+  margin: 0 0 8px;
+}
+
+.snippet-draft-notice summary {
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.snippet-draft-notice pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--mono);
+}
+
+.snippet-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.snippet-draft-error {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .toggle-control {
   display: flex;
   height: 30px;

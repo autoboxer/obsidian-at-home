@@ -52,6 +52,12 @@ export interface NoteTemplate {
   builtIn?: boolean;
 }
 
+export interface BuiltInSnippetDefaults {
+  name: string;
+  description: string;
+  css: string;
+}
+
 export interface CssSnippet {
   id: string;
   name: string;
@@ -60,6 +66,7 @@ export interface CssSnippet {
   enabled: boolean;
   createdAt: number;
   builtIn?: boolean;
+  builtInDefaults?: BuiltInSnippetDefaults;
 }
 
 export type AssetEmbedLocation =

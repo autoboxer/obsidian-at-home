@@ -1,7 +1,7 @@
-import { createSeedVault } from '../data/seed';
+import { createSeedVault, legacyBuiltInSnippets } from '../data/seed';
 import { hasFrontmatterTags, normalizeTags, parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
 import { isFinderMetadataPath } from '../lib/markdownAttachments';
-import type { Note, VaultData, VaultDescriptor } from '../types';
+import type { BuiltInSnippetDefaults, Note, VaultData, VaultDescriptor } from '../types';
 import type { SmartFolderSelection } from './vaultState';
 
 const APP_ZOOM_KEY = 'obsidian-at-home.zoom.v1';
@@ -50,11 +50,27 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
   ).map( ( snippet ) => {
     const current = currentBuiltInSnippets.get( snippet.id );
     if ( snippet.builtIn && current ) {
+      // Only fields still matching their bundled baseline receive app updates.
+      // For older vaults, recognize exact shipped definitions; preserve anything
+      // else rather than guessing which parts the user changed.
+      const baseline = validSnippetDefaults( snippet.builtInDefaults )
+        ? snippet.builtInDefaults
+        : [ current, ...legacyBuiltInSnippets ].find( ( candidate ) =>
+          candidate.id === snippet.id
+          && candidate.name === snippet.name
+          && candidate.description === snippet.description
+          && candidate.css === snippet.css
+        );
       return {
         ...snippet,
-        name: current.name,
-        description: current.description,
-        css: current.css
+        name: baseline && snippet.name === baseline.name ? current.name : snippet.name,
+        description: baseline && snippet.description === baseline.description ? current.description : snippet.description,
+        css: baseline && snippet.css === baseline.css ? current.css : snippet.css,
+        builtInDefaults: {
+          name: current.name,
+          description: current.description,
+          css: current.css
+        }
       };
     }
 
@@ -140,6 +156,17 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
     attachmentFiles,
     attachmentEmbedSettings
   };
+}
+
+function validSnippetDefaults( value: unknown ): value is BuiltInSnippetDefaults {
+  if ( !value || typeof value !== 'object' ) {
+    return false;
+  }
+  const defaults = value as Partial<BuiltInSnippetDefaults>;
+
+  return typeof defaults.name === 'string'
+    && typeof defaults.description === 'string'
+    && typeof defaults.css === 'string';
 }
 
 export function cloneValue<T>( value: T ): T {

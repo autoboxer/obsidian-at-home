@@ -2,6 +2,8 @@ import { computed, reactive } from 'vue';
 import { createEmptyVault } from '../data/seed';
 import { isTauri, type WorkspaceVaultItemKind } from '../services/native';
 import type {
+  BuiltInSnippetDefaults,
+  CssSnippet,
   RecentlyDeletedNote,
   SearchScope,
   ToolView,
@@ -56,6 +58,21 @@ export interface RecentlyDeletedState {
   busy: boolean;
   error: string | null;
 }
+
+export interface SnippetDraft {
+  base: CssSnippet;
+  values: BuiltInSnippetDefaults;
+  saving: boolean;
+  error: string | null;
+}
+
+export interface SnippetDraftWorkspace {
+  activeId: string | null;
+  drafts: Map<string, SnippetDraft>;
+}
+
+// Session drafts live outside persisted vault data and survive tool unmounts.
+export const snippetDraftWorkspaces = reactive( new Map<string, SnippetDraftWorkspace>() );
 
 export const assetDeletionState = reactive<{
   request: {
