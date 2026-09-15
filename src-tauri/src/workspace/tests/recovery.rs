@@ -693,6 +693,7 @@ fn stale_committed_transaction_does_not_recreate_a_removed_snapshot() {
     .expect("staging directory should be created");
     atomic_write(&staged, &bytes).expect("staged snapshot should be written");
     let manifest = TransactionManifest {
+        asset_deletion: None,
         version: TRANSACTION_VERSION,
         id: transaction_id,
         phase: TransactionPhase::Committed,

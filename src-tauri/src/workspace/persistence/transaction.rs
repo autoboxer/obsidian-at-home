@@ -342,6 +342,7 @@ pub(in crate::workspace) fn prepare_transaction(
         originals,
         targets,
         recovery_targets,
+        asset_deletion: None,
         folder_case_renames,
         created_directories,
     };
@@ -620,6 +621,9 @@ pub(in crate::workspace) fn rollback_transaction(
     warnings: &mut WarningCollector,
 ) -> bool {
     let mut recovered = rollback_recovery_targets(root, &manifest.recovery_targets, warnings);
+    if let Some(deletion) = &manifest.asset_deletion {
+        recovered &= rollback_asset_deletion(root, transaction_root, deletion, warnings);
+    }
     for target in manifest.targets.iter().rev() {
         if matches!(
             target.kind,
@@ -640,6 +644,9 @@ pub(in crate::workspace) fn rollback_transaction(
             continue;
         };
         match fingerprint_regular_file(&path) {
+            Ok(Some(current)) if manifest.originals.iter().any(|original| {
+                original.relative_path == target.relative_path && original.fingerprint == current
+            }) => {}
             Ok(Some(current)) if current == target.fingerprint => {
                 if let Err(error) = remove_file_durable(&path) {
                     warnings.push(format!(

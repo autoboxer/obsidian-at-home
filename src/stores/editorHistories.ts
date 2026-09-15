@@ -16,6 +16,7 @@ export interface NoteEditorHistorySession {
 
 interface ActiveHistorySession {
   valid: boolean;
+  reset?: () => void;
 }
 
 const MAX_TRACKED_DOCUMENTS = 250;
@@ -25,14 +26,15 @@ const historyRecency = new Map<string, { noteId: string; vaultId: string }>();
 
 export function openNoteEditorHistory(
   vaultId: string,
-  noteId: string
+  noteId: string,
+  reset?: () => void
 ): NoteEditorHistorySession {
   const snapshot = historyVaults.get( vaultId )?.get( noteId );
   if ( snapshot ) {
     touchSnapshot( vaultId, noteId );
   }
 
-  const session: ActiveHistorySession = { valid: true };
+  const session: ActiveHistorySession = { valid: true, reset };
   const vaultSessions = activeHistorySessions.get( vaultId ) ?? new Map();
   const noteSessions = vaultSessions.get( noteId ) ?? new Set();
   noteSessions.add( session );
@@ -67,6 +69,14 @@ export function openNoteEditorHistory(
 export function deleteNoteEditorHistory( vaultId: string, noteId: string ): void {
   invalidateActiveSessions( vaultId, noteId );
   removeSnapshot( vaultId, noteId );
+}
+
+/** Forget edits that could restore references to a permanently deleted file. */
+export function resetNoteEditorHistory( vaultId: string, noteId: string ): void {
+  removeSnapshot( vaultId, noteId );
+  for ( const session of activeHistorySessions.get( vaultId )?.get( noteId ) ?? []) {
+    session.reset?.();
+  }
 }
 
 export function pruneNoteEditorHistories( vaultId: string, notes: Note[]): void {

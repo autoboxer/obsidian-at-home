@@ -505,6 +505,26 @@ export async function relocateWorkspaceAttachment(
   });
 }
 
+export async function deleteWorkspaceAsset(
+  path: string,
+  kind: 'image' | 'attachment',
+  relativePath: string,
+  assetId: string | undefined,
+  noteUpdates: WorkspaceImageNoteUpdate[],
+  recoveryUpdates: WorkspaceImageNoteUpdate[],
+  expectedRevision: number
+): Promise<WorkspaceSaveResult> {
+  return invoke<WorkspaceSaveResult>( 'workspace_delete_asset', {
+    path,
+    kind,
+    relativePath,
+    assetId,
+    noteUpdates,
+    recoveryUpdates,
+    expectedRevision
+  });
+}
+
 export async function openWorkspaceAttachment(
   path: string,
   attachmentRelativePath: string,

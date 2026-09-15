@@ -589,6 +589,32 @@ pub fn workspace_embed_vault_attachment(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn workspace_delete_asset(
+    app: AppHandle,
+    path: String,
+    kind: ExternalFileUploadKind,
+    relative_path: String,
+    asset_id: Option<String>,
+    note_updates: Vec<WorkspaceImageNoteUpdate>,
+    recovery_updates: Vec<WorkspaceImageNoteUpdate>,
+    expected_revision: u64,
+) -> Result<SaveResult, String> {
+    let _guard = lock_workspace_io()?;
+    let root = validate_workspace_root(&path)?;
+    reject_home_vault(&app, &root)?;
+    let _workspace_guard = lock_workspace_files(&root)?;
+    delete_workspace_asset(
+        &root,
+        kind,
+        &relative_path,
+        asset_id.as_deref(),
+        &note_updates,
+        &recovery_updates,
+        expected_revision,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn workspace_relocate_image(
     app: AppHandle,
     path: String,
