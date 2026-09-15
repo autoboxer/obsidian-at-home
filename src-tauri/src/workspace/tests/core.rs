@@ -1,4 +1,68 @@
 #[test]
+fn snippet_defaults_survive_native_save_and_reload() {
+    let workspace = TestWorkspace::new("snippet-defaults");
+    let mut vault = empty_vault("Snippet overrides");
+    let original: CssSnippet = serde_json::from_value(serde_json::json!({
+        "id": "snippet-editor-serif",
+        "name": "My writing style",
+        "description": "A customized description",
+        "css": ".source-editor { color: teal; }",
+        "enabled": true,
+        "createdAt": 1234,
+        "builtIn": true,
+        "builtInDefaults": {
+            "name": "Comfortable writing",
+            "description": "The bundled description",
+            "css": ".source-editor { color: purple; }"
+        }
+    }))
+    .unwrap();
+    vault.snippets.push(original.clone());
+    for enabled in [true, false] {
+        vault.snippets[0].enabled = enabled;
+        save_workspace_files(
+            &workspace.root,
+            &vault,
+            revision_for_root(&workspace.root).unwrap(),
+        )
+        .unwrap();
+        let loaded = load_workspace(&workspace.root, &empty_vault("Reload")).unwrap();
+        assert_eq!(loaded.vault.snippets, vault.snippets);
+    }
+}
+
+#[test]
+fn snippet_defaults_are_optional_for_legacy_and_custom_snippets() {
+    let workspace = TestWorkspace::new("legacy-snippet-defaults");
+    let mut vault = empty_vault("Legacy snippets");
+    for built_in in [true, false] {
+        let snippet: CssSnippet = serde_json::from_value(serde_json::json!({
+            "id": format!("snippet-{built_in}"),
+            "name": "Saved style",
+            "css": "",
+            "enabled": false,
+            "createdAt": 4321,
+            "builtIn": built_in
+        }))
+        .unwrap();
+        assert!(snippet.built_in_defaults.is_none());
+        assert!(serde_json::to_value(&snippet)
+            .unwrap()
+            .get("builtInDefaults")
+            .is_none());
+        vault.snippets.push(snippet);
+    }
+    save_workspace_files(
+        &workspace.root,
+        &vault,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Reload")).unwrap();
+    assert_eq!(loaded.vault.snippets, vault.snippets);
+}
+
+#[test]
 fn import_note_extensions_survive_save_and_reload() {
     let workspace = TestWorkspace::new("import-note-extensions");
     let mut vault = empty_vault("Imported notes");

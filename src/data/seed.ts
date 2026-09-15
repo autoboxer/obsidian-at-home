@@ -1,4 +1,4 @@
-import type { CssSnippet, Folder, Note, NoteTemplate, VaultData } from '../types';
+import type { BuiltInSnippetDefaults, CssSnippet, Folder, Note, NoteTemplate, VaultData } from '../types';
 
 const DAY = 86_400_000;
 
@@ -249,6 +249,65 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
     }
   };
 }
+
+// Exact shipped definitions used only to migrate vaults without a stored baseline.
+// Future defaults use builtInDefaults; customized legacy snippets are left intact.
+export const legacyBuiltInSnippets: readonly ( BuiltInSnippetDefaults & { id: string })[] = [
+  {
+    id: 'snippet-wide-page',
+    name: 'Wide editor',
+    description: 'Reduce side padding for notes that benefit from more room.',
+    css: `.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`
+  },
+  {
+    id: 'snippet-editor-serif',
+    name: 'Comfortable writing',
+    description: 'Use relaxed line height and spacing in the live editor.',
+    css: `.source-editor {\n  --source-editor-line-height: calc(var(--note-font-size) * 1.82);\n}\n\n.live-markdown-layer,\n.source-textarea {\n  letter-spacing: -0.006em;\n}`
+  },
+  {
+    id: 'snippet-violet-headings',
+    name: 'Violet headings',
+    description: 'Give note headings a subtle lavender tint.',
+    css: `.live-markdown-content.is-heading {\n  color: #c9c1ff;\n}`
+  },
+  {
+    id: 'snippet-wide-page',
+    name: 'Wide editor',
+    description: 'Reduce side padding for notes that benefit from more room.',
+    css: `.live-markdown-layer,\n.source-textarea {\n  padding-right: clamp(20px, 2.4vw, 38px);\n  padding-left: clamp(20px, 2.4vw, 38px);\n}`
+  },
+  {
+    id: 'snippet-editor-serif',
+    name: 'Comfortable reading',
+    description: 'Use a readable line height and spacing for rendered notes.',
+    css: `.markdown-preview {\n  --note-font: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n}\n\n.markdown-preview p {\n  line-height: 1.74;\n  letter-spacing: -0.006em;\n}`
+  },
+  {
+    id: 'snippet-violet-headings',
+    name: 'Violet headings',
+    description: 'Give note headings a subtle lavender tint.',
+    css: `.markdown-preview h1,\n.markdown-preview h2 {\n  color: #c9c1ff;\n}`
+  },
+  {
+    id: 'snippet-wide-page',
+    name: 'Wide reading page',
+    description: 'Increase the rendered note width for long-form notes.',
+    css: `.markdown-preview {\n  --page-width: 980px;\n}`
+  },
+  {
+    id: 'snippet-wide-page',
+    name: 'Wide reading page',
+    description: 'Increase the rendered note width for long-form notes.',
+    css: `.editor-page,\n.preview-page {\n  --page-width: 980px;\n}`
+  },
+  {
+    id: 'snippet-wide-page',
+    name: 'Wide writing page',
+    description: 'Increase the page width for long-form notes.',
+    css: `.editor-page,\n.preview-page {\n  --page-width: 980px;\n}`
+  }
+];
 
 export function createEmptyVault( now = Date.now() ): VaultData {
   const starter = createSeedVault( now );

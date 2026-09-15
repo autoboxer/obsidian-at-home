@@ -115,6 +115,14 @@ pub struct NoteTemplate {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct BuiltInSnippetDefaults {
+    pub name: String,
+    pub description: String,
+    pub css: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct CssSnippet {
     pub id: String,
     pub name: String,
@@ -127,6 +135,8 @@ pub struct CssSnippet {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub built_in: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_in_defaults: Option<BuiltInSnippetDefaults>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
