@@ -64,9 +64,23 @@ const MAX_RECENTLY_DELETED_BYTES: u64 = MAX_TOTAL_NOTE_BYTES;
 const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
+const STORAGE_LOCK_WAIT: Duration = Duration::from_secs(5);
+const STORAGE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// Keep filesystem work and lock waits off both the native event loop and the
+// async executor. Each operation retains its existing lock/transaction scopes;
+// no lock guard crosses an await, and dropping the caller does not cancel a
+// started write partway through its recovery protocol.
+pub(crate) async fn run_vault_io<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("The vault operation could not finish: {error}"))?
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -47,7 +47,10 @@ fn finder_metadata_is_excluded_from_vault_import_and_export() {
         fs::write(source.path().join(path), path.as_bytes()).unwrap();
     }
     fs::write(source.path().join("Note.md"), "# Note").unwrap();
-    let imported = import_obsidian_vault(source.path().to_string_lossy().into_owned()).unwrap();
+    let imported = tauri::async_runtime::block_on(import_obsidian_vault(
+        source.path().to_string_lossy().into_owned(),
+    ))
+    .unwrap();
     assert_eq!(imported.notes.len(), 1);
     assert_eq!(
         imported
@@ -57,14 +60,14 @@ fn finder_metadata_is_excluded_from_vault_import_and_export() {
             .collect::<Vec<_>>(),
         ["Assets/.DS_Store.txt", "Assets/.env", "Assets/Report.pdf"]
     );
-    let exported = export_obsidian_vault(
+    let exported = tauri::async_runtime::block_on(export_obsidian_vault(
         parent.path().to_string_lossy().into_owned(),
         source.path().to_string_lossy().into_owned(),
         "Portable vault".to_owned(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
-    )
+    ))
     .unwrap();
     assert_eq!(exported.attachment_count, 3);
     let destination = Path::new(&exported.path);
@@ -195,7 +198,10 @@ fn imports_nested_notes_and_snippet_state() {
     )
     .unwrap();
 
-    let result = import_obsidian_vault(vault.path().to_string_lossy().into_owned()).unwrap();
+    let result = tauri::async_runtime::block_on(import_obsidian_vault(
+        vault.path().to_string_lossy().into_owned(),
+    ))
+    .unwrap();
 
     assert_eq!(result.notes.len(), 1);
     assert_eq!(result.notes[0].folder_path, "Projects/Alpha");
@@ -266,7 +272,7 @@ fn exports_obsidian_compatible_structure_and_avoids_note_collisions() {
         r#"{"nodes":[],"edges":[]}"#,
     )
     .unwrap();
-    let result = export_obsidian_vault(
+    let result = tauri::async_runtime::block_on(export_obsidian_vault(
         parent.path().to_string_lossy().into_owned(),
         source.path().to_string_lossy().into_owned(),
         "Ideas".into(),
@@ -299,7 +305,7 @@ fn exports_obsidian_compatible_structure_and_avoids_note_collisions() {
             css: ".workspace { color: plum; }".into(),
             enabled: true,
         }],
-    )
+    ))
     .unwrap();
 
     let root = PathBuf::from(&result.path);
@@ -346,7 +352,10 @@ fn import_does_not_follow_symbolic_links() {
     fs::write(outside.path().join("Private.pdf"), b"private-attachment").unwrap();
     symlink(outside.path(), vault.path().join("linked")).unwrap();
 
-    let result = import_obsidian_vault(vault.path().to_string_lossy().into_owned()).unwrap();
+    let result = tauri::async_runtime::block_on(import_obsidian_vault(
+        vault.path().to_string_lossy().into_owned(),
+    ))
+    .unwrap();
     assert!(result.notes.is_empty());
     assert!(result.images.is_empty());
     assert!(result.attachments.is_empty());

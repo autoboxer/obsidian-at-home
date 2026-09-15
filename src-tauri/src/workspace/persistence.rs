@@ -1559,8 +1559,12 @@ pub(super) fn write_loaded_workspace_state_bytes(
 
 pub(super) fn lock_workspace_files(root: &Path) -> Result<File, String> {
     let file = open_workspace_lock_file(root)?;
-    file.lock()
-        .map_err(|error| format!("Could not lock the vault: {error}"))?;
+    lock_storage_file(
+        &file,
+        STORAGE_LOCK_WAIT,
+        "Could not lock the vault",
+        "Timed out waiting for the vault. Another app window or process is using it; try again shortly.",
+    )?;
 
     Ok(file)
 }
@@ -1608,8 +1612,12 @@ pub(super) fn lock_editor_positions(root: &Path) -> Result<File, String> {
         .create(true)
         .open(path)
         .map_err(|error| format!("Could not open the editor-position lock: {error}"))?;
-    file.lock()
-        .map_err(|error| format!("Could not lock editor positions: {error}"))?;
+    lock_storage_file(
+        &file,
+        STORAGE_LOCK_WAIT,
+        "Could not lock editor positions",
+        "Timed out waiting for access to document positions. Try again shortly.",
+    )?;
 
     Ok(file)
 }

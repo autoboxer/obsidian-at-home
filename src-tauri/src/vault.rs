@@ -1,6 +1,6 @@
 use crate::workspace::{
     copy_attachment_file_for_transfer, is_finder_metadata_path, is_supported_image_path,
-    validate_image_bytes, MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES,
+    run_vault_io, validate_image_bytes, MAX_ATTACHMENT_BYTES, MAX_IMAGE_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;

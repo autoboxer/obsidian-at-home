@@ -1838,3 +1838,223 @@ fn metadata_replacement_sharing_failure_preserves_the_existing_file() {
         assert_eq!(fs::read(&path).unwrap(), b"retry");
     }
 }
+
+#[test]
+fn native_worker_preserves_serialized_writes_and_revision_conflicts() {
+    use std::sync::mpsc;
+    use tauri::async_runtime::{block_on, spawn};
+
+    let workspace = TestWorkspace::new("native-worker-serialization");
+    let mut initial = empty_vault("Worker serialization");
+    initial.notes.push(test_note("Initial content"));
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let revision = save_workspace_files(&workspace.root, &initial, revision)
+        .unwrap()
+        .revision;
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let root = workspace.root.clone();
+    let mut first_vault = initial.clone();
+    first_vault.notes[0].content = "First worker content".to_owned();
+    let first = spawn(run_vault_io(move || {
+        let _guard = lock_workspace_io()?;
+        let _file_guard = lock_workspace_files(&root)?;
+        entered_tx.send(()).map_err(|error| error.to_string())?;
+        release_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|error| error.to_string())?;
+        save_workspace_files(&root, &first_vault, revision)
+    }));
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (queued_tx, queued_rx) = mpsc::channel();
+    let (acquired_tx, acquired_rx) = mpsc::channel();
+    let root = workspace.root.clone();
+    let mut second_vault = initial;
+    second_vault.notes[0].content = "Stale second worker".to_owned();
+    let second = spawn(run_vault_io(move || {
+        queued_tx.send(()).map_err(|error| error.to_string())?;
+        let _guard = lock_workspace_io()?;
+        acquired_tx.send(()).map_err(|error| error.to_string())?;
+        let _file_guard = lock_workspace_files(&root)?;
+        save_workspace_files(&root, &second_vault, revision)
+    }));
+    let queued = queued_rx.recv_timeout(Duration::from_secs(5));
+    let overlapped = acquired_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+    release_tx.send(()).unwrap();
+    let first_result = block_on(first).unwrap();
+    let second_result = block_on(second).unwrap();
+
+    assert!(queued.is_ok());
+    assert!(
+        !overlapped,
+        "workers must retain exclusive workspace access"
+    );
+    assert!(first_result.is_ok());
+    assert!(second_result.unwrap_err().contains("changed"));
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("First note.md")).unwrap(),
+        "First worker content"
+    );
+}
+
+#[test]
+fn native_worker_finishes_started_save_when_caller_is_cancelled() {
+    use std::sync::mpsc;
+    use tauri::async_runtime::{block_on, spawn};
+
+    let workspace = TestWorkspace::new("native-worker-cancelled-caller");
+    let mut vault = empty_vault("Cancelled caller");
+    vault.notes.push(test_note("Finished content"));
+    let root = workspace.root.clone();
+    let revision = revision_for_root(&root).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let caller = spawn(run_vault_io(move || {
+        let _guard = lock_workspace_io()?;
+        let _file_guard = lock_workspace_files(&root)?;
+        entered_tx.send(()).map_err(|error| error.to_string())?;
+        release_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|error| error.to_string())?;
+        let result = save_workspace_files(&root, &vault, revision);
+        finished_tx
+            .send(result.is_ok())
+            .map_err(|error| error.to_string())?;
+        result
+    }));
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    caller.abort();
+    assert!(block_on(caller).is_err());
+    release_tx.send(()).unwrap();
+    assert!(finished_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    let loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+    assert_eq!(loaded.vault.notes.len(), 1);
+    assert_eq!(loaded.vault.notes[0].content, "Finished content");
+    assert!(loaded.warnings.is_empty());
+}
+
+#[test]
+fn native_worker_reports_failures_and_remains_available_after_a_panic() {
+    use tauri::async_runtime::block_on;
+
+    assert_eq!(
+        block_on(run_vault_io(|| Err::<(), _>(
+            "Original storage error".to_owned()
+        ))),
+        Err("Original storage error".to_owned())
+    );
+    let error = block_on(run_vault_io::<()>(|| panic!("worker fixture panic")))
+        .expect_err("worker failures must resolve the command with an error");
+    assert!(error.contains("The vault operation could not finish"));
+    assert_eq!(block_on(run_vault_io(|| Ok(42))).unwrap(), 42);
+}
+
+#[test]
+fn storage_lock_mutex_timeout_does_not_mutate_or_leave_a_waiter() {
+    let mutex = Mutex::new("original".to_owned());
+    let owner = mutex.lock().unwrap();
+    let timeout = Duration::from_millis(60);
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            let mut guard = lock_storage_mutex(&mutex, timeout, "poisoned", "busy")?;
+            *guard = "unexpected write".to_owned();
+            Ok::<_, String>(())
+        });
+        assert_eq!(waiter.join().unwrap(), Err("busy".to_owned()));
+    });
+    assert!(started.elapsed() >= timeout);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(owner);
+    assert_eq!(
+        *lock_storage_mutex(&mutex, Duration::ZERO, "poisoned", "busy").unwrap(),
+        "original"
+    );
+}
+
+#[test]
+fn storage_lock_file_timeout_preserves_bytes_and_allows_retry() {
+    let workspace = TestWorkspace::new("file-lock-timeout");
+    let path = workspace.root.join("guarded-file");
+    fs::write(&path, "original").unwrap();
+    let owner = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    owner.lock().unwrap();
+    let mut waiter = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let timeout = Duration::from_millis(60);
+    let started = Instant::now();
+    let result = lock_storage_file(&waiter, timeout, "lock failed", "busy").and_then(|()| {
+        waiter
+            .write_all(b"unexpected write")
+            .map_err(|e| e.to_string())
+    });
+    assert_eq!(result, Err("busy".to_owned()));
+    assert!(started.elapsed() >= timeout);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(owner);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    lock_storage_file(&waiter, Duration::ZERO, "lock failed", "busy").unwrap();
+    waiter.write_all(b"retried!").unwrap();
+    drop(waiter);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "retried!");
+}
+
+#[test]
+fn storage_lock_wait_retries_contention_but_not_permanent_errors() {
+    // The callback releases a real owner only after observing contention.
+    let mutex = Mutex::new(());
+    let mut owner = Some(mutex.lock().unwrap());
+    let guard = wait_for_storage_lock(Duration::from_secs(1), "busy", || match mutex.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            drop(owner.take());
+            Ok(None)
+        }
+        Err(error) => Err(error.to_string()),
+    })
+    .unwrap();
+    drop(guard);
+    let mut attempts = 0;
+    let result = wait_for_storage_lock::<()>(Duration::from_secs(1), "busy", || {
+        attempts += 1;
+        Err("permission denied".to_owned())
+    });
+    assert_eq!(result, Err("permission denied".to_owned()));
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn storage_lock_poison_is_reported_without_waiting_or_recovering_the_guard() {
+    let mutex = Mutex::new(());
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = mutex.lock().unwrap();
+        panic!("poisoned lock fixture");
+    });
+    let result = lock_storage_mutex(&mutex, Duration::ZERO, "prior failure", "busy");
+    assert_eq!(result.unwrap_err(), "prior failure");
+    assert!(mutex.is_poisoned());
+}
+
+#[test]
+fn storage_lock_deadline_does_not_acquire_after_the_last_wait() {
+    let mut attempts = 0;
+    let result = wait_for_storage_lock(Duration::from_millis(1), "busy", || {
+        attempts += 1;
+        if attempts == 1 {
+            Ok(None)
+        } else {
+            Ok(Some(()))
+        }
+    });
+    assert_eq!(result, Err("busy".to_owned()));
+    assert_eq!(attempts, 1, "expired waiters must not start an operation");
+}
