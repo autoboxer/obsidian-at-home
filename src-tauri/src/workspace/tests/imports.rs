@@ -744,8 +744,10 @@ fn tag_sync_imported_notes_keep_source_tags_when_saved() {
     let workspace = TestWorkspace::new("tag-sync-import-target");
     let content = "\u{feff}---\r\ntags:\r\n- one\r\n# Keep\r\n- 'two words'\r\ncustom: keep\r\n...\r\nBody\r\n";
     fs::write(source.root.join("Imported.md"), content).unwrap();
-    let imported = crate::vault::import_obsidian_vault(source.root.to_string_lossy().into_owned())
-        .expect("the source vault should import");
+    let imported = tauri::async_runtime::block_on(crate::vault::import_obsidian_vault(
+        source.root.to_string_lossy().into_owned(),
+    ))
+    .expect("the source vault should import");
     assert_eq!(imported.notes.len(), 1);
     assert_eq!(imported.notes[0].content, content);
     assert_eq!(imported.notes[0].tags, vec!["one", "two words"]);
