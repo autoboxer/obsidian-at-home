@@ -1950,3 +1950,111 @@ fn native_worker_reports_failures_and_remains_available_after_a_panic() {
     assert!(error.contains("The vault operation could not finish"));
     assert_eq!(block_on(run_vault_io(|| Ok(42))).unwrap(), 42);
 }
+
+#[test]
+fn storage_lock_mutex_timeout_does_not_mutate_or_leave_a_waiter() {
+    let mutex = Mutex::new("original".to_owned());
+    let owner = mutex.lock().unwrap();
+    let timeout = Duration::from_millis(60);
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            let mut guard = lock_storage_mutex(&mutex, timeout, "poisoned", "busy")?;
+            *guard = "unexpected write".to_owned();
+            Ok::<_, String>(())
+        });
+        assert_eq!(waiter.join().unwrap(), Err("busy".to_owned()));
+    });
+    assert!(started.elapsed() >= timeout);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(owner);
+    assert_eq!(
+        *lock_storage_mutex(&mutex, Duration::ZERO, "poisoned", "busy").unwrap(),
+        "original"
+    );
+}
+
+#[test]
+fn storage_lock_file_timeout_preserves_bytes_and_allows_retry() {
+    let workspace = TestWorkspace::new("file-lock-timeout");
+    let path = workspace.root.join("guarded-file");
+    fs::write(&path, "original").unwrap();
+    let owner = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    owner.lock().unwrap();
+    let mut waiter = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let timeout = Duration::from_millis(60);
+    let started = Instant::now();
+    let result = lock_storage_file(&waiter, timeout, "lock failed", "busy").and_then(|()| {
+        waiter
+            .write_all(b"unexpected write")
+            .map_err(|e| e.to_string())
+    });
+    assert_eq!(result, Err("busy".to_owned()));
+    assert!(started.elapsed() >= timeout);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(owner);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    lock_storage_file(&waiter, Duration::ZERO, "lock failed", "busy").unwrap();
+    waiter.write_all(b"retried!").unwrap();
+    drop(waiter);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "retried!");
+}
+
+#[test]
+fn storage_lock_wait_retries_contention_but_not_permanent_errors() {
+    // The callback releases a real owner only after observing contention.
+    let mutex = Mutex::new(());
+    let mut owner = Some(mutex.lock().unwrap());
+    let guard = wait_for_storage_lock(Duration::from_secs(1), "busy", || match mutex.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            drop(owner.take());
+            Ok(None)
+        }
+        Err(error) => Err(error.to_string()),
+    })
+    .unwrap();
+    drop(guard);
+    let mut attempts = 0;
+    let result = wait_for_storage_lock::<()>(Duration::from_secs(1), "busy", || {
+        attempts += 1;
+        Err("permission denied".to_owned())
+    });
+    assert_eq!(result, Err("permission denied".to_owned()));
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn storage_lock_poison_is_reported_without_waiting_or_recovering_the_guard() {
+    let mutex = Mutex::new(());
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = mutex.lock().unwrap();
+        panic!("poisoned lock fixture");
+    });
+    let result = lock_storage_mutex(&mutex, Duration::ZERO, "prior failure", "busy");
+    assert_eq!(result.unwrap_err(), "prior failure");
+    assert!(mutex.is_poisoned());
+}
+
+#[test]
+fn storage_lock_deadline_does_not_acquire_after_the_last_wait() {
+    let mut attempts = 0;
+    let result = wait_for_storage_lock(Duration::from_millis(1), "busy", || {
+        attempts += 1;
+        if attempts == 1 {
+            Ok(None)
+        } else {
+            Ok(Some(()))
+        }
+    });
+    assert_eq!(result, Err("busy".to_owned()));
+    assert_eq!(attempts, 1, "expired waiters must not start an operation");
+}

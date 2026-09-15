@@ -570,11 +570,12 @@ pub async fn workspace_finish_external_image_upload(
     expected_revision: u64,
 ) -> Result<WorkspaceEmbedImageResult, String> {
     run_vault_io(move || {
-        let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Image)?;
         let _guard = lock_workspace_io()?;
-        let root = validate_workspace_root_path(&staged.root)?;
+        let root = validate_workspace_root_path(&external_file_upload_root(&upload_id)?)?;
         reject_home_vault(&app, &root)?;
         let _workspace_guard = lock_workspace_files(&root)?;
+        // Consume only after acquiring the vault locks, so a timeout is retryable.
+        let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Image)?;
         validate_external_file_drop_note(&root, &staged.note_relative_path)?;
         let source = validate_image_source_path(&staged.path)?;
         let bytes = read_image_file(&source)?;
@@ -599,11 +600,11 @@ pub async fn workspace_finish_external_attachment_upload(
     expected_revision: u64,
 ) -> Result<WorkspaceEmbedAttachmentResult, String> {
     run_vault_io(move || {
-        let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Attachment)?;
         let _guard = lock_workspace_io()?;
-        let root = validate_workspace_root_path(&staged.root)?;
+        let root = validate_workspace_root_path(&external_file_upload_root(&upload_id)?)?;
         reject_home_vault(&app, &root)?;
         let _workspace_guard = lock_workspace_files(&root)?;
+        let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Attachment)?;
         validate_external_file_drop_note(&root, &staged.note_relative_path)?;
         let source = validate_attachment_source_path(&staged.path)?;
         embed_workspace_attachment(

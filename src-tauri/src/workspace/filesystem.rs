@@ -955,9 +955,65 @@ pub(super) fn default_folder_selection() -> String {
 }
 
 pub(super) fn lock_workspace_io() -> Result<MutexGuard<'static, ()>, String> {
-    WORKSPACE_IO_LOCK.lock().map_err(|_| {
-        "Workspace storage is unavailable because an earlier operation failed.".to_owned()
+    lock_storage_mutex(
+        &WORKSPACE_IO_LOCK,
+        STORAGE_LOCK_WAIT,
+        "Workspace storage is unavailable because an earlier operation failed.",
+        "Timed out waiting for another vault operation. Try again shortly.",
+    )
+}
+
+pub(super) fn lock_storage_mutex<'a, T>(
+    mutex: &'a Mutex<T>,
+    timeout: Duration,
+    unavailable: &str,
+    busy: &str,
+) -> Result<MutexGuard<'a, T>, String> {
+    wait_for_storage_lock(timeout, busy, || match mutex.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+        Err(std::sync::TryLockError::Poisoned(_)) => Err(unavailable.to_owned()),
     })
+}
+
+pub(super) fn lock_storage_file(
+    file: &File,
+    timeout: Duration,
+    failure: &str,
+    busy: &str,
+) -> Result<(), String> {
+    wait_for_storage_lock(timeout, busy, || match file.try_lock() {
+        Ok(()) => Ok(Some(())),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(format!("{failure}: {error}")),
+    })
+}
+
+// Only bound acquisition, never the operation holding the lock. In particular,
+// a timeout must not leave a detached waiter that can write after reporting failure.
+pub(super) fn wait_for_storage_lock<T>(
+    timeout: Duration,
+    busy: &str,
+    mut try_acquire: impl FnMut() -> Result<Option<T>, String>,
+) -> Result<T, String> {
+    let started = Instant::now();
+    if let Some(guard) = try_acquire()? {
+        return Ok(guard);
+    }
+    loop {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(busy.to_owned());
+        }
+        std::thread::sleep(remaining.min(STORAGE_LOCK_POLL_INTERVAL));
+        // Do not acquire after the deadline, even if the owner just released it.
+        if started.elapsed() >= timeout {
+            return Err(busy.to_owned());
+        }
+        if let Some(guard) = try_acquire()? {
+            return Ok(guard);
+        }
+    }
 }
 
 #[derive(Default)]

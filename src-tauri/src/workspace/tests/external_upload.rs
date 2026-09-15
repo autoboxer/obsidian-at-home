@@ -21,6 +21,7 @@ fn external_file_upload_streams_ordered_chunks_and_cleans_staging() {
     .expect("upload should begin");
     let upload_directory = staging.root.join(&upload.id);
 
+    assert_eq!(external_file_upload_root(&upload.id).unwrap(), vault.root);
     assert_eq!(upload.chunk_bytes, EXTERNAL_FILE_UPLOAD_CHUNK_BYTES);
     assert_eq!(
         append_external_file_upload(&upload.id, 0, b"abc").expect("first chunk should append"),
@@ -35,7 +36,7 @@ fn external_file_upload_streams_ordered_chunks_and_cleans_staging() {
         .expect("complete upload should finish");
     let staged_path = staged.path.clone();
     assert_eq!(staged.file_name, "Report.zip");
-    assert_eq!(staged.root, vault.root);
+    assert!(external_file_upload_root(&upload.id).is_err());
     assert_eq!(staged.note_relative_path, "Note.md");
     assert_eq!(fs::read(&staged_path).unwrap(), b"abcdef");
     drop(staged);

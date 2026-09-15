@@ -64,6 +64,8 @@ const MAX_RECENTLY_DELETED_BYTES: u64 = MAX_TOTAL_NOTE_BYTES;
 const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
+const STORAGE_LOCK_WAIT: Duration = Duration::from_secs(5);
+const STORAGE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -10,6 +10,16 @@ pub(in crate::workspace) static EXTERNAL_FILE_UPLOADS: LazyLock<
     Mutex<HashMap<String, ExternalFileUpload>>,
 > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+fn lock_external_file_uploads(
+) -> Result<MutexGuard<'static, HashMap<String, ExternalFileUpload>>, String> {
+    lock_storage_mutex(
+        &EXTERNAL_FILE_UPLOADS,
+        STORAGE_LOCK_WAIT,
+        "Dropped-file transfers are unavailable because an earlier transfer failed.",
+        "Timed out waiting for another dropped-file transfer. Try again shortly.",
+    )
+}
+
 #[derive(Debug)]
 pub(in crate::workspace) struct ExternalFileUpload {
     pub(in crate::workspace) directory: PathBuf,
@@ -41,7 +51,6 @@ pub(in crate::workspace) struct StagedExternalFile {
     pub(in crate::workspace) directory: PathBuf,
     pub(in crate::workspace) path: PathBuf,
     pub(in crate::workspace) file_name: String,
-    pub(in crate::workspace) root: PathBuf,
     pub(in crate::workspace) note_relative_path: String,
 }
 
@@ -221,9 +230,7 @@ pub(in crate::workspace) fn begin_external_file_upload(
         ExternalFileUploadKind::Attachment => validate_attachment_relative_path(&file_name)?,
     }
     prepare_external_file_staging_directory(staging_directory)?;
-    let mut uploads = EXTERNAL_FILE_UPLOADS.lock().map_err(|_| {
-        "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
-    })?;
+    let mut uploads = lock_external_file_uploads()?;
     remove_abandoned_external_file_uploads(&mut uploads, Instant::now());
     if uploads.len() >= MAX_EXTERNAL_FILE_UPLOADS {
         return Err("Wait for the current dropped files to finish before adding more.".to_owned());
@@ -290,9 +297,7 @@ pub(in crate::workspace) fn append_external_file_upload(
     offset: u64,
     bytes: &[u8],
 ) -> Result<u64, String> {
-    let mut uploads = EXTERNAL_FILE_UPLOADS.lock().map_err(|_| {
-        "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
-    })?;
+    let mut uploads = lock_external_file_uploads()?;
     let result = (|| {
         let upload = uploads
             .get_mut(upload_id)
@@ -325,21 +330,24 @@ pub(in crate::workspace) fn append_external_file_upload(
 }
 
 pub(in crate::workspace) fn cancel_external_file_upload(upload_id: &str) -> Result<bool, String> {
-    let mut uploads = EXTERNAL_FILE_UPLOADS.lock().map_err(|_| {
-        "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
-    })?;
+    let mut uploads = lock_external_file_uploads()?;
     Ok(uploads.remove(upload_id).is_some())
+}
+
+// Read the destination without consuming the transfer or holding its map lock
+// while waiting for the vault. Cancellation remains available during that wait.
+pub(in crate::workspace) fn external_file_upload_root(upload_id: &str) -> Result<PathBuf, String> {
+    lock_external_file_uploads()?
+        .get(upload_id)
+        .map(|upload| upload.root.clone())
+        .ok_or_else(|| "The dropped-file transfer is no longer available.".to_owned())
 }
 
 pub(in crate::workspace) fn finish_external_file_upload(
     upload_id: &str,
     expected_kind: ExternalFileUploadKind,
 ) -> Result<StagedExternalFile, String> {
-    let mut upload = EXTERNAL_FILE_UPLOADS
-        .lock()
-        .map_err(|_| {
-            "Dropped-file transfers are unavailable because an earlier transfer failed.".to_owned()
-        })?
+    let mut upload = lock_external_file_uploads()?
         .remove(upload_id)
         .ok_or_else(|| "The dropped-file transfer is no longer available.".to_owned())?;
     if upload.kind != expected_kind {
@@ -368,7 +376,6 @@ pub(in crate::workspace) fn finish_external_file_upload(
         directory: upload.directory.clone(),
         path: upload.path.clone(),
         file_name: upload.file_name.clone(),
-        root: upload.root.clone(),
         note_relative_path: upload.note_relative_path.clone(),
     };
     upload.cleanup_on_drop = false;
