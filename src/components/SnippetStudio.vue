@@ -1,50 +1,48 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import {
   canEditVault,
   deleteSnippet,
-  notify,
+  discardSnippetDraft,
   saveSnippet,
+  saveSnippetDraft,
+  selectSnippet,
+  snippetDraftConflict,
+  snippetDraftIsDirty,
+  snippetLibrary,
+  snippetWorkspace,
+  updateSnippetDraft,
   vaultState
 } from '../stores/vault';
-import type { CssSnippet } from '../types';
+import type { BuiltInSnippetDefaults, CssSnippet } from '../types';
 import AppIcon from './AppIcon.vue';
 
-const activeId = ref( vaultState.snippets[ 0 ]?.id ?? null );
-const draft = reactive({ name: '', description: '', css: '' });
-const dirty = ref( false );
+const activeId = computed( () => snippetWorkspace.value?.activeId );
+const activeDraft = computed( () => activeId.value ? snippetWorkspace.value?.drafts.get( activeId.value ) : undefined );
+const activeSnippet = computed( () => vaultState.snippets.find( ( snippet ) => snippet.id === activeId.value ) );
+const draft = computed( () => activeDraft.value?.values ?? { name: '', description: '', css: '' });
+const dirty = computed( () => activeId.value ? snippetDraftIsDirty( activeId.value ) : false );
+const conflict = computed( () => activeId.value ? snippetDraftConflict( activeId.value ) : null );
 const referenceOpen = ref( false );
 const referenceButton = ref<HTMLButtonElement>();
 const referenceDialog = ref<HTMLElement>();
 
-const activeSnippet = computed( () => vaultState.snippets.find( ( snippet ) => snippet.id === activeId.value ) );
-
-watch( activeSnippet, ( snippet ) => loadDraft( snippet ), { immediate: true });
-
-function loadDraft( snippet?: CssSnippet ): void {
-  if ( !snippet ) {
-    return;
+function editDraft( field: keyof BuiltInSnippetDefaults, event: Event ): void {
+  if ( activeId.value ) {
+    updateSnippetDraft( activeId.value, field, ( event.target as HTMLInputElement ).value );
   }
-  Object.assign( draft, { name: snippet.name, description: snippet.description, css: snippet.css });
-  dirty.value = false;
 }
 
-function markDirty(): void {
-  if ( !canEditVault.value ) {
-    return;
+async function save( asCopy = false ): Promise<void> {
+  if ( activeId.value ) {
+    await saveSnippetDraft( activeId.value, asCopy );
   }
-  dirty.value = true;
 }
 
-function save(): void {
-  if ( !activeSnippet.value ) {
-    return;
+function discard(): void {
+  if ( activeId.value ) {
+    discardSnippetDraft( activeId.value );
   }
-  if ( !saveSnippet({ id: activeSnippet.value.id, ...draft }) ) {
-    return;
-  }
-  dirty.value = false;
-  notify( 'CSS snippet saved', 'success' );
 }
 
 function create(): void {
@@ -55,7 +53,7 @@ function create(): void {
     enabled: true
   });
   if ( snippet ) {
-    activeId.value = snippet.id;
+    selectSnippet( snippet.id );
   }
 }
 
@@ -71,9 +69,12 @@ function remove(): void {
   if ( !snippet || snippet.builtIn ) {
     return;
   }
-  if ( window.confirm( `Delete the CSS snippet “${ snippet.name }”?` ) ) {
+  const message = dirty.value
+    ? `Delete the CSS snippet “${ snippet.name }” and discard its unsaved changes?`
+    : `Delete the CSS snippet “${ snippet.name }”?`;
+  if ( window.confirm( message ) ) {
     deleteSnippet( snippet.id );
-    activeId.value = vaultState.snippets[ 0 ]?.id ?? null;
+    discardSnippetDraft( snippet.id );
   }
 }
 
@@ -111,32 +112,36 @@ async function closeReference(): Promise<void> {
         </p>
         <div class="snippet-list">
           <button
-            v-for="snippet in vaultState.snippets"
+            v-for="snippet in snippetLibrary"
             :key="snippet.id"
+            :data-snippet-id="snippet.id"
             type="button"
             class="snippet-list-item"
             :class="{ active: activeId === snippet.id }"
-            @click="activeId = snippet.id"
+            @click="selectSnippet( snippet.id )"
           >
             <span class="snippet-status" :class="{ enabled: snippet.enabled }"><span /></span>
-            <span><strong>{{ snippet.name }}</strong><small>{{ snippet.builtIn ? "Built in" : "Custom" }}</small></span>
+            <span>
+              <strong>{{ snippet.name }}</strong>
+              <small>{{ snippet.builtIn ? "Built in" : "Custom" }}<template v-if="snippetDraftIsDirty( snippet.id )"> · Unsaved</template></small>
+            </span>
             <AppIcon name="chevron" :size="13" />
           </button>
         </div>
       </aside>
 
       <section
-        v-if="activeSnippet"
+        v-if="activeDraft"
         class="snippet-editor-area"
         data-ui-region="snippet-editor"
       >
         <header class="snippet-editor-header">
           <div>
             <span class="utility-eyebrow">CSS source</span>
-            <h2>{{ activeSnippet.name }}</h2>
+            <h2>{{ activeSnippet?.name ?? draft.name }}</h2>
           </div>
           <div class="snippet-header-actions">
-            <label class="toggle-control">
+            <label v-if="activeSnippet" class="toggle-control">
               <input
                 type="checkbox"
                 :disabled="!canEditVault"
@@ -147,7 +152,7 @@ async function closeReference(): Promise<void> {
               {{ activeSnippet.enabled ? "Enabled" : "Disabled" }}
             </label>
             <button
-              v-if="!activeSnippet.builtIn"
+              v-if="activeSnippet && !activeSnippet.builtIn"
               :disabled="!canEditVault"
               type="button"
               class="icon-button danger-hover"
@@ -157,26 +162,75 @@ async function closeReference(): Promise<void> {
               <AppIcon name="trash" :size="16" />
             </button>
             <button
+              v-if="dirty && !conflict"
+              type="button"
+              class="secondary-button"
+              :disabled="activeDraft.saving"
+              @click="discard"
+            >
+              Discard changes
+            </button>
+            <button
               type="button"
               class="primary-action-button small"
-              :disabled="!canEditVault || !dirty"
-              @click="save"
+              :disabled="!canEditVault || !dirty || Boolean( conflict ) || activeDraft.saving"
+              @click="save()"
             >
-              <AppIcon name="check" :size="14" /> Save
+              <AppIcon name="check" :size="14" /> {{ activeDraft.saving ? 'Saving…' : 'Save' }}
             </button>
           </div>
         </header>
 
+        <div
+          v-if="conflict"
+          class="snippet-draft-notice"
+          role="status"
+        >
+          <p>{{ conflict === 'deleted' ? 'This snippet was deleted elsewhere. Your draft is still available.' : 'This snippet changed elsewhere. Your draft is still available.' }}</p>
+          <p>Save your draft as a new, disabled snippet to keep your changes separately.</p>
+          <details v-if="activeSnippet">
+            <summary>View saved version</summary>
+            <strong>{{ activeSnippet.name }}</strong>
+            <p>{{ activeSnippet.description }}</p>
+            <pre>{{ activeSnippet.css }}</pre>
+          </details>
+          <div class="snippet-draft-actions">
+            <button
+              type="button"
+              class="secondary-button"
+              :disabled="activeDraft.saving"
+              @click="discard"
+            >
+              {{ conflict === 'deleted' ? 'Discard draft' : 'Use saved version' }}
+            </button>
+            <button
+              type="button"
+              class="primary-action-button small"
+              :disabled="!canEditVault || activeDraft.saving"
+              @click="save( true )"
+            >
+              Save as new snippet
+            </button>
+          </div>
+        </div>
+        <p
+          v-if="activeDraft.error"
+          class="snippet-draft-error"
+          role="alert"
+        >
+          {{ activeDraft.error }} Your unsaved draft is still available.
+        </p>
+
         <div class="snippet-fields">
           <label><span>Name</span><input
-            v-model="draft.name"
+            :value="draft.name"
             :readonly="!canEditVault"
-            @input="markDirty"
+            @input="editDraft( 'name', $event )"
           ></label>
           <label><span>Description</span><input
-            v-model="draft.description"
+            :value="draft.description"
             :readonly="!canEditVault"
-            @input="markDirty"
+            @input="editDraft( 'description', $event )"
           ></label>
         </div>
 
@@ -187,11 +241,11 @@ async function closeReference(): Promise<void> {
           <div class="css-editor-body">
             <pre class="css-line-numbers" aria-hidden="true">{{ draft.css.split( '\n' ).map( ( _, index ) => index + 1 ).join( '\n' ) }}</pre>
             <textarea
-              v-model="draft.css"
+              :value="draft.css"
               :readonly="!canEditVault"
               spellcheck="false"
               aria-label="CSS source"
-              @input="markDirty"
+              @input="editDraft( 'css', $event )"
             />
           </div>
         </div>

@@ -1,3 +1,4 @@
+import { computed, watch } from 'vue';
 import {
   createNoteLinkRewriter,
   normalizeWikiTarget,
@@ -5,7 +6,9 @@ import {
   type WikiLinkTarget
 } from '../lib/wikiLinks';
 import { parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
-import type { CssSnippet, Folder, Note, NoteTemplate } from '../types';
+import type { BuiltInSnippetDefaults, CssSnippet, Folder, Note, NoteTemplate } from '../types';
+import { cloneValue } from './vaultPersistence';
+import { editorPositionVaultId } from './editorPositions';
 import {
   createId,
   descendantFolderIds,
@@ -22,10 +25,13 @@ import {
 import { isSmartFolderSelection } from './vaultNavigation';
 import {
   canEditVault,
+  snippetDraftWorkspaces,
   uiState,
   vaultSession,
   vaultState,
-  type ToastTone
+  type ToastTone,
+  type SnippetDraft,
+  type SnippetDraftWorkspace
 } from './vaultState';
 
 interface VaultContentDependencies {
@@ -47,6 +53,127 @@ type NotePatch = Partial<Pick<
 export function createVaultContent(
   dependencies: VaultContentDependencies
 ) {
+  const snippetVaultKey = computed( () => vaultSession.phase === 'ready'
+    ? editorPositionVaultId( vaultSession.backend, vaultSession.path )
+    : null );
+  const snippetWorkspace = computed( () => snippetVaultKey.value
+    ? snippetDraftWorkspaces.get( snippetVaultKey.value )
+    : undefined );
+  const snippetsById = computed( () => new Map( vaultState.snippets.map( ( snippet ) => [ snippet.id, snippet ]) ) );
+  const snippetLibrary = computed( () => [
+    ...vaultState.snippets,
+    ...Array.from( snippetWorkspace.value?.drafts.values() ?? [])
+      .filter( ( draft ) => !snippetsById.value.has( draft.base.id ) && draftIsDirty( draft ) )
+      .map( ( draft ) => ({ ...draft.base, name: draft.values.name }) )
+  ]);
+
+  watch(
+    [ snippetVaultKey, () => vaultState.snippets ],
+    () => {
+      const key = snippetVaultKey.value;
+      if ( !key ) {
+        return;
+      }
+      if ( !snippetDraftWorkspaces.has( key ) ) {
+        snippetDraftWorkspaces.set( key, { activeId: null, drafts: new Map() });
+      }
+      reconcileSnippetDrafts( snippetDraftWorkspaces.get( key )! );
+    },
+    { immediate: true, deep: true }
+  );
+
+  function snippetValues( snippet: BuiltInSnippetDefaults ): BuiltInSnippetDefaults {
+    return { name: snippet.name, description: snippet.description, css: snippet.css };
+  }
+
+  function sameSnippetValues( first: BuiltInSnippetDefaults, second: BuiltInSnippetDefaults ): boolean {
+    return first.name === second.name && first.description === second.description && first.css === second.css;
+  }
+
+  function newSnippetDraft( snippet: CssSnippet ): SnippetDraft {
+    return { base: cloneValue( snippet ), values: snippetValues( snippet ), saving: false, error: null };
+  }
+
+  function draftIsDirty( draft: SnippetDraft ): boolean {
+    return !sameSnippetValues( draft.values, draft.base );
+  }
+
+  function snippetDraftIsDirty( id: string ): boolean {
+    const draft = snippetWorkspace.value?.drafts.get( id );
+
+    return Boolean( draft && draftIsDirty( draft ) );
+  }
+
+  function snippetDraftConflict( id: string ): 'changed' | 'deleted' | null {
+    const draft = snippetWorkspace.value?.drafts.get( id );
+    if ( !draft || !draftIsDirty( draft ) ) {
+      return null;
+    }
+    const saved = snippetsById.value.get( id );
+    if ( !saved ) {
+      return 'deleted';
+    }
+
+    return !sameSnippetValues( saved, draft.base ) && !sameSnippetValues( saved, draft.values )
+      ? 'changed'
+      : null;
+  }
+
+  function reconcileSnippetDrafts( workspace: SnippetDraftWorkspace ): void {
+    for ( const [ id, draft ] of workspace.drafts ) {
+      if ( draft.saving ) {
+        continue;
+      }
+      const saved = snippetsById.value.get( id );
+      if ( saved && ( !draftIsDirty( draft ) || sameSnippetValues( draft.values, saved ) ) ) {
+        draft.base = cloneValue( saved );
+        Object.assign( draft.values, snippetValues( saved ) );
+        draft.error = null;
+      } else if ( !saved && !draftIsDirty( draft ) ) {
+        workspace.drafts.delete( id );
+      }
+    }
+    if ( !workspace.activeId || ( !snippetsById.value.has( workspace.activeId ) && !workspace.drafts.has( workspace.activeId ) ) ) {
+      workspace.activeId = vaultState.snippets[ 0 ]?.id ?? workspace.drafts.keys().next().value ?? null;
+    }
+    const active = workspace.activeId ? snippetsById.value.get( workspace.activeId ) : undefined;
+    if ( active && !workspace.drafts.has( active.id ) ) {
+      workspace.drafts.set( active.id, newSnippetDraft( active ) );
+    }
+  }
+
+  function selectSnippet( id: string ): void {
+    const workspace = snippetWorkspace.value;
+    const saved = snippetsById.value.get( id );
+    if ( !workspace || ( !saved && !workspace.drafts.has( id ) ) ) {
+      return;
+    }
+    if ( saved && !workspace.drafts.has( id ) ) {
+      workspace.drafts.set( id, newSnippetDraft( saved ) );
+    }
+    workspace.activeId = id;
+  }
+
+  function updateSnippetDraft( id: string, field: keyof BuiltInSnippetDefaults, value: string ): void {
+    const workspace = snippetWorkspace.value;
+    const draft = workspace?.drafts.get( id );
+    if ( !workspace || !draft || !canEditVault.value || vaultSession.busy || draft.saving ) {
+      return;
+    }
+    draft.values[ field ] = value;
+    draft.error = null;
+    reconcileSnippetDrafts( workspace );
+  }
+
+  function discardSnippetDraft( id: string ): void {
+    const workspace = snippetWorkspace.value;
+    if ( !workspace || workspace.drafts.get( id )?.saving ) {
+      return;
+    }
+    workspace.drafts.delete( id );
+    reconcileSnippetDrafts( workspace );
+  }
+
   function preserveNoteLinks( previousPaths: ReadonlyMap<string, string> ): void {
     const nextPaths = dependencies.noteLinkPaths();
     if ( vaultState.notes.every( ( note ) => previousPaths.get( note.id ) === nextPaths.get( note.id ) ) ) {
@@ -628,12 +755,19 @@ export function createVaultContent(
     createNote,
     deleteFolder,
     deleteSnippet,
+    discardSnippetDraft,
     moveFolder,
     moveNoteToFolder,
     renameFolder,
     saveSnippet,
     saveTemplate,
+    selectSnippet,
+    snippetDraftConflict,
+    snippetDraftIsDirty,
+    snippetLibrary,
+    snippetWorkspace,
     togglePinned,
-    updateNote
+    updateNote,
+    updateSnippetDraft
   };
 }

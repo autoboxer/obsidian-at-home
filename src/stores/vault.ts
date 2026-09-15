@@ -132,6 +132,7 @@ import {
   type WorkspaceVaultItemKind
 } from '../services/native';
 import type {
+  CssSnippet,
   ExportNote,
   ExportSnippet,
   ExportTemplate,
@@ -767,14 +768,114 @@ export const {
   createNote,
   deleteFolder,
   deleteSnippet,
+  discardSnippetDraft,
   moveFolder,
   moveNoteToFolder,
   renameFolder,
   saveSnippet,
   saveTemplate,
+  selectSnippet,
+  snippetDraftConflict,
+  snippetDraftIsDirty,
+  snippetLibrary,
+  snippetWorkspace,
   togglePinned,
-  updateNote
+  updateNote,
+  updateSnippetDraft
 } = vaultContent;
+
+export async function saveSnippetDraft( id: string, asCopy = false ): Promise<boolean> {
+  const workspace = snippetWorkspace.value;
+  const draft = workspace?.drafts.get( id );
+  if ( !workspace || !draft || !snippetDraftIsDirty( id ) || draft.saving ) {
+    return false;
+  }
+
+  return runExclusiveVaultDataOperation( false, async () => {
+    const generation = sessionGeneration;
+    draft.saving = true;
+    draft.error = null;
+    try {
+      if ( !( await flushVault() ) ) {
+        draft.error = vaultSession.error || 'Save the pending vault changes before saving this draft.';
+
+        return false;
+      }
+      if ( generation !== sessionGeneration || workspace !== snippetWorkspace.value || !canEditVault.value ) {
+        return false;
+      }
+      if ( !asCopy && snippetDraftConflict( id ) ) {
+        return false;
+      }
+      const saved = vaultState.snippets.find( ( snippet ) => snippet.id === id );
+      if ( !asCopy && !saved ) {
+        return false;
+      }
+      const values = cloneValue( draft.values );
+      const candidate = snapshotVaultForSave();
+      let nextSnippet: CssSnippet;
+      if ( asCopy ) {
+        const names = new Set( candidate.snippets.map( ( snippet ) => snippet.name.toLocaleLowerCase() ) );
+        const baseName = values.name.trim() || 'Untitled snippet';
+        let name = baseName;
+        for ( let suffix = 1; names.has( name.toLocaleLowerCase() ); suffix += 1 ) {
+          name = `${ baseName } (copy${ suffix === 1 ? '' : ` ${ suffix }` })`;
+        }
+        nextSnippet = { ...values, name, id: createId( 'snippet' ), enabled: false, createdAt: Date.now() };
+        candidate.snippets.push( nextSnippet );
+      } else {
+        nextSnippet = { ...cloneValue( saved! ), ...values };
+        candidate.snippets = candidate.snippets.map( ( snippet ) => snippet.id === id ? nextSnippet : snippet );
+      }
+
+      // Persist a candidate first. A failed save must not apply CSS, mark the
+      // draft clean, or leave it queued for an unrelated autosave to retry.
+      let result: WorkspaceSaveResult | undefined;
+      if ( vaultSession.backend === 'native' ) {
+        if ( !vaultSession.path ) {
+          throw new Error( 'Open a vault before saving this draft.' );
+        }
+        result = await saveWorkspace( vaultSession.path, candidate, vaultSession.revision );
+      } else if ( !persistBrowserWorkspace( candidate, snapshotRecentlyDeletedNotes() ) ) {
+        throw new Error( vaultSession.error || 'The snippet could not be saved.' );
+      }
+      if ( generation !== sessionGeneration || workspace !== snippetWorkspace.value ) {
+        return false;
+      }
+      applyVaultMutation( () => {
+        if ( asCopy ) {
+          vaultState.snippets.push( nextSnippet );
+        } else {
+          Object.assign( saved!, values );
+        }
+      });
+      if ( result ) {
+        applyWorkspaceSaveResult( result );
+      }
+      draft.saving = false;
+      discardSnippetDraft( id );
+      selectSnippet( nextSnippet.id );
+      const warning = result?.warnings[ 0 ];
+      notify( warning || ( asCopy ? 'Draft saved as a new, disabled snippet' : 'CSS snippet saved' ), warning ? 'warning' : 'success' );
+
+      return true;
+    } catch ( error ) {
+      const message = errorMessage( error, 'The snippet could not be saved. Your draft is still available.' );
+      draft.error = message;
+      if ( generation === sessionGeneration ) {
+        vaultSession.error = message;
+        vaultSession.conflict = isRevisionConflict( message );
+        uiState.saveStatus = 'error';
+        uiState.vaultChooserOpen = vaultSession.backend === 'native';
+        notify( message, 'warning' );
+      }
+
+      return false;
+    } finally {
+      draft.saving = false;
+    }
+  });
+}
 
 export const outgoingLinks = computed( () => {
   if ( !activeNote.value ) {
