@@ -644,9 +644,11 @@ pub(in crate::workspace) fn rollback_transaction(
             continue;
         };
         match fingerprint_regular_file(&path) {
-            Ok(Some(current)) if manifest.originals.iter().any(|original| {
-                original.relative_path == target.relative_path && original.fingerprint == current
-            }) => {}
+            Ok(Some(current))
+                if manifest.originals.iter().any(|original| {
+                    original.relative_path == target.relative_path
+                        && original.fingerprint == current
+                }) => {}
             Ok(Some(current)) if current == target.fingerprint => {
                 if let Err(error) = remove_file_durable(&path) {
                     warnings.push(format!(
