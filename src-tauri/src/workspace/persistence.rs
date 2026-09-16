@@ -1829,6 +1829,9 @@ pub(super) fn write_loaded_workspace_state_bytes(
     .map_err(|error| format!("Could not write workspace metadata: {error}"))
 }
 
+// Keep this guard alive across loading, revision checks, writes, and recovery.
+// The separate lock file survives metadata replacement and coordinates app
+// processes; it cannot prevent other tools from directly changing private metadata.
 pub(super) fn lock_workspace_files(root: &Path) -> Result<File, String> {
     let file = open_workspace_lock_file(root)?;
     lock_storage_file(

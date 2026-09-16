@@ -1697,6 +1697,109 @@ fn load_snapshot_rechecks_metadata_at_the_replacement_boundary() {
 }
 
 #[test]
+fn metadata_lock_serializes_processes_across_replacement() {
+    const ROOT_ENV: &str = "OAH_METADATA_LOCK_TEST_ROOT";
+    const MODE_ENV: &str = "OAH_METADATA_LOCK_TEST_MODE";
+    const REVISION_ENV: &str = "OAH_METADATA_LOCK_TEST_REVISION";
+
+    // Re-enter just this test in another process so the process-local mutex
+    // cannot hide a missing or prematurely released filesystem lock.
+    if let Some(root) = std::env::var_os(ROOT_ENV) {
+        let root = PathBuf::from(root);
+        let mode = std::env::var(MODE_ENV).unwrap();
+        let revision = std::env::var(REVISION_ENV).unwrap().parse().unwrap();
+        match mode.as_str() {
+            "blocked" => {
+                let guard = open_workspace_lock_file(&root).unwrap();
+                assert_eq!(
+                    lock_storage_file(&guard, Duration::ZERO, "lock failed", "busy"),
+                    Err("busy".to_owned())
+                );
+            }
+            "stale" => {
+                let _guard = lock_workspace_files(&root).unwrap();
+                let changes = WorkspaceChanges {
+                    name: Some("Stale writer".to_owned()),
+                    ..Default::default()
+                };
+                let error = save_workspace_changes(&root, &changes, revision).unwrap_err();
+                assert!(error.contains("vault changed"), "{error}");
+                let mut vault = empty_vault("Stale writer");
+                vault.notes.push(test_note("Stale note content"));
+                let error = save_workspace_files(&root, &vault, revision).unwrap_err();
+                assert!(error.contains("vault changed"), "{error}");
+            }
+            _ => panic!("unknown metadata lock probe: {mode}"),
+        }
+        println!("metadata lock probe {mode} passed");
+        return;
+    }
+
+    let workspace = TestWorkspace::new("metadata-process-lock");
+    let note = test_note("Original note content");
+    write_saved_note(&workspace, &note);
+    let owner = lock_workspace_files(&workspace.root).unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+    let state_path = workspace_state_path(&workspace.root);
+    let before = fs::read(&state_path).unwrap();
+    let qualified_name = concat!(module_path!(), "::metadata_lock_serializes_processes_across_replacement");
+    // libtest names omit the crate prefix included by module_path!().
+    let test_name = qualified_name.split_once("::").unwrap().1;
+    let run_probe = |mode: &str| {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(ROOT_ENV, &workspace.root)
+            .env(MODE_ENV, mode)
+            .env(REVISION_ENV, loaded.revision.to_string())
+            .output()
+            .expect("the independent metadata writer should run");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{mode}: {stdout}\n{stderr}");
+        assert!(
+            stdout.contains(&format!("metadata lock probe {mode} passed")),
+            "the child must execute the requested probe: {stdout}"
+        );
+    };
+
+    run_probe("blocked");
+    assert_eq!(fs::read(&state_path).unwrap(), before);
+    let changes = WorkspaceChanges {
+        name: Some("Winning writer".to_owned()),
+        ..Default::default()
+    };
+    let (saved, _) = save_workspace_changes(&workspace.root, &changes, loaded.revision).unwrap();
+    let committed = fs::read(&state_path).unwrap();
+    assert_ne!(committed, before);
+    assert_ne!(saved.revision, loaded.revision);
+
+    // Replacing state.json must not replace or release workspace.lock.
+    run_probe("blocked");
+    assert_eq!(fs::read(&state_path).unwrap(), committed);
+    drop(owner);
+    run_probe("stale");
+    assert_eq!(fs::read(&state_path).unwrap(), committed);
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+        note.content
+    );
+    assert_eq!(revision_for_root(&workspace.root).unwrap(), saved.revision);
+
+    let _retry_guard = lock_workspace_files(&workspace.root).unwrap();
+    let reloaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+    assert_eq!(reloaded.vault.name, "Winning writer");
+    assert_eq!(reloaded.vault.notes[0].content, note.content);
+    let changes = WorkspaceChanges {
+        name: Some("Retried writer".to_owned()),
+        ..Default::default()
+    };
+    save_workspace_changes(&workspace.root, &changes, reloaded.revision).unwrap();
+    let reloaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
+    assert_eq!(reloaded.vault.name, "Retried writer");
+    assert_eq!(reloaded.vault.notes[0].content, note.content);
+}
+
+#[test]
 fn metadata_replacement_precondition_runs_after_staging() {
     let workspace = TestWorkspace::new("metadata-replacement-precondition");
     let path = workspace.root.join("state.json");
