@@ -1,7 +1,5 @@
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, watch } from 'vue';
-import { createEmptyVault, createSeedVault } from '../data/seed';
+import { createEmptyVault } from '../data/seed';
 import { createNoteLinkRewriter, findBacklinks, parseNoteLinks, resolveNoteLink, searchNotes } from '../lib';
 import { resolveMarkdownImagePath } from '../lib/imageEmbeds';
 import {
@@ -11,60 +9,34 @@ import {
 } from '../lib/markdownImages';
 import {
   formatMarkdownAttachment,
-  markdownAttachmentIsArchive,
-  markdownAttachmentIsExecutable,
   parseMarkdownAttachments,
   relativeAttachmentDestination
 } from '../lib/markdownAttachments';
+import { writeBrowserWorkspace } from '../services/browserWorkspace';
 import {
-  compareRecentlyDeletedNotes,
-  readBrowserWorkspace,
-  RECENTLY_DELETED_LIMIT,
-  RECENTLY_DELETED_RETENTION,
-  writeBrowserWorkspace
-} from '../services/browserWorkspace';
-import type { StoredBrowserWorkspace } from '../services/browserWorkspace';
-import {
-  captureNoteEditorPosition,
-  deleteNoteEditorPosition,
   editorPositionVaultId,
-  flushNoteEditorPositions,
-  hasPendingNoteEditorPositions,
   initializeNoteEditorPositions,
-  pruneNoteEditorPositions,
-  setNoteEditorPosition
+  pruneNoteEditorPositions
 } from './editorPositions';
-import {
-  deleteNoteEditorHistory,
-  pruneNoteEditorHistories,
-  resetNoteEditorHistory
-} from './editorHistories';
+import { pruneNoteEditorHistories } from './editorHistories';
 import {
   applyMarkdownReplacements,
   folderContainsVaultAssets,
-  isSafeVaultAttachmentFileName,
-  isSafeVaultImageFileName,
-  planVaultAssetDeletion,
-  rewriteVaultAssetDestinationsForNotePath,
-  rewriteVaultAttachmentReferences,
-  rewriteVaultImageReferences,
-  upsertVaultAttachmentFile,
-  upsertVaultImageFile,
-  type VaultAssetDeletionPlan,
-  type VaultAssetIdentity,
-  type VaultAssetKind
+  rewriteVaultAssetDestinationsForNotePath
 } from './vaultAssets';
 import {
   createId,
   descendantFolderIds as vaultDescendantFolderIds,
-  folderConflictsWithNote,
   folderPathFromFolders,
-  noteStemKey,
   planImportedNotes,
-  projectedNoteRelativePath,
-  safeNoteStem
+  projectedNoteRelativePath
 } from './vaultModel';
+import { createVaultAssetDeletion } from './vaultAssetDeletion';
+import { createVaultAssetOperations } from './vaultAssetOperations';
 import { createVaultContent } from './vaultContent';
+import { createVaultItemActions } from './vaultItemActions';
+import { createVaultRecovery } from './vaultRecovery';
+import { createVaultLifecycle } from './vaultLifecycle';
 import {
   clampZoom,
   cloneValue,
@@ -72,29 +44,20 @@ import {
   errorMessage,
   isRevisionConflict,
   mergeRecentVaults,
-  normalizeNote,
   normalizeVault,
   persistStoredZoom,
   readStoredZoom,
-  safeStorageGet,
-  safeStorageSet,
   zoomStep
 } from './vaultPersistence';
+import { createVaultNavigation } from './vaultNavigation';
 import {
-  createVaultNavigation,
-  type NoteNavigationState
-} from './vaultNavigation';
-import {
-  assetDeletionState,
   canEditVault,
   recentlyDeletedState,
   uiState,
   vaultSession,
   vaultState,
-  vaultTreeRevealTarget,
   type ToastAction,
-  type ToastTone,
-  type WorkspaceUiSnapshot
+  type ToastTone
 } from './vaultState';
 export {
   assetDeletionState,
@@ -108,30 +71,14 @@ export {
   vaultTreeRevealTarget
 } from './vaultState';
 export { MAX_ZOOM, MIN_ZOOM } from './vaultPersistence';
+export type { VaultItemLocator } from './vaultItemActions';
 import {
-  archiveWorkspaceNote,
-  bootstrapWorkspace,
-  createWorkspace,
-  deleteRecentlyDeletedNotes,
-  deleteWorkspaceAsset,
-  forgetWorkspace,
   getWorkspaceRevision,
   importWorkspaceAssets,
-  isTauri,
-  locateWorkspaceVaultItem,
-  openWorkspaceAttachment,
   openWorkspace,
-  pickFolder,
-  pruneRecentlyDeletedNotes,
-  relocateWorkspaceAttachment,
-  relocateWorkspaceImage,
-  restoreRecentlyDeletedNote as restoreRecentlyDeletedNoteNative,
   saveWorkspace,
   saveWorkspaceChanges,
-  saveWorkspaceAttachmentCopy,
-  saveWorkspaceWithImageImport,
-  showWorkspaceVaultItemInFolder,
-  type WorkspaceVaultItemKind
+  saveWorkspaceWithImageImport
 } from '../services/native';
 import type {
   CssSnippet,
@@ -143,46 +90,24 @@ import type {
   Note,
   RecentlyDeletedNote,
   VaultData,
-  VaultAttachmentFile,
-  VaultImageFile,
-  WorkspaceEmbedAttachmentResult,
-  WorkspaceExternalAssetDiscardResult,
-  WorkspaceEmbedImageResult,
-  WorkspaceAttachmentNoteUpdate,
-  WorkspaceImageNoteUpdate,
   WorkspaceLoad,
   WorkspaceChanges,
-  WorkspaceRelocateImageResult,
-  WorkspaceRelocateAttachmentResult,
   WorkspaceSaveResult
 } from '../types';
 
-const LEGACY_MIGRATED_KEY = 'obsidian-at-home.vault.filesystem-migrated.v1';
 const PERSIST_DELAY = 220;
-const EXTERNAL_CHECK_DELAY = 3_000;
-const RECENTLY_DELETED_RETRY_INITIAL_DELAY = 5_000;
-const RECENTLY_DELETED_RETRY_MAX_DELAY = 5 * 60_000;
 
 export const NOTE_DRAG_MIME = 'application/x-obsidian-at-home-note-id';
 export const FOLDER_DRAG_MIME = 'application/x-obsidian-at-home-folder-id';
 
-let vaultTreeRevealOperation = 0;
 uiState.zoom = readStoredZoom();
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
-let externalCheckTimer: ReturnType<typeof setInterval> | undefined;
-let recentlyDeletedTimer: ReturnType<typeof setTimeout> | undefined;
-let recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
 let initialized = false;
 let suppressPersistence = 0;
 let sessionGeneration = 0;
-let pendingAssetDeletion: { generation: number; signature: string } | null = null;
 let saveInFlight: Promise<boolean> | null = null;
 let recoverySaveInFlight: Promise<boolean> | null = null;
-let checkingExternalChanges = false;
-let initializePromise: Promise<void> | null = null;
-let closeHandlerInstalled = false;
-let closingAfterSave = false;
 const pendingNoteOriginalPaths = new Map<string, string>();
 
 const vaultChanges = createVaultChangeTracker(
@@ -206,283 +131,6 @@ watch(
   persistStoredZoom,
   { flush: 'sync' }
 );
-
-export function initializeVault(): Promise<void> {
-  if ( initializePromise ) {
-    return initializePromise;
-  }
-  initializePromise = initializeVaultStorage();
-
-  return initializePromise;
-}
-
-async function initializeVaultStorage(): Promise<void> {
-  vaultSession.error = null;
-  vaultSession.phase = 'loading';
-  vaultSession.access = { mode: 'read-write' };
-
-  if ( !isTauri() ) {
-    let storedVault: StoredBrowserWorkspace | null;
-    try {
-      storedVault = readStoredVault();
-    } catch ( error ) {
-      hydrateVault( createEmptyVault() );
-      hydrateRecentlyDeletedNotes([]);
-      resetNoteNavigation();
-      vaultSession.backend = 'browser';
-      vaultSession.phase = 'error';
-      vaultSession.error = errorMessage( error, 'Saved browser notes could not be read safely.' );
-      initialized = true;
-      installVaultLifecycleHandlers();
-
-      return;
-    }
-    const browserVault = storedVault?.vault ?? createSeedVault();
-    hydrateVault( browserVault );
-    hydrateRecentlyDeletedNotes( storedVault?.recentlyDeletedNotes ?? []);
-    initializeNoteEditorPositions( 'browser', null, vaultState.notes );
-    resetNoteNavigation();
-    vaultSession.backend = 'browser';
-    vaultSession.phase = 'ready';
-    vaultSession.path = null;
-    vaultSession.recentVaults = [];
-    vaultSession.legacyAvailable = false;
-    vaultSession.revision = 0;
-    vaultSession.conflict = false;
-    vaultSession.warnings = [];
-    initialized = true;
-    vaultChanges.acknowledge( vaultChanges.version );
-    if ( storedVault?.needsRewrite ) {
-      persistBrowserWorkspace( snapshotVault(), snapshotRecentlyDeletedNotes() );
-    }
-    scheduleRecentlyDeletedExpiry();
-    void pruneExpiredRecentlyDeletedNotes();
-    installVaultLifecycleHandlers();
-
-    return;
-  }
-
-  vaultSession.backend = 'native';
-  let legacy: StoredBrowserWorkspace | null = null;
-  try {
-    legacy = readStoredVault();
-  } catch {
-    // A newer browser workspace remains untouched and unavailable for migration
-  }
-  vaultSession.legacyAvailable = Boolean(
-    legacy && safeStorageGet( LEGACY_MIGRATED_KEY ) !== legacy.migrationFingerprint
-  );
-
-  try {
-    const result = await bootstrapWorkspace( createEmptyVault() );
-    vaultSession.recentVaults = result.recentVaults;
-    if ( result.workspace ) {
-      applyWorkspace( result.workspace, result.recentVaults );
-    } else {
-      hydrateVault( createEmptyVault() );
-      hydrateRecentlyDeletedNotes([]);
-      resetNoteNavigation();
-      vaultSession.phase = 'needs-vault';
-      vaultSession.path = null;
-      vaultSession.revision = 0;
-      vaultSession.conflict = false;
-      vaultSession.warnings = [];
-      uiState.vaultChooserOpen = true;
-    }
-  } catch ( error ) {
-    hydrateVault( createEmptyVault() );
-    hydrateRecentlyDeletedNotes([]);
-    resetNoteNavigation();
-    vaultSession.phase = 'error';
-    vaultSession.error = errorMessage( error, 'The vault list could not be opened.' );
-    uiState.vaultChooserOpen = true;
-  } finally {
-    initialized = true;
-    vaultChanges.acknowledge( vaultChanges.version );
-    installVaultLifecycleHandlers();
-  }
-}
-
-export async function createFilesystemVault( name: string, useLegacy = false ): Promise<boolean> {
-  if ( vaultSession.backend !== 'native' || vaultSession.busy ) {
-    return false;
-  }
-  const cleanName = name.trim();
-  if ( !cleanName ) {
-    return false;
-  }
-
-  vaultSession.busy = true;
-  vaultSession.error = null;
-  try {
-    if ( !( await flushBeforeVaultChange() ) ) {
-      return false;
-    }
-
-    const parentPath = await pickFolder();
-    if ( !parentPath ) {
-      return false;
-    }
-    const legacy = useLegacy ? readStoredVault() : null;
-    if ( useLegacy && !legacy ) {
-      throw new Error( 'The previous notes could not be read from app storage.' );
-    }
-    const initial = legacy?.vault ?? createSeedVault();
-    const workspace = await createWorkspace( parentPath, cleanName, initial );
-    applyWorkspace( workspace );
-
-    if ( useLegacy && legacy ) {
-      safeStorageSet( LEGACY_MIGRATED_KEY, legacy.migrationFingerprint );
-      vaultSession.legacyAvailable = false;
-      notify( `Saved ${ legacy.vault.notes.length } ${ legacy.vault.notes.length === 1 ? 'note' : 'notes' } as Markdown files`, 'success' );
-    } else {
-      notify( `Created ${ workspace.descriptor.name }`, 'success' );
-    }
-
-    return true;
-  } catch ( error ) {
-    setVaultError( error, 'The vault could not be created.' );
-
-    return false;
-  } finally {
-    vaultSession.busy = false;
-    scheduleRecentlyDeletedExpiry();
-  }
-}
-
-export async function openFilesystemVault(): Promise<boolean> {
-  if ( vaultSession.backend !== 'native' || vaultSession.busy ) {
-    return false;
-  }
-
-  vaultSession.busy = true;
-  vaultSession.error = null;
-  try {
-    if ( !( await flushBeforeVaultChange() ) ) {
-      return false;
-    }
-
-    const path = await pickFolder();
-    if ( !path ) {
-      return false;
-    }
-    const workspace = await openWorkspace( path, createEmptyVault() );
-    applyWorkspace( workspace );
-    notify( `Opened ${ workspace.descriptor.name }`, 'success' );
-
-    return true;
-  } catch ( error ) {
-    setVaultError( error, 'That folder could not be opened as a vault.' );
-
-    return false;
-  } finally {
-    vaultSession.busy = false;
-    scheduleRecentlyDeletedExpiry();
-  }
-}
-
-export async function switchFilesystemVault( path: string ): Promise<boolean> {
-  if ( vaultSession.backend !== 'native' || vaultSession.busy || path === vaultSession.path ) {
-    return path === vaultSession.path;
-  }
-
-  vaultSession.busy = true;
-  vaultSession.error = null;
-  try {
-    if ( !( await flushBeforeVaultChange() ) ) {
-      return false;
-    }
-
-    const workspace = await openWorkspace( path, createEmptyVault() );
-    applyWorkspace( workspace );
-    notify( `Switched to ${ workspace.descriptor.name }`, 'success' );
-
-    return true;
-  } catch ( error ) {
-    setVaultError( error, 'That recent vault is no longer available.' );
-
-    return false;
-  } finally {
-    vaultSession.busy = false;
-    scheduleRecentlyDeletedExpiry();
-  }
-}
-
-export async function forgetCurrentVault(): Promise<boolean> {
-  const path = vaultSession.path;
-  if ( vaultSession.backend !== 'native' || !path || vaultSession.busy ) {
-    return false;
-  }
-
-  vaultSession.busy = true;
-  vaultSession.error = null;
-  try {
-    if ( !( await flushBeforeVaultChange() ) ) {
-      return false;
-    }
-
-    const recentVaults = await forgetWorkspace( path );
-    sessionGeneration += 1;
-    vaultSession.recentVaults = recentVaults;
-    vaultSession.path = null;
-    vaultSession.revision = 0;
-    vaultSession.conflict = false;
-    vaultSession.warnings = [];
-    vaultSession.phase = 'needs-vault';
-    vaultSession.access = { mode: 'read-write' };
-    hydrateVault( createEmptyVault() );
-    hydrateRecentlyDeletedNotes([]);
-    resetNoteNavigation();
-    vaultChanges.reset();
-    uiState.vaultChooserOpen = true;
-    notify( 'Vault forgotten; its files are still on disk', 'neutral' );
-
-    return true;
-  } catch ( error ) {
-    setVaultError( error, 'The vault could not be removed from the recent list.' );
-
-    return false;
-  } finally {
-    vaultSession.busy = false;
-    scheduleRecentlyDeletedExpiry();
-  }
-}
-
-export async function showCurrentVaultInFolder(): Promise<void> {
-  if ( !vaultSession.path || vaultSession.backend !== 'native' ) {
-    return;
-  }
-  try {
-    await revealItemInDir( vaultSession.path );
-  } catch ( error ) {
-    setVaultError( error, 'The vault folder could not be shown.' );
-    throw error;
-  }
-}
-
-export async function reloadFilesystemVault(): Promise<boolean> {
-  const path = vaultSession.path;
-  if ( vaultSession.backend !== 'native' || !path || vaultSession.busy ) {
-    return false;
-  }
-
-  vaultSession.busy = true;
-  try {
-    await flushNoteEditorPositions( currentEditorPositionVaultId() );
-    const workspace = await openWorkspace( path, createEmptyVault() );
-    applyWorkspace( workspace );
-    notify( 'Reloaded the vault from disk', 'success' );
-
-    return true;
-  } catch ( error ) {
-    setVaultError( error, 'The vault could not be reloaded from disk.' );
-
-    return false;
-  } finally {
-    vaultSession.busy = false;
-    scheduleRecentlyDeletedExpiry();
-  }
-}
 
 export async function overwriteFilesystemVault(): Promise<boolean> {
   if ( !canEditVault.value ) {
@@ -668,10 +316,6 @@ export const recentNotes = computed<Note[]>( () => {
   });
 });
 
-export const recentlyDeletedNotes = computed<RecentlyDeletedNote[]>( () =>
-  [ ...recentlyDeletedState.notes ].sort( compareRecentlyDeletedNotes )
-);
-
 export const folderById = computed( () =>
   new Map( vaultState.folders.map( ( folder ) => [ folder.id, folder ]) )
 );
@@ -729,15 +373,9 @@ export const {
 } = vaultNavigation;
 
 const {
-  activateNote,
-  activateNoteAfterDeletion,
   currentFolderId,
-  noteDeletionFallback,
-  noteExists,
   pruneNoteNavigation,
   recordDirectNoteNavigation,
-  removeNoteFromNavigation,
-  removeRecentNote,
   resetNoteNavigation,
   resetSearchState,
   restoreNoteNavigation,
@@ -786,6 +424,123 @@ export const {
   updateNote,
   updateSnippetDraft
 } = vaultContent;
+
+const vaultAssetOperations = createVaultAssetOperations({
+  applyVaultMutation,
+  applyWorkspaceSaveResult,
+  flushVault,
+  folderPath,
+  notify,
+  runExclusiveVaultDataOperation
+});
+
+export const {
+  applyEmbeddedAttachmentResult,
+  applyEmbeddedImageResult,
+  applyExternalAssetDiscardResult,
+  moveVaultAttachmentToFolder,
+  moveVaultImageToFolder,
+  renameVaultAttachment,
+  renameVaultImage
+} = vaultAssetOperations;
+
+const {
+  applyWorkspaceAttachmentFiles,
+  applyWorkspaceImageFiles
+} = vaultAssetOperations;
+
+const vaultAssetDeletion = createVaultAssetDeletion({
+  applyVaultMutation,
+  applyWorkspaceSaveResult,
+  currentEditorPositionVaultId,
+  flushVault,
+  getSessionGeneration: () => sessionGeneration,
+  notify,
+  runExclusiveVaultDataOperation
+});
+
+export const {
+  cancelVaultAssetDeletion,
+  confirmVaultAssetDeletion,
+  requestVaultAssetDeletion
+} = vaultAssetDeletion;
+
+const { clearAssetDeletionRequest } = vaultAssetDeletion;
+
+const vaultItemActions = createVaultItemActions({ flushVault, folderPath, notify });
+
+export const {
+  activateVaultAttachment,
+  locateVaultItem,
+  revealVaultItemInTree,
+  showVaultItemInFolder,
+  vaultTreeItemIsRevealed,
+  vaultTreeRevealIncludesFolder
+} = vaultItemActions;
+
+const vaultRecovery = createVaultRecovery({
+  acknowledgeVaultChanges: () => vaultChanges.acknowledge( vaultChanges.version ),
+  applyVaultMutation,
+  applyWorkspaceSaveResult,
+  currentEditorPositionVaultId,
+  flushVault,
+  folderPath,
+  hydrateVault,
+  navigation: vaultNavigation,
+  notify,
+  performNativeRecoverySave,
+  persistBrowserWorkspace,
+  reconcileNativeWorkspace,
+  snapshotVault
+});
+
+export const {
+  deleteNote,
+  emptyRecentlyDeletedNotes,
+  permanentlyDeleteRecentlyDeletedNote,
+  recentlyDeletedNotes,
+  restoreRecentlyDeletedNote
+} = vaultRecovery;
+
+const {
+  hydrateRecentlyDeletedNotes,
+  scheduleRecentlyDeletedExpiry,
+  snapshotRecentlyDeletedNotes
+} = vaultRecovery;
+
+const vaultLifecycle = createVaultLifecycle({
+  advanceSessionGeneration: () => {
+    sessionGeneration += 1;
+  },
+  applyWorkspace,
+  currentEditorPositionVaultId,
+  flushVault,
+  getSessionGeneration: () => sessionGeneration,
+  hasRecoverySaveInFlight: () => recoverySaveInFlight !== null,
+  hasSaveInFlight: () => saveInFlight !== null,
+  hydrateVault,
+  markVaultInitialized: () => {
+    initialized = true;
+  },
+  notify,
+  persistBrowserWorkspace,
+  recovery: vaultRecovery,
+  resetNoteNavigation,
+  snapshotVault,
+  vaultChanges
+});
+
+export const {
+  createFilesystemVault,
+  forgetCurrentVault,
+  initializeVault,
+  openFilesystemVault,
+  reloadFilesystemVault,
+  showCurrentVaultInFolder,
+  switchFilesystemVault
+} = vaultLifecycle;
+
+const { flushApplicationState } = vaultLifecycle;
 
 export async function saveSnippetDraft( id: string, asCopy = false ): Promise<boolean> {
   const workspace = snippetWorkspace.value;
@@ -913,230 +668,6 @@ export function zoomOut(): void {
 
 export function resetZoom(): void {
   setZoom( 1 );
-}
-
-export async function deleteNote( id: string ): Promise<boolean> {
-  return runRecoveryOperation( async () => {
-    if ( !( await flushVault() ) ) {
-      return false;
-    }
-
-    const index = vaultState.notes.findIndex( ( note ) => note.id === id );
-    const note = vaultState.notes[ index ];
-    if ( !note ) {
-      return false;
-    }
-
-    const archivedNote = cloneValue( note );
-    const originalFolderPath = folderPath( note.folderId );
-    const vaultId = currentEditorPositionVaultId();
-    const editorPosition = captureNoteEditorPosition( vaultId, note.id, note.content );
-    const previousVault = snapshotVault();
-    const previousNavigation = snapshotNoteNavigation();
-    const previousWorkspaceUi = snapshotWorkspaceUi();
-
-    if ( vaultSession.backend === 'browser' ) {
-      if ( recentlyDeletedState.notes.length >= RECENTLY_DELETED_LIMIT ) {
-        recentlyDeletedState.error = 'Recently Deleted is full.';
-        notify( 'Recently Deleted is full, so the note was not deleted', 'warning' );
-
-        return false;
-      }
-      const candidateVault = snapshotVaultAfterDeletion( id );
-      const deletedAt = Date.now();
-      const deletedNote: RecentlyDeletedNote = {
-        id: createId( 'deleted' ),
-        note: archivedNote,
-        originalFolderPath,
-        deletedAt,
-        expiresAt: deletedAt + RECENTLY_DELETED_RETENTION,
-        ...( editorPosition ? { editorPosition } : {})
-      };
-      const candidateDeletedNotes = [
-        deletedNote,
-        ...snapshotRecentlyDeletedNotes()
-      ].sort( compareRecentlyDeletedNotes );
-
-      if ( !persistBrowserWorkspace( candidateVault, candidateDeletedNotes ) ) {
-        recentlyDeletedState.error = 'The note could not be moved to Recently Deleted.';
-        notify( 'The note was not deleted because browser storage is full or unavailable', 'warning' );
-
-        return false;
-      }
-
-      applyVaultMutation( () => applyNoteDeletion( id ) );
-      hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      deleteNoteEditorPosition( vaultId, id );
-      deleteNoteEditorHistory( vaultId, id );
-      vaultChanges.acknowledge( vaultChanges.version );
-      recentlyDeletedState.error = null;
-      notify( 'Note moved to Recently Deleted', 'neutral' );
-      scheduleRecentlyDeletedExpiry();
-
-      return true;
-    }
-
-    const path = vaultSession.path;
-    if ( !path ) {
-      return false;
-    }
-
-    applyVaultMutation( () => applyNoteDeletion( id ) );
-    const candidateVault = snapshotVault();
-    const saved = await performNativeRecoverySave(
-      () => archiveWorkspaceNote(
-        path,
-        candidateVault,
-        archivedNote,
-        originalFolderPath,
-        editorPosition,
-        vaultSession.revision
-      ),
-      ( result ) => {
-        applyWorkspaceSaveResult( result );
-        hydrateRecentlyDeletedNotes([
-          result.deletedNote,
-          ...recentlyDeletedState.notes
-        ]);
-        deleteNoteEditorPosition( vaultId, id );
-        deleteNoteEditorHistory( vaultId, id );
-      },
-      async () => {
-        const workspace = await reconcileNativeWorkspace( path );
-        if ( workspace ) {
-          if ( workspace.vault.notes.some( ( candidate ) => candidate.id === id ) ) {
-            restoreNoteNavigation( previousNavigation );
-            restoreWorkspaceUi( previousWorkspaceUi );
-          }
-
-          return true;
-        }
-
-        restoreFailedNoteDeletion(
-          index,
-          archivedNote,
-          previousVault,
-          previousNavigation,
-          previousWorkspaceUi
-        );
-
-        return false;
-      },
-      'The note could not be moved to Recently Deleted.'
-    );
-    if ( !saved ) {
-      return false;
-    }
-
-    if ( !( await flushNoteEditorPositions( vaultId ) ) ) {
-      addVaultWarning( 'The note was recovered safely, but its old editor position could not be removed.' );
-    } else {
-      notifyRecoverySuccess( 'Note moved to Recently Deleted', 'neutral' );
-    }
-    scheduleRecentlyDeletedExpiry();
-
-    return true;
-  });
-}
-
-export async function restoreRecentlyDeletedNote( id: string ): Promise<boolean> {
-  return runRecoveryOperation( async () => {
-    if ( !( await flushVault() ) ) {
-      return false;
-    }
-
-    const deletedNote = recentlyDeletedState.notes.find( ( entry ) => entry.id === id );
-    if ( !deletedNote ) {
-      return false;
-    }
-    if ( deletedNote.expiresAt <= Date.now() ) {
-      recentlyDeletedState.error = 'That deleted note has expired and can no longer be restored.';
-      notify( recentlyDeletedState.error, 'warning' );
-
-      return false;
-    }
-    const previousActiveNoteId = vaultState.activeNoteId;
-    const vaultId = currentEditorPositionVaultId();
-
-    if ( vaultSession.backend === 'browser' ) {
-      const restoredNote = buildBrowserRestoredNote( deletedNote );
-      const candidateVault = snapshotVaultWithRestoredNote( restoredNote );
-      const candidateDeletedNotes = recentlyDeletedState.notes.filter( ( entry ) => entry.id !== id );
-      let editorPositionSaved = true;
-      if ( deletedNote.editorPosition ) {
-        setNoteEditorPosition( vaultId, restoredNote.id, deletedNote.editorPosition );
-        editorPositionSaved = await flushNoteEditorPositions( vaultId );
-      }
-      if ( !persistBrowserWorkspace( candidateVault, candidateDeletedNotes ) ) {
-        if ( deletedNote.editorPosition ) {
-          deleteNoteEditorPosition( vaultId, restoredNote.id );
-          void flushNoteEditorPositions( vaultId );
-        }
-        recentlyDeletedState.error = 'That note could not be restored.';
-        notify( 'The note was not restored because browser storage is full or unavailable', 'warning' );
-
-        return false;
-      }
-
-      applyVaultMutation( () => applyRestoredNote( restoredNote, previousActiveNoteId ) );
-      hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      vaultChanges.acknowledge( vaultChanges.version );
-      recentlyDeletedState.error = null;
-      if ( editorPositionSaved ) {
-        notify( `Restored ${ restoredNote.title }`, 'success' );
-      } else {
-        addVaultWarning( 'The note was restored, but its editor position could not be saved.' );
-      }
-      scheduleRecentlyDeletedExpiry();
-
-      return true;
-    }
-
-    const path = vaultSession.path;
-    if ( !path ) {
-      return false;
-    }
-    const saved = await performNativeRecoverySave(
-      () => restoreRecentlyDeletedNoteNative( path, id, snapshotVault(), vaultSession.revision ),
-      ( result ) => {
-        applyWorkspaceSaveResult( result );
-        applyVaultMutation( () => applyRestoredNote( result.restoredNote, previousActiveNoteId ) );
-        removeRecentlyDeletedEntries([ id ]);
-        if ( result.editorPosition ) {
-          setNoteEditorPosition( vaultId, result.restoredNote.id, result.editorPosition );
-        }
-      },
-      async () => Boolean( await reconcileNativeWorkspace( path ) ),
-      'That note could not be restored.'
-    );
-    if ( !saved ) {
-      return false;
-    }
-
-    if ( !( await flushNoteEditorPositions( vaultId ) ) ) {
-      addVaultWarning( 'The note was restored, but its editor position could not be saved.' );
-    } else {
-      const restoredTitle = vaultState.notes.find( ( note ) => note.id === vaultState.activeNoteId )?.title
-        ?? deletedNote.note.title;
-      notifyRecoverySuccess( `Restored ${ restoredTitle }`, 'success' );
-    }
-    scheduleRecentlyDeletedExpiry();
-
-    return true;
-  });
-}
-
-export async function permanentlyDeleteRecentlyDeletedNote( id: string ): Promise<boolean> {
-  return removeRecentlyDeletedNotes([ id ], 'Note deleted permanently' );
-}
-
-export async function emptyRecentlyDeletedNotes(): Promise<boolean> {
-  const ids = recentlyDeletedState.notes.map( ( entry ) => entry.id );
-  if ( !ids.length ) {
-    return true;
-  }
-
-  return removeRecentlyDeletedNotes( ids, 'Recently Deleted emptied' );
 }
 
 export async function mergeImportedVault(
@@ -1496,782 +1027,6 @@ function folderContainsAssets( folderId: string ): boolean {
   return folderContainsVaultAssets( vaultState, folderPath( folderId ) );
 }
 
-export async function renameVaultImage(
-  image: VaultImageFile,
-  fileName: string
-): Promise<boolean> {
-  const parent = image.relativePath.split( '/' ).slice( 0, -1 ).join( '/' );
-
-  return relocateVaultImage( image, parent, fileName );
-}
-
-export async function moveVaultImageToFolder(
-  image: VaultImageFile,
-  folderId: string | null
-): Promise<boolean> {
-  const fileName = image.relativePath.split( '/' ).at( -1 ) || 'Image.png';
-
-  return relocateVaultImage( image, folderPath( folderId ), fileName );
-}
-
-async function relocateVaultImage(
-  image: VaultImageFile,
-  targetFolderPath: string,
-  requestedFileName: string
-): Promise<boolean> {
-  const fileName = requestedFileName.trim();
-  if ( !isSafeVaultImageFileName( fileName ) ) {
-    notify( 'Enter a safe image file name with a supported extension', 'warning' );
-
-    return false;
-  }
-  const targetRelativePath = targetFolderPath
-    ? `${ targetFolderPath }/${ fileName }`
-    : fileName;
-  if ( targetRelativePath === image.relativePath ) {
-    return false;
-  }
-  const targetKey = targetRelativePath.toLocaleLowerCase();
-  if ( vaultState.imageFiles.some( ( candidate ) =>
-    candidate.relativePath.toLocaleLowerCase() === targetKey
-    && candidate.relativePath.toLocaleLowerCase() !== image.relativePath.toLocaleLowerCase()
-  ) ) {
-    notify( 'An image with that name already exists there', 'warning' );
-
-    return false;
-  }
-  if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
-    notify( 'Image files can be reorganized in the desktop app', 'warning' );
-
-    return false;
-  }
-
-  return runExclusiveVaultDataOperation( false, async () => {
-    if ( !( await flushVault() ) ) {
-      return false;
-    }
-    const currentImage = vaultState.imageFiles.find( ( candidate ) =>
-      ( image.assetId && candidate.assetId === image.assetId )
-      || candidate.relativePath.toLocaleLowerCase() === image.relativePath.toLocaleLowerCase()
-    );
-    if ( !currentImage ) {
-      notify( 'That image can no longer be moved', 'warning' );
-
-      return false;
-    }
-
-    const assetId = currentImage.assetId || createId( 'image' );
-    const noteUpdates = vaultState.notes.flatMap( ( note ): WorkspaceImageNoteUpdate[] => {
-      const content = rewriteVaultImageReferences(
-        vaultState,
-        note.content,
-        note.relativePath,
-        currentImage.relativePath,
-        targetRelativePath,
-        currentImage.assetId,
-        assetId
-      );
-
-      return content === note.content ? [] : [{
-        noteId: note.id,
-        relativePath: note.relativePath,
-        expectedContent: note.content,
-        content
-      }];
-    });
-
-    try {
-      const result = await relocateWorkspaceImage(
-        vaultSession.path!,
-        currentImage.relativePath,
-        targetRelativePath,
-        assetId,
-        noteUpdates,
-        vaultSession.revision
-      );
-      applyRelocatedImageResult( result, noteUpdates );
-      uiState.imageRefreshToken += 1;
-      notify(
-        targetFolderPath
-          ? `Moved image to ${ targetFolderPath }`
-          : 'Moved image to Vault root',
-        'success'
-      );
-
-      return true;
-    } catch ( error ) {
-      const message = errorMessage( error, 'The image could not be moved.' );
-      vaultSession.error = message;
-      vaultSession.conflict = isRevisionConflict( message );
-      notify( message, 'warning' );
-
-      return false;
-    }
-  });
-}
-
-function applyRelocatedImageResult(
-  result: WorkspaceRelocateImageResult,
-  noteUpdates: WorkspaceImageNoteUpdate[]
-): void {
-  const updatesById = new Map( noteUpdates.map( ( update ) => [ update.noteId, update.content ]) );
-  applyVaultMutation( () => {
-    for ( const note of vaultState.notes ) {
-      const content = updatesById.get( note.id );
-      if ( content !== undefined ) {
-        note.content = content;
-        note.updatedAt = Date.now();
-      }
-    }
-    const oldPathKey = result.previousRelativePath.toLocaleLowerCase();
-    const oldFileIndex = vaultState.imageFiles.findIndex( ( candidate ) =>
-      candidate.assetId === result.image.id
-      || candidate.relativePath.toLocaleLowerCase() === oldPathKey
-    );
-    if ( oldFileIndex >= 0 ) {
-      vaultState.imageFiles.splice( oldFileIndex, 1 );
-    }
-    const oldEmbeddedIndex = vaultState.embeddedImages.findIndex( ( candidate ) =>
-      candidate.id === result.image.id
-      || candidate.relativePath.toLocaleLowerCase() === oldPathKey
-    );
-    if ( oldEmbeddedIndex >= 0 ) {
-      vaultState.embeddedImages.splice( oldEmbeddedIndex, 1 );
-    }
-    vaultState.embeddedImages.push( result.image );
-    upsertWorkspaceImageFile({
-      assetId: result.image.id,
-      relativePath: result.image.relativePath,
-      mediaType: result.image.mediaType
-    });
-  });
-  applyWorkspaceSaveResult( result );
-}
-
-export async function renameVaultAttachment(
-  attachment: Pick<VaultAttachmentFile, 'assetId' | 'relativePath'>,
-  fileName: string
-): Promise<boolean> {
-  return relocateVaultAttachment( attachment, {
-    fileName: fileName.trim(),
-    kind: 'rename'
-  });
-}
-
-export async function moveVaultAttachmentToFolder(
-  attachment: Pick<VaultAttachmentFile, 'assetId' | 'relativePath'>,
-  folderId: string | null
-): Promise<boolean> {
-  return relocateVaultAttachment( attachment, {
-    kind: 'move',
-    targetFolderId: folderId
-  });
-}
-
-type VaultAttachmentRelocation = {
-  fileName: string;
-  kind: 'rename';
-} | {
-  kind: 'move';
-  targetFolderId: string | null;
-};
-
-async function relocateVaultAttachment(
-  attachment: Pick<VaultAttachmentFile, 'assetId' | 'relativePath'>,
-  relocation: VaultAttachmentRelocation
-): Promise<boolean> {
-  if (
-    relocation.kind === 'rename'
-    && !isSafeVaultAttachmentFileName( relocation.fileName )
-  ) {
-    notify( 'Enter a safe non-Markdown, non-image file name', 'warning' );
-
-    return false;
-  }
-  if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
-    notify( 'Attachment files can be reorganized in the desktop app', 'warning' );
-
-    return false;
-  }
-
-  return runExclusiveVaultDataOperation( false, async () => {
-    if ( !( await flushVault() ) ) {
-      return false;
-    }
-    const currentAttachment = resolveCurrentVaultAttachment( attachment );
-    if ( !currentAttachment ) {
-      notify( 'That attachment could not be uniquely found in the vault', 'warning' );
-
-      return false;
-    }
-    const currentFileName = currentAttachment.relativePath.split( '/' ).at( -1 )
-      || 'Attachment';
-    const fileName = relocation.kind === 'rename'
-      ? relocation.fileName
-      : currentFileName;
-    const targetFolder = relocation.kind === 'move' && relocation.targetFolderId
-      ? vaultState.folders.find( ( folder ) => folder.id === relocation.targetFolderId )
-      : null;
-    if ( relocation.kind === 'move' && relocation.targetFolderId && !targetFolder ) {
-      notify( 'That destination folder could not be found', 'warning' );
-
-      return false;
-    }
-    const targetFolderPath = relocation.kind === 'rename'
-      ? currentAttachment.relativePath.split( '/' ).slice( 0, -1 ).join( '/' )
-      : folderPath( targetFolder?.id ?? null );
-    const targetRelativePath = targetFolderPath
-      ? `${ targetFolderPath }/${ fileName }`
-      : fileName;
-    if ( targetRelativePath === currentAttachment.relativePath ) {
-      return false;
-    }
-    const targetKey = targetRelativePath.toLocaleLowerCase();
-    if ( vaultState.attachmentFiles.some( ( candidate ) =>
-      candidate.relativePath.toLocaleLowerCase() === targetKey
-      && candidate.relativePath.toLocaleLowerCase()
-        !== currentAttachment.relativePath.toLocaleLowerCase()
-    ) ) {
-      notify( 'A file with that name already exists there', 'warning' );
-
-      return false;
-    }
-
-    const assetId = currentAttachment.assetId || createId( 'attachment' );
-    const noteUpdates = vaultState.notes.flatMap( ( note ): WorkspaceAttachmentNoteUpdate[] => {
-      const content = rewriteVaultAttachmentReferences(
-        vaultState,
-        note.content,
-        note.relativePath,
-        currentAttachment.relativePath,
-        targetRelativePath,
-        currentAttachment.assetId,
-        assetId
-      );
-
-      return content === note.content ? [] : [{
-        noteId: note.id,
-        relativePath: note.relativePath,
-        expectedContent: note.content,
-        content
-      }];
-    });
-
-    try {
-      const result = await relocateWorkspaceAttachment(
-        vaultSession.path!,
-        currentAttachment.relativePath,
-        targetRelativePath,
-        assetId,
-        noteUpdates,
-        vaultSession.revision
-      );
-      applyRelocatedAttachmentResult( result, noteUpdates );
-      uiState.attachmentRefreshToken += 1;
-      notify(
-        relocation.kind === 'rename'
-          ? `Renamed attachment to ${ fileName }`
-          : targetFolderPath
-            ? `Moved attachment to ${ targetFolderPath }`
-            : 'Moved attachment to Vault root',
-        'success'
-      );
-
-      return true;
-    } catch ( error ) {
-      const message = errorMessage( error, 'The attachment could not be renamed or moved.' );
-      vaultSession.error = message;
-      vaultSession.conflict = isRevisionConflict( message );
-      notify( message, 'warning' );
-
-      return false;
-    }
-  });
-}
-
-function resolveCurrentVaultAttachment(
-  attachment: Pick<VaultAttachmentFile, 'assetId' | 'relativePath'>
-): VaultAttachmentFile | undefined {
-  const matches = attachment.assetId
-    ? vaultState.attachmentFiles.filter( ( candidate ) =>
-      candidate.assetId === attachment.assetId
-    )
-    : vaultState.attachmentFiles.filter( ( candidate ) =>
-      candidate.relativePath.toLocaleLowerCase()
-        === attachment.relativePath.toLocaleLowerCase()
-    );
-
-  return matches.length === 1 ? matches[ 0 ] : undefined;
-}
-
-function applyRelocatedAttachmentResult(
-  result: WorkspaceRelocateAttachmentResult,
-  noteUpdates: WorkspaceAttachmentNoteUpdate[]
-): void {
-  const updatesById = new Map( noteUpdates.map( ( update ) => [ update.noteId, update.content ]) );
-  applyVaultMutation( () => {
-    for ( const note of vaultState.notes ) {
-      const content = updatesById.get( note.id );
-      if ( content !== undefined ) {
-        note.content = content;
-        note.updatedAt = Date.now();
-      }
-    }
-    const oldPathKey = result.previousRelativePath.toLocaleLowerCase();
-    const oldFileIndex = vaultState.attachmentFiles.findIndex( ( candidate ) =>
-      candidate.assetId === result.attachment.id
-      || candidate.relativePath.toLocaleLowerCase() === oldPathKey
-    );
-    if ( oldFileIndex >= 0 ) {
-      vaultState.attachmentFiles.splice( oldFileIndex, 1 );
-    }
-    const oldEmbeddedIndex = vaultState.embeddedAttachments.findIndex( ( candidate ) =>
-      candidate.id === result.attachment.id
-      || candidate.relativePath.toLocaleLowerCase() === oldPathKey
-    );
-    if ( oldEmbeddedIndex >= 0 ) {
-      vaultState.embeddedAttachments.splice( oldEmbeddedIndex, 1 );
-    }
-    vaultState.embeddedAttachments.push( result.attachment );
-    upsertWorkspaceAttachmentFile({
-      assetId: result.attachment.id,
-      relativePath: result.attachment.relativePath,
-      mediaType: result.attachment.mediaType,
-      byteLength: result.attachment.byteLength,
-      openingDisabled: result.attachment.openingDisabled
-    });
-  });
-  applyWorkspaceSaveResult( result );
-}
-
-export function cancelVaultAssetDeletion(): void {
-  if ( vaultSession.busy ) {
-    return;
-  }
-  clearAssetDeletionRequest();
-}
-
-function clearAssetDeletionRequest(): void {
-  assetDeletionState.request = null;
-  pendingAssetDeletion = null;
-}
-
-export async function requestVaultAssetDeletion(
-  kind: VaultAssetKind,
-  asset: VaultAssetIdentity
-): Promise<boolean> {
-  if ( assetDeletionState.request ) {
-    return false;
-  }
-
-  return deleteVaultAsset( kind, asset );
-}
-
-export async function confirmVaultAssetDeletion(): Promise<boolean> {
-  const request = assetDeletionState.request;
-  const pending = pendingAssetDeletion;
-  if ( !request || !pending || pending.generation !== sessionGeneration ) {
-    clearAssetDeletionRequest();
-
-    return false;
-  }
-
-  return deleteVaultAsset( request.kind, request, pending.signature );
-}
-
-async function deleteVaultAsset(
-  kind: VaultAssetKind,
-  identity: VaultAssetIdentity,
-  confirmedSignature?: string
-): Promise<boolean> {
-  const path = vaultSession.path;
-  if ( vaultSession.backend !== 'native' || !path || uiState.vaultChooserOpen ) {
-    return false;
-  }
-
-  return runExclusiveVaultDataOperation( false, async () => {
-    const generation = sessionGeneration;
-    uiState.commandOpen = false;
-    if ( !( await flushVault() ) ) {
-      clearAssetDeletionRequest();
-
-      return false;
-    }
-    if ( generation !== sessionGeneration || !canEditVault.value ) {
-      clearAssetDeletionRequest();
-
-      return false;
-    }
-
-    const files = kind === 'image' ? vaultState.imageFiles : vaultState.attachmentFiles;
-    // Resolve the selected identity exactly; never choose a case-sensitive sibling.
-    const asset = identity.assetId
-      ? files.find( ( file ) => file.assetId === identity.assetId )
-      : files.find( ( file ) => file.relativePath === identity.relativePath );
-    if ( !asset ) {
-      clearAssetDeletionRequest();
-      notify( 'The file is no longer in this vault. Reload the vault and try again.', 'warning' );
-
-      return false;
-    }
-    const plan = planVaultAssetDeletion( vaultState, recentlyDeletedState.notes, kind, asset );
-    const signature = JSON.stringify([ kind, asset.assetId, asset.relativePath, plan ]);
-    if (
-      confirmedSignature !== undefined && signature !== confirmedSignature
-      || confirmedSignature === undefined && plan.referenceCount > 0
-    ) {
-      pendingAssetDeletion = { generation, signature };
-      assetDeletionState.request = {
-        kind,
-        assetId: asset.assetId,
-        relativePath: asset.relativePath,
-        referenceCount: plan.referenceCount,
-        recoveryReferenceCount: plan.recoveryReferenceCount,
-        changed: confirmedSignature !== undefined
-      };
-
-      return false;
-    }
-
-    const revision = vaultSession.revision;
-    try {
-      const result = await deleteWorkspaceAsset(
-        path,
-        kind,
-        asset.relativePath,
-        asset.assetId,
-        plan.noteUpdates,
-        plan.recoveryUpdates,
-        revision
-      );
-      if ( generation !== sessionGeneration ) {
-        return false;
-      }
-      applyAssetDeletion( kind, asset, plan, result );
-      clearAssetDeletionRequest();
-      // A committed deletion can report an old revision if final validation failed.
-      // Show the existing recovery UI before another operation can use stale state.
-      if ( result.revision === revision ) {
-        showAssetDeletionReload( 'The file was deleted, but the vault needs to be reloaded before continuing.' );
-      } else {
-        const name = asset.relativePath.split( '/' ).at( -1 );
-        notify( result.warnings[ 0 ] || `Deleted ${ name }`, result.warnings.length ? 'warning' : 'success' );
-      }
-
-      return true;
-    } catch ( error ) {
-      if ( generation === sessionGeneration ) {
-        clearAssetDeletionRequest();
-        showAssetDeletionReload( errorMessage( error, 'The file could not be deleted. Reload the vault and try again.' ) );
-      }
-
-      return false;
-    }
-  });
-}
-
-function showAssetDeletionReload( message: string ): void {
-  vaultSession.error = message;
-  vaultSession.conflict = true;
-  uiState.saveStatus = 'error';
-  uiState.vaultChooserOpen = true;
-  notify( message, 'warning' );
-}
-
-function applyAssetDeletion(
-  kind: VaultAssetKind,
-  asset: VaultAssetIdentity,
-  plan: VaultAssetDeletionPlan,
-  result: WorkspaceSaveResult
-): void {
-  const liveUpdates = new Map( plan.noteUpdates.map( ( update ) => [ update.noteId, update.content ]) );
-  const recoveryUpdates = new Map( plan.recoveryUpdates.map( ( update ) => [ update.noteId, update.content ]) );
-  const vaultId = currentEditorPositionVaultId();
-  applyVaultMutation( () => {
-    for ( const note of vaultState.notes ) {
-      const content = liveUpdates.get( note.id );
-      if ( content !== undefined ) {
-        note.content = content;
-        note.updatedAt = result.savedAt;
-        resetNoteEditorHistory( vaultId, note.id );
-      }
-    }
-    if ( kind === 'image' ) {
-      vaultState.imageFiles = vaultState.imageFiles.filter( ( file ) => file.relativePath !== asset.relativePath );
-      vaultState.embeddedImages = vaultState.embeddedImages.filter( ( file ) => file.relativePath !== asset.relativePath );
-    } else {
-      vaultState.attachmentFiles = vaultState.attachmentFiles.filter( ( file ) => file.relativePath !== asset.relativePath );
-      vaultState.embeddedAttachments = vaultState.embeddedAttachments.filter( ( file ) => file.relativePath !== asset.relativePath );
-    }
-  });
-  for ( const entry of recentlyDeletedState.notes ) {
-    const content = recoveryUpdates.get( entry.id );
-    if ( content !== undefined ) {
-      entry.note.content = content;
-      delete entry.editorPosition;
-      deleteNoteEditorHistory( vaultId, entry.note.id );
-    }
-  }
-  uiState.imageRefreshToken += 1;
-  uiState.attachmentRefreshToken += 1;
-  applyWorkspaceSaveResult( result );
-}
-
-const ARCHIVE_COPY_DIRECTORY_KEY = 'obsidian-at-home.archive-copy-directory.v1';
-
-export async function activateVaultAttachment(
-  attachment: Pick<
-    VaultAttachmentFile,
-    'assetId' | 'mediaType' | 'openingDisabled' | 'relativePath'
-  >
-): Promise<void> {
-  if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
-    notify( 'Attachment files can be opened in the desktop app', 'warning' );
-
-    return;
-  }
-  if ( markdownAttachmentIsExecutable(
-    attachment.relativePath,
-    attachment.openingDisabled
-  ) ) {
-    notify( 'Opening executable or installer attachments is not supported', 'warning' );
-
-    return;
-  }
-  try {
-    if ( markdownAttachmentIsArchive( attachment.relativePath, attachment.mediaType ) ) {
-      let preferredDirectory: string | undefined;
-      try {
-        preferredDirectory = window.localStorage.getItem( ARCHIVE_COPY_DIRECTORY_KEY )
-          || undefined;
-      } catch {
-        // A Downloads default remains available when browser storage is unavailable.
-      }
-      const result = await saveWorkspaceAttachmentCopy(
-        vaultSession.path,
-        attachment.relativePath,
-        attachment.assetId,
-        preferredDirectory
-      );
-      if ( !result ) {
-        return;
-      }
-      const directory = parentSystemPath( result.path );
-      if ( directory ) {
-        try {
-          window.localStorage.setItem( ARCHIVE_COPY_DIRECTORY_KEY, directory );
-        } catch {
-          // Remembering the folder is helpful but not required for a successful copy.
-        }
-      }
-      notify( 'Saved the archive outside the vault', 'success', {
-        label: 'Reveal archive',
-        run: () => {
-          void revealItemInDir( result.path ).catch( ( error ) =>
-            notify( errorMessage( error, 'The saved archive could not be revealed.' ), 'warning' )
-          );
-        }
-      });
-
-      return;
-    }
-    await openWorkspaceAttachment(
-      vaultSession.path,
-      attachment.relativePath,
-      attachment.assetId
-    );
-  } catch ( error ) {
-    notify( errorMessage( error, 'The attachment could not be opened.' ), 'warning' );
-  }
-}
-
-export interface VaultItemLocator {
-  assetId?: string;
-  itemId?: string;
-  kind: WorkspaceVaultItemKind;
-  relativePath: string;
-}
-
-export async function locateVaultItem( locator: VaultItemLocator ): Promise<string | undefined> {
-  if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
-    return locator.relativePath;
-  }
-  const sourcePath = vaultSession.path;
-  let relativePath = locator.relativePath;
-  if ( locator.kind === 'note' || locator.kind === 'folder' ) {
-    if ( !( await flushVault() ) ) {
-      return undefined;
-    }
-    if ( vaultSession.backend !== 'native' || vaultSession.path !== sourcePath ) {
-      return undefined;
-    }
-    if ( locator.kind === 'note' ) {
-      const note = locator.itemId
-        ? vaultState.notes.find( ( candidate ) => candidate.id === locator.itemId )
-        : vaultState.notes.find( ( candidate ) => candidate.relativePath === locator.relativePath );
-      relativePath = note?.relativePath ?? '';
-    } else {
-      const folder = locator.itemId
-        ? vaultState.folders.find( ( candidate ) => candidate.id === locator.itemId )
-        : vaultState.folders.find( ( candidate ) => folderPath( candidate.id ) === locator.relativePath );
-      relativePath = folder ? folderPath( folder.id ) : '';
-    }
-    if ( !relativePath ) {
-      notify( 'The vault item is no longer available.', 'warning' );
-
-      return undefined;
-    }
-  }
-  try {
-    return await locateWorkspaceVaultItem(
-      sourcePath,
-      locator.kind,
-      relativePath,
-      locator.assetId
-    );
-  } catch ( error ) {
-    notify( errorMessage( error, 'The vault item could not be located.' ), 'warning' );
-
-    return undefined;
-  }
-}
-
-export async function revealVaultItemInTree( locator: VaultItemLocator ): Promise<boolean> {
-  const operation = ++vaultTreeRevealOperation;
-  const sourceVaultKey = currentVaultTreeKey();
-  const locatedPath = await locateVaultItem( locator );
-  if (
-    !locatedPath
-    || operation !== vaultTreeRevealOperation
-    || sourceVaultKey !== currentVaultTreeKey()
-  ) {
-    return false;
-  }
-
-  const target = currentVaultTreeItem( locator, locatedPath );
-  if ( !target ) {
-    notify( "The vault item could not be found in the app's file tree.", 'warning' );
-
-    return false;
-  }
-
-  uiState.commandOpen = false;
-  uiState.tool = 'notes';
-  uiState.notesView = 'editor';
-  uiState.explorerOpen = true;
-  uiState.noteFilter = '';
-  vaultState.selectedFolderId = 'all';
-  vaultTreeRevealTarget.assetId = target.assetId ?? null;
-  vaultTreeRevealTarget.kind = locator.kind;
-  vaultTreeRevealTarget.relativePath = target.relativePath;
-  vaultTreeRevealTarget.vaultKey = sourceVaultKey;
-  vaultTreeRevealTarget.requestId += 1;
-
-  return true;
-}
-
-export function vaultTreeItemIsRevealed( locator: VaultItemLocator ): boolean {
-  if (
-    !vaultTreeRevealTarget.requestId
-    || vaultTreeRevealTarget.vaultKey !== currentVaultTreeKey()
-    || vaultTreeRevealTarget.kind !== locator.kind
-  ) {
-    return false;
-  }
-  if ( vaultTreeRevealTarget.assetId ) {
-    return locator.assetId === vaultTreeRevealTarget.assetId;
-  }
-
-  return locator.relativePath === vaultTreeRevealTarget.relativePath;
-}
-
-export function vaultTreeRevealIncludesFolder( relativePath: string ): boolean {
-  if (
-    !vaultTreeRevealTarget.requestId
-    || vaultTreeRevealTarget.vaultKey !== currentVaultTreeKey()
-  ) {
-    return false;
-  }
-
-  return vaultTreeRevealTarget.relativePath === relativePath
-    || vaultTreeRevealTarget.relativePath.startsWith( `${ relativePath }/` );
-}
-
-export async function showVaultItemInFolder( locator: VaultItemLocator ): Promise<void> {
-  if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
-    notify( 'Showing vault files in a system folder is available in the desktop app', 'warning' );
-
-    return;
-  }
-  const sourcePath = vaultSession.path;
-  const relativePath = await locateVaultItem( locator );
-  if (
-    !relativePath
-    || vaultSession.backend !== 'native'
-    || vaultSession.path !== sourcePath
-  ) {
-    return;
-  }
-  try {
-    await showWorkspaceVaultItemInFolder(
-      sourcePath,
-      locator.kind,
-      relativePath,
-      locator.assetId
-    );
-  } catch ( error ) {
-    notify( errorMessage( error, 'The vault item could not be shown in its folder.' ), 'warning' );
-  }
-}
-
-function currentVaultTreeKey(): string {
-  return `${ vaultSession.backend }\u0000${ vaultSession.path ?? vaultState.name }`;
-}
-
-function currentVaultTreeItem(
-  locator: VaultItemLocator,
-  locatedPath: string
-): { assetId?: string; relativePath: string } | undefined {
-  if ( locator.kind === 'attachment' ) {
-    const attachment = locator.assetId
-      ? vaultState.attachmentFiles.find( ( candidate ) => candidate.assetId === locator.assetId )
-      : vaultState.attachmentFiles.find( ( candidate ) => candidate.relativePath === locatedPath );
-
-    return attachment
-      ? {
-        ...( attachment.assetId ? { assetId: attachment.assetId } : {}),
-        relativePath: attachment.relativePath
-      }
-      : undefined;
-  }
-  if ( locator.kind === 'image' ) {
-    const image = locator.assetId
-      ? vaultState.imageFiles.find( ( candidate ) => candidate.assetId === locator.assetId )
-      : vaultState.imageFiles.find( ( candidate ) => candidate.relativePath === locatedPath );
-
-    return image
-      ? {
-        ...( image.assetId ? { assetId: image.assetId } : {}),
-        relativePath: image.relativePath
-      }
-      : undefined;
-  }
-  if ( locator.kind === 'note' ) {
-    const note = vaultState.notes.find( ( candidate ) => candidate.relativePath === locatedPath );
-
-    return note ? { relativePath: note.relativePath } : undefined;
-  }
-  const folder = vaultState.folders.find( ( candidate ) => folderPath( candidate.id ) === locatedPath );
-
-  return folder ? { relativePath: locatedPath } : undefined;
-}
-
-function parentSystemPath( path: string ): string | undefined {
-  const index = Math.max( path.lastIndexOf( '/' ), path.lastIndexOf( '\\' ) );
-
-  return index > 0 ? path.slice( 0, index ) : undefined;
-}
-
 function rewriteAssetDestinationsForNotePath(
   content: string,
   sourceNotePath: string,
@@ -2359,28 +1114,6 @@ async function runExclusiveVaultDataOperation<T>(
   try {
     return await operation();
   } finally {
-    vaultSession.busy = false;
-    scheduleRecentlyDeletedExpiry();
-  }
-}
-
-async function runRecoveryOperation( operation: () => Promise<boolean> ): Promise<boolean> {
-  if (
-    recentlyDeletedState.busy
-    || vaultSession.busy
-    || !canEditVault.value
-  ) {
-    return false;
-  }
-
-  recentlyDeletedState.busy = true;
-  recentlyDeletedState.error = null;
-  vaultSession.busy = true;
-  uiState.commandOpen = false;
-  try {
-    return await operation();
-  } finally {
-    recentlyDeletedState.busy = false;
     vaultSession.busy = false;
     scheduleRecentlyDeletedExpiry();
   }
@@ -2514,266 +1247,6 @@ function applySavedNotePaths( notePaths: Record<string, string> | undefined ): v
   });
 }
 
-export function applyEmbeddedImageResult( result: WorkspaceEmbedImageResult ): void {
-  if ( !canEditVault.value ) {
-    return;
-  }
-  applyVaultMutation( () => {
-    const index = vaultState.embeddedImages.findIndex( ( image ) => image.id === result.image.id );
-    if ( index >= 0 ) {
-      vaultState.embeddedImages.splice( index, 1, result.image );
-    } else {
-      vaultState.embeddedImages.push( result.image );
-    }
-    upsertWorkspaceImageFile({
-      assetId: result.image.id,
-      relativePath: result.image.relativePath,
-      mediaType: result.image.mediaType
-    });
-  });
-  applyWorkspaceSaveResult( result );
-  uiState.imageRefreshToken += 1;
-}
-
-export function applyEmbeddedAttachmentResult(
-  result: WorkspaceEmbedAttachmentResult
-): void {
-  if ( !canEditVault.value ) {
-    return;
-  }
-  applyVaultMutation( () => {
-    const index = vaultState.embeddedAttachments.findIndex(
-      ( attachment ) => attachment.id === result.attachment.id
-    );
-    if ( index >= 0 ) {
-      vaultState.embeddedAttachments.splice( index, 1, result.attachment );
-    } else {
-      vaultState.embeddedAttachments.push( result.attachment );
-    }
-    upsertWorkspaceAttachmentFile({
-      assetId: result.attachment.id,
-      relativePath: result.attachment.relativePath,
-      mediaType: result.attachment.mediaType,
-      byteLength: result.attachment.byteLength,
-      openingDisabled: result.attachment.openingDisabled
-    });
-  });
-  applyWorkspaceSaveResult( result );
-  uiState.attachmentRefreshToken += 1;
-}
-
-export function applyExternalAssetDiscardResult(
-  result: WorkspaceExternalAssetDiscardResult
-): void {
-  applyWorkspaceSaveResult( result );
-}
-
-function applyWorkspaceImageFiles( images: VaultImageFile[]): void {
-  applyVaultMutation( () => {
-    for ( const image of images ) {
-      upsertWorkspaceImageFile( image );
-    }
-  });
-}
-
-function applyWorkspaceAttachmentFiles( attachments: VaultAttachmentFile[]): void {
-  applyVaultMutation( () => {
-    for ( const attachment of attachments ) {
-      upsertWorkspaceAttachmentFile( attachment );
-    }
-  });
-}
-
-function upsertWorkspaceImageFile( image: VaultImageFile ): void {
-  upsertVaultImageFile( vaultState, image, () => createId( 'folder' ) );
-}
-
-function upsertWorkspaceAttachmentFile( attachment: VaultAttachmentFile ): void {
-  upsertVaultAttachmentFile( vaultState, attachment, () => createId( 'folder' ) );
-}
-
-function addVaultWarning( message: string ): void {
-  vaultSession.warnings = [ message, ...vaultSession.warnings ].slice( 0, 200 );
-  notify( message, 'warning' );
-}
-
-function notifyRecoverySuccess( message: string, tone: ToastTone ): void {
-  if ( vaultSession.warnings.length ) {
-    notify( vaultSession.warnings[ 0 ], 'warning' );
-  } else {
-    notify( message, tone );
-  }
-}
-
-async function removeRecentlyDeletedNotes( ids: string[], successMessage: string ): Promise<boolean> {
-  return runRecoveryOperation( async () => {
-    const uniqueIds = [ ...new Set( ids ) ];
-    const availableIds = new Set( recentlyDeletedState.notes.map( ( entry ) => entry.id ) );
-    if (
-      !uniqueIds.length
-      || uniqueIds.some( ( id ) => !availableIds.has( id ) )
-    ) {
-      return false;
-    }
-    if ( !( await flushVault() ) ) {
-      return false;
-    }
-
-    if ( vaultSession.backend === 'browser' ) {
-      const removedIds = new Set( uniqueIds );
-      const candidateDeletedNotes = recentlyDeletedState.notes.filter(
-        ( entry ) => !removedIds.has( entry.id )
-      );
-      if ( !persistBrowserWorkspace( snapshotVault(), candidateDeletedNotes ) ) {
-        recentlyDeletedState.error = 'Recently Deleted could not be updated.';
-        notify( 'Recently Deleted was not changed because browser storage is unavailable', 'warning' );
-
-        return false;
-      }
-
-      hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      vaultChanges.acknowledge( vaultChanges.version );
-      recentlyDeletedState.error = null;
-      notify( successMessage, 'neutral' );
-      scheduleRecentlyDeletedExpiry();
-
-      return true;
-    }
-
-    const path = vaultSession.path;
-    if ( !path ) {
-      return false;
-    }
-    const saved = await performNativeRecoverySave(
-      () => deleteRecentlyDeletedNotes( path, uniqueIds, vaultSession.revision ),
-      ( result ) => {
-        applyWorkspaceSaveResult( result );
-        removeRecentlyDeletedEntries( result.removedIds );
-      },
-      async () => Boolean( await reconcileNativeWorkspace( path ) ),
-      'Recently Deleted could not be updated.'
-    );
-    if ( saved ) {
-      notifyRecoverySuccess( successMessage, 'neutral' );
-      scheduleRecentlyDeletedExpiry();
-    }
-
-    return saved;
-  });
-}
-
-async function pruneExpiredRecentlyDeletedNotes(): Promise<boolean> {
-  if ( !canEditVault.value ) {
-    return false;
-  }
-  const now = Date.now();
-  if ( !recentlyDeletedState.notes.some( ( entry ) => entry.expiresAt <= now ) ) {
-    scheduleRecentlyDeletedExpiry();
-
-    return true;
-  }
-
-  const pruned = await runRecoveryOperation( async () => {
-    if ( !( await flushVault() ) ) {
-      return false;
-    }
-
-    if ( vaultSession.backend === 'browser' ) {
-      const candidateDeletedNotes = recentlyDeletedState.notes.filter(
-        ( entry ) => entry.expiresAt > Date.now()
-      );
-      if ( !persistBrowserWorkspace( snapshotVault(), candidateDeletedNotes ) ) {
-        recentlyDeletedState.error = 'Expired notes could not be removed safely.';
-        addVaultWarning( 'Expired notes remain recoverable because browser storage could not be updated.' );
-
-        return false;
-      }
-
-      hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      vaultChanges.acknowledge( vaultChanges.version );
-      recentlyDeletedState.error = null;
-
-      return true;
-    }
-
-    const path = vaultSession.path;
-    if ( !path ) {
-      return false;
-    }
-
-    return performNativeRecoverySave(
-      () => pruneRecentlyDeletedNotes( path, vaultSession.revision ),
-      ( result ) => {
-        applyWorkspaceSaveResult( result );
-        removeRecentlyDeletedEntries( result.removedIds );
-      },
-      async () => Boolean( await reconcileNativeWorkspace( path ) ),
-      'Expired notes could not be removed safely.'
-    );
-  });
-
-  const expiredEntriesRemain = recentlyDeletedState.notes.some(
-    ( entry ) => entry.expiresAt <= Date.now()
-  );
-  if ( pruned && !expiredEntriesRemain ) {
-    scheduleRecentlyDeletedExpiry();
-  } else {
-    scheduleRecentlyDeletedExpiryRetry();
-  }
-  if ( pruned && vaultSession.backend === 'native' && vaultSession.warnings.length ) {
-    if ( expiredEntriesRemain ) {
-      recentlyDeletedState.error = vaultSession.warnings[ 0 ];
-    }
-    notify( vaultSession.warnings[ 0 ], 'warning' );
-  }
-
-  return pruned;
-}
-
-function scheduleRecentlyDeletedExpiry(): void {
-  clearTimeout( recentlyDeletedTimer );
-  recentlyDeletedTimer = undefined;
-  if ( !recentlyDeletedState.notes.length ) {
-    recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
-
-    return;
-  }
-  if ( !canEditVault.value ) {
-    return;
-  }
-
-  const nextExpiry = recentlyDeletedState.notes.reduce(
-    ( earliest, entry ) => Math.min( earliest, entry.expiresAt ),
-    Number.POSITIVE_INFINITY
-  );
-  const delay = Math.max( 0, nextExpiry - Date.now() );
-  if ( delay > 0 ) {
-    recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
-  }
-  recentlyDeletedTimer = setTimeout(
-    () => void pruneExpiredRecentlyDeletedNotes(),
-    Math.max( 25, Math.min( delay, 2_147_483_647 ) )
-  );
-}
-
-function scheduleRecentlyDeletedExpiryRetry(): void {
-  clearTimeout( recentlyDeletedTimer );
-  recentlyDeletedTimer = undefined;
-  if ( !recentlyDeletedState.notes.length || !canEditVault.value ) {
-    return;
-  }
-
-  const delay = recentlyDeletedRetryDelay;
-  recentlyDeletedRetryDelay = Math.min(
-    recentlyDeletedRetryDelay * 2,
-    RECENTLY_DELETED_RETRY_MAX_DELAY
-  );
-  recentlyDeletedTimer = setTimeout(
-    () => void pruneExpiredRecentlyDeletedNotes(),
-    delay
-  );
-}
-
 function applyVaultMutation( mutation: () => void ): void {
   suppressPersistence += 1;
   try {
@@ -2783,169 +1256,8 @@ function applyVaultMutation( mutation: () => void ): void {
   }
 }
 
-function applyNoteDeletion( id: string ): void {
-  const index = vaultState.notes.findIndex( ( note ) => note.id === id );
-  if ( index < 0 ) {
-    return;
-  }
-
-  const wasActive = vaultState.activeNoteId === id;
-  const fallbackId = wasActive ? noteDeletionFallback( id ) : undefined;
-  vaultState.notes.splice( index, 1 );
-  removeRecentNote( id );
-  removeNoteFromNavigation( id );
-  if (
-    wasActive
-    && ( !fallbackId || !activateNoteAfterDeletion( fallbackId ) )
-  ) {
-    vaultState.activeNoteId = null;
-  }
-}
-
-function snapshotVaultAfterDeletion( id: string ): VaultData {
-  const previousVault = snapshotVault();
-  const previousNavigation = snapshotNoteNavigation();
-  const previousWorkspaceUi = snapshotWorkspaceUi();
-  applyVaultMutation( () => applyNoteDeletion( id ) );
-  const candidateVault = snapshotVault();
-  hydrateVault( previousVault );
-  restoreNoteNavigation( previousNavigation );
-  restoreWorkspaceUi( previousWorkspaceUi );
-
-  return candidateVault;
-}
-
-function restoreFailedNoteDeletion(
-  index: number,
-  note: Note,
-  previousVault: VaultData,
-  previousNavigation: NoteNavigationState,
-  previousWorkspaceUi: WorkspaceUiSnapshot
-): void {
-  applyVaultMutation( () => {
-    if ( !noteExists( note.id ) ) {
-      vaultState.notes.splice( Math.min( index, vaultState.notes.length ), 0, cloneValue( note ) );
-    }
-    vaultState.activeNoteId = previousVault.activeNoteId;
-    vaultState.recentNoteIds.splice(
-      0,
-      vaultState.recentNoteIds.length,
-      ...previousVault.recentNoteIds
-    );
-    vaultState.selectedFolderId = previousVault.selectedFolderId;
-    restoreNoteNavigation( previousNavigation );
-    restoreWorkspaceUi( previousWorkspaceUi );
-  });
-}
-
-function applyRestoredNote( note: Note, previousActiveNoteId: string | null ): void {
-  if ( noteExists( note.id ) ) {
-    return;
-  }
-
-  vaultState.notes.unshift( cloneValue( note ) );
-  recordDirectNoteNavigation( previousActiveNoteId, note.id );
-  activateNote( note.id );
-  vaultState.selectedFolderId = 'all';
-  uiState.tool = 'notes';
-  uiState.notesView = 'editor';
-  uiState.noteFilter = '';
-}
-
-function snapshotVaultWithRestoredNote( note: Note ): VaultData {
-  const previousVault = snapshotVault();
-  const previousNavigation = snapshotNoteNavigation();
-  const previousWorkspaceUi = snapshotWorkspaceUi();
-  applyVaultMutation( () => applyRestoredNote( note, vaultState.activeNoteId ) );
-  const candidateVault = snapshotVault();
-  hydrateVault( previousVault );
-  restoreNoteNavigation( previousNavigation );
-  restoreWorkspaceUi( previousWorkspaceUi );
-
-  return candidateVault;
-}
-
-function buildBrowserRestoredNote( deletedNote: RecentlyDeletedNote ): Note {
-  const originalFolderId = folderIdForPath( deletedNote.originalFolderPath );
-  const folderId = originalFolderId ?? null;
-  const baseTitle = deletedNote.note.title.trim() || 'Untitled note';
-  let title = baseTitle;
-  let suffix = 2;
-  while ( restoredTitleConflicts( title, folderId ) ) {
-    title = `${ baseTitle } ${ suffix }`;
-    suffix += 1;
-  }
-
-  const originalExtension = deletedNote.note.relativePath.toLocaleLowerCase().endsWith( '.markdown' )
-    ? 'markdown'
-    : 'md';
-  const restoredFolderPath = folderId ? folderPath( folderId ) : '';
-  const relativePath = `${ restoredFolderPath ? `${ restoredFolderPath }/` : '' }${ safeNoteStem( title ) }.${ originalExtension }`;
-
-  return normalizeNote({
-    ...cloneValue( deletedNote.note ),
-    id: noteExists( deletedNote.note.id ) ? createId( 'note' ) : deletedNote.note.id,
-    title,
-    relativePath,
-    folderId
-  });
-}
-
-function folderIdForPath( path: string ): string | undefined {
-  if ( !path ) {
-    return undefined;
-  }
-
-  return vaultState.folders.find( ( folder ) => folderPath( folder.id ) === path )?.id;
-}
-
-function restoredTitleConflicts( title: string, folderId: string | null ): boolean {
-  const note: Note = {
-    id: '',
-    title,
-    content: '',
-    relativePath: '',
-    folderId,
-    tags: [],
-    pinned: false,
-    createdAt: 0,
-    updatedAt: 0
-  };
-
-  return vaultState.notes.some(
-    ( candidate ) => candidate.folderId === folderId && noteStemKey( candidate ) === noteStemKey( note )
-  ) || vaultState.folders.some(
-    ( folder ) => folder.parentId === folderId && folderConflictsWithNote( folder.name, note )
-  );
-}
-
-function removeRecentlyDeletedEntries( ids: string[]): void {
-  const removedIds = new Set( ids );
-  hydrateRecentlyDeletedNotes(
-    recentlyDeletedState.notes.filter( ( entry ) => !removedIds.has( entry.id ) )
-  );
-}
-
-function snapshotWorkspaceUi(): WorkspaceUiSnapshot {
-  return {
-    tool: uiState.tool,
-    notesView: uiState.notesView,
-    noteFilter: uiState.noteFilter
-  };
-}
-
-function restoreWorkspaceUi( snapshot: WorkspaceUiSnapshot ): void {
-  uiState.tool = snapshot.tool;
-  uiState.notesView = snapshot.notesView;
-  uiState.noteFilter = snapshot.noteFilter;
-}
-
 function descendantFolderIds( id: string ): string[] {
   return vaultDescendantFolderIds( vaultState, id );
-}
-
-function readStoredVault(): StoredBrowserWorkspace | null {
-  return readBrowserWorkspace( normalizeVault );
 }
 
 function snapshotVault(): VaultData {
@@ -3021,10 +1333,6 @@ function snapshotVaultForSave(): VaultData {
   return snapshot;
 }
 
-function snapshotRecentlyDeletedNotes(): RecentlyDeletedNote[] {
-  return cloneValue( recentlyDeletedState.notes );
-}
-
 function hydrateVault( vault: Partial<VaultData> ): void {
   pendingNoteOriginalPaths.clear();
   suppressPersistence += 1;
@@ -3032,15 +1340,6 @@ function hydrateVault( vault: Partial<VaultData> ): void {
     Object.assign( vaultState, normalizeVault( vault ) );
   } finally {
     suppressPersistence -= 1;
-  }
-}
-
-function hydrateRecentlyDeletedNotes( notes: RecentlyDeletedNote[]): void {
-  recentlyDeletedState.notes = cloneValue( notes ).sort( compareRecentlyDeletedNotes );
-  if ( !notes.length ) {
-    clearTimeout( recentlyDeletedTimer );
-    recentlyDeletedTimer = undefined;
-    uiState.notesView = 'editor';
   }
 }
 
@@ -3097,27 +1396,6 @@ function currentEditorPositionVaultId(): string {
   return editorPositionVaultId( vaultSession.backend, vaultSession.path );
 }
 
-async function flushBeforeVaultChange(): Promise<boolean> {
-  if ( vaultChanges.hasChanges ) {
-    if ( vaultSession.phase !== 'ready' ) {
-      vaultSession.error = 'Choose a vault before saving changes.';
-
-      return false;
-    }
-    if ( !( await flushVault() ) ) {
-      vaultSession.error = 'Save the current changes before switching vaults.';
-
-      return false;
-    }
-  }
-  const positionsSaved = await flushNoteEditorPositions( currentEditorPositionVaultId() );
-  if ( !positionsSaved ) {
-    vaultSession.error = 'Save the current document position before switching vaults.';
-  }
-
-  return positionsSaved;
-}
-
 function persistBrowserWorkspace(
   vault: VaultData,
   recentlyDeletedNotes: RecentlyDeletedNote[]
@@ -3135,145 +1413,6 @@ function persistBrowserWorkspace(
 
     return false;
   }
-}
-
-function installVaultLifecycleHandlers(): void {
-  if ( typeof window === 'undefined' || externalCheckTimer ) {
-    return;
-  }
-
-  window.addEventListener( 'blur', () => void flushApplicationState() );
-  window.addEventListener( 'focus', () => {
-    void ( async () => {
-      await refreshWorkspaceFromDisk();
-      await pruneExpiredRecentlyDeletedNotes();
-    })();
-  });
-  window.addEventListener( 'beforeunload', () => {
-    void flushVault();
-    void flushNoteEditorPositions();
-  });
-  document.addEventListener( 'visibilitychange', () => {
-    if ( document.visibilityState === 'hidden' ) {
-      void flushApplicationState();
-    } else {
-      void ( async () => {
-        await refreshWorkspaceFromDisk();
-        await pruneExpiredRecentlyDeletedNotes();
-      })();
-    }
-  });
-
-  if ( vaultSession.backend === 'native' ) {
-    void installNativeCloseHandler();
-  }
-
-  externalCheckTimer = setInterval(
-    () => void refreshWorkspaceFromDisk(),
-    EXTERNAL_CHECK_DELAY
-  );
-}
-
-async function flushApplicationState(): Promise<void> {
-  await flushVault();
-  await flushNoteEditorPositions();
-}
-
-async function installNativeCloseHandler(): Promise<void> {
-  if ( closeHandlerInstalled ) {
-    return;
-  }
-  closeHandlerInstalled = true;
-  const appWindow = getCurrentWindow();
-  try {
-    await appWindow.onCloseRequested( async ( event ) => {
-      if ( closingAfterSave ) {
-        return;
-      }
-      if ( vaultSession.busy ) {
-        event.preventDefault();
-        notify( 'Wait for the current vault action to finish before closing', 'warning' );
-
-        return;
-      }
-      if (
-        !vaultChanges.hasChanges
-        && !saveInFlight
-        && !hasPendingNoteEditorPositions()
-      ) {
-        return;
-      }
-      event.preventDefault();
-      const saved = await flushVault();
-      if ( !saved ) {
-        notify( vaultSession.error || 'Save the current changes before closing', 'warning' );
-
-        return;
-      }
-      const positionsSaved = await flushNoteEditorPositions();
-      if ( !positionsSaved ) {
-        notify( 'Notes are saved, but document positions could not be saved', 'warning' );
-      }
-      closingAfterSave = true;
-      await appWindow.destroy();
-    });
-  } catch ( error ) {
-    closeHandlerInstalled = false;
-    vaultSession.error = errorMessage( error, 'Could not install the safe-close handler.' );
-  }
-}
-
-async function refreshWorkspaceFromDisk(): Promise<void> {
-  const path = vaultSession.path;
-  if (
-    vaultSession.backend !== 'native'
-    || vaultSession.phase !== 'ready'
-    || !path
-    || vaultSession.busy
-    || assetDeletionState.request !== null
-    || uiState.vaultChooserOpen
-    || checkingExternalChanges
-    || document.visibilityState === 'hidden'
-    || saveInFlight
-    || recoverySaveInFlight
-    || vaultChanges.hasChanges
-  ) {
-    return;
-  }
-
-  checkingExternalChanges = true;
-  const generation = sessionGeneration;
-  try {
-    const revision = await getWorkspaceRevision( path );
-    if ( revision === vaultSession.revision ) {
-      return;
-    }
-    await flushNoteEditorPositions( currentEditorPositionVaultId() );
-    const workspace = await openWorkspace( path, createEmptyVault() );
-    if (
-      generation !== sessionGeneration
-      || path !== vaultSession.path
-      || vaultSession.busy
-      || assetDeletionState.request !== null
-      || recoverySaveInFlight
-      || vaultChanges.hasChanges
-    ) {
-      return;
-    }
-    applyWorkspace( workspace );
-    notify( 'Reloaded changes from the vault folder', 'neutral' );
-  } catch ( error ) {
-    if ( generation === sessionGeneration && path === vaultSession.path ) {
-      vaultSession.error = errorMessage( error, 'The vault folder could not be checked for changes.' );
-    }
-  } finally {
-    checkingExternalChanges = false;
-  }
-}
-
-function setVaultError( error: unknown, fallback: string ): void {
-  vaultSession.error = errorMessage( error, fallback );
-  vaultSession.conflict = false;
 }
 
 function applyEnabledSnippets(): void {
