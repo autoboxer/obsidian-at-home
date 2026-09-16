@@ -35,6 +35,7 @@ import {
 } from './vaultState';
 
 interface VaultContentDependencies {
+  batchChanges: <T>( mutation: () => T ) => T;
   activeNote: () => Note | undefined;
   currentFolderId: () => string | null;
   flushVault: () => Promise<boolean>;
@@ -59,6 +60,7 @@ export function createVaultContent(
   const snippetWorkspace = computed( () => snippetVaultKey.value
     ? snippetDraftWorkspaces.get( snippetVaultKey.value )
     : undefined );
+  const notesById = computed( () => new Map( vaultState.notes.map( ( note ) => [ note.id, note ]) ) );
   const snippetsById = computed( () => new Map( vaultState.snippets.map( ( snippet ) => [ snippet.id, snippet ]) ) );
   const snippetLibrary = computed( () => [
     ...vaultState.snippets,
@@ -213,12 +215,14 @@ export function createVaultContent(
       note.content = `# ${ note.title }\n\n`;
     }
     note.tags = parseFrontmatterTags( note.content );
-    vaultState.notes.unshift( note );
-    dependencies.selectNote( note.id );
-    vaultState.selectedFolderId = 'all';
-    uiState.tool = 'notes';
-    uiState.notesView = 'editor';
-    uiState.noteFilter = '';
+    dependencies.batchChanges( () => {
+      vaultState.notes.unshift( note );
+      dependencies.selectNote( note.id );
+      vaultState.selectedFolderId = 'all';
+      uiState.tool = 'notes';
+      uiState.notesView = 'editor';
+      uiState.noteFilter = '';
+    });
     dependencies.notify( 'New note created', 'success' );
 
     return note;
@@ -271,7 +275,7 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return false;
     }
-    const note = vaultState.notes.find( ( candidate ) => candidate.id === id );
+    const note = notesById.value.get( id );
     if ( !note ) {
       return false;
     }
@@ -310,29 +314,31 @@ export function createVaultContent(
         return false;
       }
     }
-    if ( locationChanged ) {
-      dependencies.rememberNoteOriginalPath( note );
-    }
-    if ( patch.title !== undefined ) {
-      note.title = patch.title;
-    }
-    if ( patch.content !== undefined || patch.tags !== undefined ) {
-      note.content = content;
-      const tags = parseFrontmatterTags( content );
-      if ( tags.length !== note.tags.length || tags.some( ( tag, index ) => tag !== note.tags[ index ]) ) {
-        note.tags = tags;
+    dependencies.batchChanges( () => {
+      if ( locationChanged ) {
+        dependencies.rememberNoteOriginalPath( note );
       }
-    }
-    if ( patch.folderId !== undefined ) {
-      note.folderId = patch.folderId;
-    }
-    if ( patch.pinned !== undefined ) {
-      note.pinned = patch.pinned;
-    }
-    if ( previousPaths ) {
-      preserveNoteLinks( previousPaths );
-    }
-    note.updatedAt = Date.now();
+      if ( patch.title !== undefined ) {
+        note.title = patch.title;
+      }
+      if ( patch.content !== undefined || patch.tags !== undefined ) {
+        note.content = content;
+        const tags = parseFrontmatterTags( content );
+        if ( tags.length !== note.tags.length || tags.some( ( tag, index ) => tag !== note.tags[ index ]) ) {
+          note.tags = tags;
+        }
+      }
+      if ( patch.folderId !== undefined ) {
+        note.folderId = patch.folderId;
+      }
+      if ( patch.pinned !== undefined ) {
+        note.pinned = patch.pinned;
+      }
+      if ( previousPaths ) {
+        preserveNoteLinks( previousPaths );
+      }
+      note.updatedAt = Date.now();
+    });
 
     return true;
   }
@@ -404,7 +410,7 @@ export function createVaultContent(
   }
 
   function togglePinned( id: string ): void {
-    const note = vaultState.notes.find( ( candidate ) => candidate.id === id );
+    const note = notesById.value.get( id );
     if ( note ) {
       updateNote( id, { pinned: !note.pinned });
     }
@@ -442,10 +448,12 @@ export function createVaultContent(
       parentId,
       createdAt: Date.now()
     };
-    vaultState.folders.push( folder );
-    if ( !isSmartFolderSelection( vaultState.selectedFolderId ) ) {
-      vaultState.selectedFolderId = 'all';
-    }
+    dependencies.batchChanges( () => {
+      vaultState.folders.push( folder );
+      if ( !isSmartFolderSelection( vaultState.selectedFolderId ) ) {
+        vaultState.selectedFolderId = 'all';
+      }
+    });
     dependencies.notify( `Created ${ cleanName }`, 'success' );
 
     return folder;
@@ -494,8 +502,10 @@ export function createVaultContent(
         dependencies.rememberNoteOriginalPath( note );
       }
     }
-    folder.name = cleanName;
-    preserveNoteLinks( previousPaths );
+    dependencies.batchChanges( () => {
+      folder.name = cleanName;
+      preserveNoteLinks( previousPaths );
+    });
   }
 
   function moveFolder( folderId: string, parentId: string | null ): boolean {
@@ -563,8 +573,10 @@ export function createVaultContent(
         dependencies.rememberNoteOriginalPath( note );
       }
     }
-    folder.parentId = parentId;
-    preserveNoteLinks( previousPaths );
+    dependencies.batchChanges( () => {
+      folder.parentId = parentId;
+      preserveNoteLinks( previousPaths );
+    });
     dependencies.notify(
       `Moved ${ folder.name } to ${ parent?.name ?? 'Vault root' }`,
       'success'
@@ -625,23 +637,25 @@ export function createVaultContent(
       return;
     }
     const previousPaths = dependencies.noteLinkPaths();
-    for ( const child of children ) {
-      child.parentId = folder.parentId;
-    }
-    for ( const note of vaultState.notes ) {
-      if ( !note.folderId || !affectedFolders.has( note.folderId ) ) {
-        continue;
+    dependencies.batchChanges( () => {
+      for ( const child of children ) {
+        child.parentId = folder.parentId;
       }
-      dependencies.rememberNoteOriginalPath( note );
-      if ( note.folderId === id ) {
-        note.folderId = folder.parentId;
+      for ( const note of vaultState.notes ) {
+        if ( !note.folderId || !affectedFolders.has( note.folderId ) ) {
+          continue;
+        }
+        dependencies.rememberNoteOriginalPath( note );
+        if ( note.folderId === id ) {
+          note.folderId = folder.parentId;
+        }
       }
-    }
-    vaultState.folders.splice( vaultState.folders.indexOf( folder ), 1 );
-    preserveNoteLinks( previousPaths );
-    if ( vaultState.selectedFolderId === id ) {
-      vaultState.selectedFolderId = 'all';
-    }
+      vaultState.folders.splice( vaultState.folders.indexOf( folder ), 1 );
+      preserveNoteLinks( previousPaths );
+      if ( vaultState.selectedFolderId === id ) {
+        vaultState.selectedFolderId = 'all';
+      }
+    });
     dependencies.notify(
       'Folder removed; its contents moved up one level',
       'neutral'
@@ -691,7 +705,7 @@ export function createVaultContent(
       ? vaultState.templates.find( ( candidate ) => candidate.id === template.id )
       : undefined;
     if ( existing ) {
-      Object.assign( existing, template );
+      dependencies.batchChanges( () => Object.assign( existing, template ) );
 
       return existing;
     }
@@ -719,7 +733,7 @@ export function createVaultContent(
       ? vaultState.snippets.find( ( candidate ) => candidate.id === snippet.id )
       : undefined;
     if ( existing ) {
-      Object.assign( existing, snippet );
+      dependencies.batchChanges( () => Object.assign( existing, snippet ) );
 
       return existing;
     }
