@@ -141,6 +141,40 @@ pub async fn workspace_save(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn workspace_save_changes(
+    app: AppHandle,
+    path: String,
+    changes: WorkspaceChanges,
+    expected_revision: u64,
+) -> Result<SaveResult, String> {
+    run_vault_io(move || {
+        let _guard = lock_workspace_io()?;
+        let root = validate_workspace_root(&path)?;
+        reject_home_vault(&app, &root)?;
+        let _workspace_guard = lock_workspace_files(&root)?;
+        let (mut result, name) = save_workspace_changes(&root, &changes, expected_revision)?;
+
+        let registry_result = (|| {
+            let mut registry = read_registry(&app)?;
+            let descriptor = VaultDescriptor {
+                name,
+                path: path_string(&root)?,
+                last_opened_at: result.saved_at,
+            };
+            remember_workspace(&mut registry, &descriptor);
+            write_registry(&app, &registry)
+        })();
+        if let Err(error) = registry_result {
+            result.warnings.push(format!(
+                "The vault was saved, but Recents could not be updated: {error}"
+            ));
+        }
+        Ok(result)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn workspace_save_with_image_import(
     app: AppHandle,
     path: String,

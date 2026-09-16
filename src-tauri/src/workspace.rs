@@ -351,6 +351,30 @@ pub struct SaveResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceChanges {
+    #[serde(default)]
+    pub notes: Vec<Note>,
+    #[serde(default)]
+    pub removed_note_ids: Vec<String>,
+    pub folders: Option<Vec<Folder>>,
+    pub name: Option<String>,
+    pub templates: Option<Vec<NoteTemplate>>,
+    pub snippets: Option<Vec<CssSnippet>>,
+    pub navigation: Option<WorkspaceNavigation>,
+    pub image_embed_settings: Option<ImageEmbedSettings>,
+    pub attachment_embed_settings: Option<AttachmentEmbedSettings>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceNavigation {
+    pub active_note_id: Option<String>,
+    pub recent_note_ids: Vec<String>,
+    pub selected_folder_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceArchiveResult {

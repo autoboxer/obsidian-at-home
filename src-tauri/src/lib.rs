@@ -19,6 +19,7 @@ pub fn run() {
             workspace::workspace_open,
             workspace::workspace_create,
             workspace::workspace_save,
+            workspace::workspace_save_changes,
             workspace::workspace_save_with_image_import,
             workspace::workspace_archive_note,
             workspace::workspace_restore_recently_deleted_note,

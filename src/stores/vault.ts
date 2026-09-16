@@ -68,6 +68,7 @@ import { createVaultContent } from './vaultContent';
 import {
   clampZoom,
   cloneValue,
+  createVaultChangeTracker,
   errorMessage,
   isRevisionConflict,
   mergeRecentVaults,
@@ -126,6 +127,7 @@ import {
   relocateWorkspaceImage,
   restoreRecentlyDeletedNote as restoreRecentlyDeletedNoteNative,
   saveWorkspace,
+  saveWorkspaceChanges,
   saveWorkspaceAttachmentCopy,
   saveWorkspaceWithImageImport,
   showWorkspaceVaultItemInFolder,
@@ -149,6 +151,7 @@ import type {
   WorkspaceAttachmentNoteUpdate,
   WorkspaceImageNoteUpdate,
   WorkspaceLoad,
+  WorkspaceChanges,
   WorkspaceRelocateImageResult,
   WorkspaceRelocateAttachmentResult,
   WorkspaceSaveResult
@@ -172,8 +175,6 @@ let recentlyDeletedTimer: ReturnType<typeof setTimeout> | undefined;
 let recentlyDeletedRetryDelay = RECENTLY_DELETED_RETRY_INITIAL_DELAY;
 let initialized = false;
 let suppressPersistence = 0;
-let dirtyVersion = 0;
-let savedVersion = 0;
 let sessionGeneration = 0;
 let pendingAssetDeletion: { generation: number; signature: string } | null = null;
 let saveInFlight: Promise<boolean> | null = null;
@@ -184,18 +185,14 @@ let closeHandlerInstalled = false;
 let closingAfterSave = false;
 const pendingNoteOriginalPaths = new Map<string, string>();
 
-watch(
+const vaultChanges = createVaultChangeTracker(
   vaultState,
+  () => initialized && !suppressPersistence && canEditVault.value,
   () => {
-    if ( !initialized || suppressPersistence || !canEditVault.value ) {
-      return;
-    }
-    dirtyVersion += 1;
     uiState.saveStatus = 'saving';
     clearTimeout( persistTimer );
     persistTimer = setTimeout( () => void flushApplicationState(), PERSIST_DELAY );
-  },
-  { deep: true, flush: 'sync' }
+  }
 );
 
 watch(
@@ -254,7 +251,7 @@ async function initializeVaultStorage(): Promise<void> {
     vaultSession.conflict = false;
     vaultSession.warnings = [];
     initialized = true;
-    savedVersion = dirtyVersion;
+    vaultChanges.acknowledge( vaultChanges.version );
     if ( storedVault?.needsRewrite ) {
       persistBrowserWorkspace( snapshotVault(), snapshotRecentlyDeletedNotes() );
     }
@@ -301,7 +298,7 @@ async function initializeVaultStorage(): Promise<void> {
     uiState.vaultChooserOpen = true;
   } finally {
     initialized = true;
-    savedVersion = dirtyVersion;
+    vaultChanges.acknowledge( vaultChanges.version );
     installVaultLifecycleHandlers();
   }
 }
@@ -436,8 +433,7 @@ export async function forgetCurrentVault(): Promise<boolean> {
     hydrateVault( createEmptyVault() );
     hydrateRecentlyDeletedNotes([]);
     resetNoteNavigation();
-    dirtyVersion = 0;
-    savedVersion = 0;
+    vaultChanges.reset();
     uiState.vaultChooserOpen = true;
     notify( 'Vault forgotten; its files are still on disk', 'neutral' );
 
@@ -499,7 +495,7 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
   vaultSession.busy = true;
   clearTimeout( persistTimer );
   try {
-    const targetVersion = dirtyVersion;
+    const { version: targetVersion } = vaultChanges.capture();
     const currentRevision = await getWorkspaceRevision( path );
     const result = await saveWorkspace( path, snapshotVaultForSave(), currentRevision );
     applySavedNotePaths( result.notePaths );
@@ -507,7 +503,7 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
     vaultSession.error = null;
     vaultSession.conflict = false;
     vaultSession.warnings = result.warnings;
-    savedVersion = targetVersion;
+    vaultChanges.acknowledge( targetVersion );
     uiState.saveStatus = 'saved';
     uiState.lastSavedAt = result.savedAt || Date.now();
     notify( 'Saved the app version over the changed files', 'success' );
@@ -527,9 +523,10 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
 }
 
 export async function flushVault( imageImportTransactionId?: string ): Promise<boolean> {
+  vaultChanges.capture();
   clearTimeout( persistTimer );
   if ( vaultSession.access.mode === 'read-only' ) {
-    return savedVersion >= dirtyVersion && !imageImportTransactionId;
+    return !vaultChanges.hasChanges && !imageImportTransactionId;
   }
 
   if ( recoverySaveInFlight ) {
@@ -538,12 +535,12 @@ export async function flushVault( imageImportTransactionId?: string ): Promise<b
       return false;
     }
 
-    return savedVersion < dirtyVersion
+    return vaultChanges.hasChanges
       ? flushVault( imageImportTransactionId )
       : true;
   }
 
-  if ( !initialized || ( savedVersion >= dirtyVersion && !imageImportTransactionId ) ) {
+  if ( !initialized || ( !vaultChanges.hasChanges && !imageImportTransactionId ) ) {
     return true;
   }
 
@@ -553,23 +550,27 @@ export async function flushVault( imageImportTransactionId?: string ): Promise<b
       return false;
     }
 
-    return savedVersion < dirtyVersion
+    return vaultChanges.hasChanges
       ? flushVault( imageImportTransactionId )
       : true;
   }
 
-  const targetVersion = dirtyVersion;
+  const changes = vaultChanges.capture();
+  const targetVersion = changes.version;
   const generation = sessionGeneration;
   const path = vaultSession.path;
-  const snapshot = snapshotVaultForSave();
-  const recentlyDeletedSnapshot = snapshotRecentlyDeletedNotes();
+  const fullSnapshot = vaultSession.backend === 'browser' || imageImportTransactionId
+    ? snapshotVaultForSave()
+    : undefined;
+  const patch = fullSnapshot ? undefined : snapshotWorkspaceChanges( changes );
+  const recentlyDeletedSnapshot = vaultSession.backend === 'browser' ? snapshotRecentlyDeletedNotes() : [];
   uiState.saveStatus = 'saving';
 
   const operation = ( async (): Promise<boolean> => {
     if ( vaultSession.backend === 'browser' ) {
-      const saved = persistBrowserWorkspace( snapshot, recentlyDeletedSnapshot );
+      const saved = persistBrowserWorkspace( fullSnapshot!, recentlyDeletedSnapshot );
       if ( saved && generation === sessionGeneration ) {
-        savedVersion = targetVersion;
+        vaultChanges.acknowledge( targetVersion );
       }
 
       return saved;
@@ -586,7 +587,7 @@ export async function flushVault( imageImportTransactionId?: string ): Promise<b
       if ( imageImportTransactionId ) {
         const importResult = await saveWorkspaceWithImageImport(
           path,
-          snapshot,
+          fullSnapshot!,
           vaultSession.revision,
           imageImportTransactionId
         );
@@ -607,7 +608,7 @@ export async function flushVault( imageImportTransactionId?: string ): Promise<b
         }
         result = importResult;
       } else {
-        result = await saveWorkspace( path, snapshot, vaultSession.revision );
+        result = await saveWorkspaceChanges( path, patch!, vaultSession.revision );
       }
       if ( generation !== sessionGeneration || path !== vaultSession.path ) {
         return true;
@@ -617,7 +618,7 @@ export async function flushVault( imageImportTransactionId?: string ): Promise<b
       vaultSession.error = null;
       vaultSession.conflict = false;
       vaultSession.warnings = result.warnings;
-      savedVersion = targetVersion;
+      vaultChanges.acknowledge( targetVersion );
       uiState.saveStatus = 'saved';
       uiState.lastSavedAt = result.savedAt || Date.now();
       if ( result.warnings.length ) {
@@ -646,7 +647,7 @@ export async function flushVault( imageImportTransactionId?: string ): Promise<b
   if ( saveInFlight === operation ) {
     saveInFlight = null;
   }
-  if ( saved && generation === sessionGeneration && savedVersion < dirtyVersion ) {
+  if ( saved && generation === sessionGeneration && vaultChanges.hasChanges ) {
     return flushVault();
   }
 
@@ -708,6 +709,7 @@ export const visibleNotes = computed( () => {
 });
 
 const vaultNavigation = createVaultNavigation({
+  batchChanges: vaultChanges.batch,
   folderPath,
   isNoteVisible: ( id ) => visibleNotes.value.some( ( note ) => note.id === id )
 });
@@ -751,6 +753,7 @@ export const noteLinkPaths = computed( () => new Map(
 ) );
 
 const vaultContent = createVaultContent({
+  batchChanges: vaultChanges.batch,
   activeNote: () => activeNote.value,
   currentFolderId,
   flushVault,
@@ -812,20 +815,20 @@ export async function saveSnippetDraft( id: string, asCopy = false ): Promise<bo
         return false;
       }
       const values = cloneValue( draft.values );
-      const candidate = snapshotVaultForSave();
+      let snippets = cloneValue( vaultState.snippets );
       let nextSnippet: CssSnippet;
       if ( asCopy ) {
-        const names = new Set( candidate.snippets.map( ( snippet ) => snippet.name.toLocaleLowerCase() ) );
+        const names = new Set( snippets.map( ( snippet ) => snippet.name.toLocaleLowerCase() ) );
         const baseName = values.name.trim() || 'Untitled snippet';
         let name = baseName;
         for ( let suffix = 1; names.has( name.toLocaleLowerCase() ); suffix += 1 ) {
           name = `${ baseName } (copy${ suffix === 1 ? '' : ` ${ suffix }` })`;
         }
         nextSnippet = { ...values, name, id: createId( 'snippet' ), enabled: false, createdAt: Date.now() };
-        candidate.snippets.push( nextSnippet );
+        snippets.push( nextSnippet );
       } else {
         nextSnippet = { ...cloneValue( saved! ), ...values };
-        candidate.snippets = candidate.snippets.map( ( snippet ) => snippet.id === id ? nextSnippet : snippet );
+        snippets = snippets.map( ( snippet ) => snippet.id === id ? nextSnippet : snippet );
       }
 
       // Persist a candidate first. A failed save must not apply CSS, mark the
@@ -835,8 +838,12 @@ export async function saveSnippetDraft( id: string, asCopy = false ): Promise<bo
         if ( !vaultSession.path ) {
           throw new Error( 'Open a vault before saving this draft.' );
         }
-        result = await saveWorkspace( vaultSession.path, candidate, vaultSession.revision );
-      } else if ( !persistBrowserWorkspace( candidate, snapshotRecentlyDeletedNotes() ) ) {
+        result = await saveWorkspaceChanges(
+          vaultSession.path,
+          { notes: [], removedNoteIds: [], snippets },
+          vaultSession.revision
+        );
+      } else if ( !persistBrowserWorkspace({ ...snapshotVaultForSave(), snippets }, snapshotRecentlyDeletedNotes() ) ) {
         throw new Error( vaultSession.error || 'The snippet could not be saved.' );
       }
       if ( generation !== sessionGeneration || workspace !== snippetWorkspace.value ) {
@@ -961,7 +968,7 @@ export async function deleteNote( id: string ): Promise<boolean> {
       hydrateRecentlyDeletedNotes( candidateDeletedNotes );
       deleteNoteEditorPosition( vaultId, id );
       deleteNoteEditorHistory( vaultId, id );
-      savedVersion = dirtyVersion;
+      vaultChanges.acknowledge( vaultChanges.version );
       recentlyDeletedState.error = null;
       notify( 'Note moved to Recently Deleted', 'neutral' );
       scheduleRecentlyDeletedExpiry();
@@ -1073,7 +1080,7 @@ export async function restoreRecentlyDeletedNote( id: string ): Promise<boolean>
 
       applyVaultMutation( () => applyRestoredNote( restoredNote, previousActiveNoteId ) );
       hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      savedVersion = dirtyVersion;
+      vaultChanges.acknowledge( vaultChanges.version );
       recentlyDeletedState.error = null;
       if ( editorPositionSaved ) {
         notify( `Restored ${ restoredNote.title }`, 'success' );
@@ -1176,7 +1183,7 @@ async function mergeImportedVaultExclusive(
     };
   }
   clearTimeout( persistTimer );
-  const previousSavedVersion = savedVersion;
+  const previousSavedVersion = vaultChanges.savedVersion;
   const previousActiveNoteId = vaultState.activeNoteId;
   const previousNoteNavigation = snapshotNoteNavigation();
   const previousVault = snapshotVault();
@@ -1299,59 +1306,60 @@ async function mergeImportedVaultExclusive(
   ]);
   const rewriteOptions = { destinationNotes, preserveUnresolvedPaths: false };
   const rewriteExistingNote = createNoteLinkRewriter( existingNotes, noteLinkPaths.value, destinationPaths, rewriteOptions );
-  for ( const note of existingNotes ) {
-    const content = rewriteExistingNote( note );
-    if ( content !== note.content ) {
-      note.content = content;
-      note.updatedAt = now;
+  vaultChanges.batch( () => {
+    for ( const note of existingNotes ) {
+      const content = rewriteExistingNote( note );
+      if ( content !== note.content ) {
+        note.content = content;
+        note.updatedAt = now;
+      }
     }
-  }
-  const rewriteImportedNote = createNoteLinkRewriter( importedNotes, sourcePaths, destinationPaths, rewriteOptions );
-  for ( const note of importedNotes ) {
-    const content = rewriteImportedNote( note );
-    note.content = rewriteImportedAssetReferences(
-      content, sourcePaths.get( note.id )!, note.relativePath, importedImagePaths, importedAttachmentPaths
-    );
-  }
-  vaultState.folders.splice( 0, vaultState.folders.length, ...plan.folders );
-  vaultState.notes.splice( 0, vaultState.notes.length, ...destinationNotes );
-  const firstImportedNoteId = importedNotes[ 0 ]?.id ?? null;
-
-  for ( const imported of result.snippets ) {
-    const existing = vaultState.snippets.find(
-      ( snippet ) => snippet.name.toLocaleLowerCase() === imported.name.toLocaleLowerCase()
-    );
-    if ( existing ) {
-      continue;
+    const rewriteImportedNote = createNoteLinkRewriter( importedNotes, sourcePaths, destinationPaths, rewriteOptions );
+    for ( const note of importedNotes ) {
+      const content = rewriteImportedNote( note );
+      note.content = rewriteImportedAssetReferences(
+        content, sourcePaths.get( note.id )!, note.relativePath, importedImagePaths, importedAttachmentPaths
+      );
     }
-    vaultState.snippets.push({
-      id: createId( 'snippet' ),
-      name: imported.name,
-      description: 'Imported from an Obsidian CSS snippet.',
-      css: imported.css,
-      enabled: imported.enabled,
-      createdAt: now
-    });
-  }
+    vaultState.folders.splice( 0, vaultState.folders.length, ...plan.folders );
+    vaultState.notes.splice( 0, vaultState.notes.length, ...destinationNotes );
+    const firstImportedNoteId = importedNotes[ 0 ]?.id ?? null;
 
-  vaultState.activeNoteId = firstImportedNoteId ?? ( replace ? null : previousActiveNoteId );
-  vaultState.selectedFolderId = 'all';
-  if ( replace ) {
-    vaultState.recentNoteIds.splice( 0 );
-    resetNoteNavigation();
-  }
-  if ( firstImportedNoteId ) {
-    touchRecentNote( firstImportedNoteId );
-  }
-  if ( !replace && firstImportedNoteId ) {
-    recordDirectNoteNavigation( previousActiveNoteId, firstImportedNoteId );
-  }
+    for ( const imported of result.snippets ) {
+      const existing = vaultState.snippets.find(
+        ( snippet ) => snippet.name.toLocaleLowerCase() === imported.name.toLocaleLowerCase()
+      );
+      if ( existing ) {
+        continue;
+      }
+      vaultState.snippets.push({
+        id: createId( 'snippet' ),
+        name: imported.name,
+        description: 'Imported from an Obsidian CSS snippet.',
+        css: imported.css,
+        enabled: imported.enabled,
+        createdAt: now
+      });
+    }
+
+    vaultState.activeNoteId = firstImportedNoteId ?? ( replace ? null : previousActiveNoteId );
+    vaultState.selectedFolderId = 'all';
+    if ( replace ) {
+      vaultState.recentNoteIds.splice( 0 );
+      resetNoteNavigation();
+    }
+    if ( firstImportedNoteId ) {
+      touchRecentNote( firstImportedNoteId );
+    }
+    if ( !replace && firstImportedNoteId ) {
+      recordDirectNoteNavigation( previousActiveNoteId, firstImportedNoteId );
+    }
+  });
   const saved = await flushVault( imageImportTransactionId );
   if ( !saved ) {
     hydrateVault( previousVault );
     restoreNoteNavigation( previousNoteNavigation );
-    dirtyVersion = previousSavedVersion;
-    savedVersion = previousSavedVersion;
+    vaultChanges.reset( previousSavedVersion );
     uiState.imageRefreshToken += 1;
     uiState.attachmentRefreshToken += 1;
   }
@@ -2311,25 +2319,26 @@ async function clearVaultExclusive(): Promise<boolean> {
   }
   clearTimeout( persistTimer );
   const previousVault = snapshotVault();
-  const previousSavedVersion = savedVersion;
+  const previousSavedVersion = vaultChanges.savedVersion;
   const previousNoteNavigation = snapshotNoteNavigation();
-  vaultState.notes.splice( 0 );
-  vaultState.folders.splice( 0 );
-  vaultState.activeNoteId = null;
-  vaultState.recentNoteIds.splice( 0 );
-  resetNoteNavigation();
-  vaultState.selectedFolderId = 'all';
-  uiState.noteFilter = '';
-  uiState.commandOpen = false;
-  resetSearchState();
-  uiState.contextOpen = false;
-  uiState.explorerOpen = true;
+  vaultChanges.batch( () => {
+    vaultState.notes.splice( 0 );
+    vaultState.folders.splice( 0 );
+    vaultState.activeNoteId = null;
+    vaultState.recentNoteIds.splice( 0 );
+    resetNoteNavigation();
+    vaultState.selectedFolderId = 'all';
+    uiState.noteFilter = '';
+    uiState.commandOpen = false;
+    resetSearchState();
+    uiState.contextOpen = false;
+    uiState.explorerOpen = true;
+  });
   const saved = await flushVault();
   if ( !saved ) {
     hydrateVault( previousVault );
     restoreNoteNavigation( previousNoteNavigation );
-    dirtyVersion = previousSavedVersion;
-    savedVersion = previousSavedVersion;
+    vaultChanges.reset( previousSavedVersion );
   }
   pruneNoteEditorPositions( currentEditorPositionVaultId(), vaultState.notes );
   pruneNoteEditorHistories( currentEditorPositionVaultId(), vaultState.notes );
@@ -2441,7 +2450,7 @@ async function performNativeRecoverySave<T extends WorkspaceSaveResult>(
       recoverySaveInFlight = null;
     }
   }
-  if ( writesMayResume && savedVersion < dirtyVersion ) {
+  if ( writesMayResume && vaultChanges.hasChanges ) {
     persistTimer = setTimeout( () => void flushVault(), 0 );
   }
 
@@ -2465,7 +2474,7 @@ function applyWorkspaceSaveResult( result: WorkspaceSaveResult ): void {
   vaultSession.error = null;
   vaultSession.conflict = false;
   vaultSession.warnings = result.warnings;
-  uiState.saveStatus = savedVersion < dirtyVersion ? 'saving' : 'saved';
+  uiState.saveStatus = vaultChanges.hasChanges ? 'saving' : 'saved';
   uiState.lastSavedAt = result.savedAt || Date.now();
 }
 
@@ -2474,9 +2483,9 @@ function applySavedNotePaths( notePaths: Record<string, string> | undefined ): v
     return;
   }
   applyVaultMutation( () => {
-    for ( const note of vaultState.notes ) {
-      const relativePath = notePaths[ note.id ];
-      if ( relativePath ) {
+    for ( const [ id, relativePath ] of Object.entries( notePaths ) ) {
+      const note = vaultContent.noteById( id );
+      if ( note && relativePath ) {
         const originalPath = pendingNoteOriginalPaths.get( note.id );
         if ( originalPath ) {
           note.content = rewriteAssetDestinationsForNotePath(
@@ -2497,9 +2506,8 @@ function applySavedNotePaths( notePaths: Record<string, string> | undefined ): v
         }
       }
     }
-    const noteIds = new Set( vaultState.notes.map( ( note ) => note.id ) );
     for ( const noteId of pendingNoteOriginalPaths.keys() ) {
-      if ( !noteIds.has( noteId ) ) {
+      if ( !vaultContent.noteById( noteId ) ) {
         pendingNoteOriginalPaths.delete( noteId );
       }
     }
@@ -2624,7 +2632,7 @@ async function removeRecentlyDeletedNotes( ids: string[], successMessage: string
       }
 
       hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      savedVersion = dirtyVersion;
+      vaultChanges.acknowledge( vaultChanges.version );
       recentlyDeletedState.error = null;
       notify( successMessage, 'neutral' );
       scheduleRecentlyDeletedExpiry();
@@ -2682,7 +2690,7 @@ async function pruneExpiredRecentlyDeletedNotes(): Promise<boolean> {
       }
 
       hydrateRecentlyDeletedNotes( candidateDeletedNotes );
-      savedVersion = dirtyVersion;
+      vaultChanges.acknowledge( vaultChanges.version );
       recentlyDeletedState.error = null;
 
       return true;
@@ -2944,6 +2952,57 @@ function snapshotVault(): VaultData {
   return cloneValue( vaultState );
 }
 
+function snapshotWorkspaceChanges(
+  changes: ReturnType<typeof vaultChanges.capture>
+): WorkspaceChanges {
+  const patch: WorkspaceChanges = { notes: [], removedNoteIds: [] };
+  for ( const id of changes.noteIds ) {
+    const note = vaultContent.noteById( id );
+    if ( !note ) {
+      patch.removedNoteIds.push( id );
+      continue;
+    }
+    const snapshot = cloneValue( note );
+    const originalPath = pendingNoteOriginalPaths.get( id );
+    if ( originalPath ) {
+      snapshot.content = rewriteAssetDestinationsForNotePath(
+        snapshot.content,
+        originalPath,
+        projectedNoteRelativePath( snapshot, vaultState.folders, originalPath )
+      );
+    }
+    patch.notes.push( snapshot );
+  }
+  const fields = new Set( changes.fields );
+  if ( fields.has( 'folders' ) ) {
+    patch.folders = cloneValue( vaultState.folders );
+  }
+  if ( fields.has( 'name' ) ) {
+    patch.name = vaultState.name;
+  }
+  if ( fields.has( 'templates' ) ) {
+    patch.templates = cloneValue( vaultState.templates );
+  }
+  if ( fields.has( 'snippets' ) ) {
+    patch.snippets = cloneValue( vaultState.snippets );
+  }
+  if ( fields.has( 'imageEmbedSettings' ) ) {
+    patch.imageEmbedSettings = cloneValue( vaultState.imageEmbedSettings );
+  }
+  if ( fields.has( 'attachmentEmbedSettings' ) ) {
+    patch.attachmentEmbedSettings = cloneValue( vaultState.attachmentEmbedSettings );
+  }
+  if ( fields.has( 'activeNoteId' ) || fields.has( 'recentNoteIds' ) || fields.has( 'selectedFolderId' ) ) {
+    patch.navigation = {
+      activeNoteId: vaultState.activeNoteId,
+      recentNoteIds: [ ...vaultState.recentNoteIds ],
+      selectedFolderId: vaultState.selectedFolderId
+    };
+  }
+
+  return patch;
+}
+
 function snapshotVaultForSave(): VaultData {
   const snapshot = snapshotVault();
   for ( const note of snapshot.notes ) {
@@ -3020,8 +3079,7 @@ function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.r
   vaultSession.conflict = false;
   vaultSession.warnings = workspace.warnings;
   vaultSession.recentVaults = mergeRecentVaults( workspace.descriptor, recentVaults );
-  dirtyVersion = 0;
-  savedVersion = 0;
+  vaultChanges.reset();
   uiState.saveStatus = 'saved';
   uiState.lastSavedAt = Date.now();
   uiState.noteFilter = '';
@@ -3040,7 +3098,7 @@ function currentEditorPositionVaultId(): string {
 }
 
 async function flushBeforeVaultChange(): Promise<boolean> {
-  if ( savedVersion < dirtyVersion ) {
+  if ( vaultChanges.hasChanges ) {
     if ( vaultSession.phase !== 'ready' ) {
       vaultSession.error = 'Choose a vault before saving changes.';
 
@@ -3139,7 +3197,7 @@ async function installNativeCloseHandler(): Promise<void> {
         return;
       }
       if (
-        savedVersion >= dirtyVersion
+        !vaultChanges.hasChanges
         && !saveInFlight
         && !hasPendingNoteEditorPositions()
       ) {
@@ -3178,7 +3236,7 @@ async function refreshWorkspaceFromDisk(): Promise<void> {
     || document.visibilityState === 'hidden'
     || saveInFlight
     || recoverySaveInFlight
-    || dirtyVersion > savedVersion
+    || vaultChanges.hasChanges
   ) {
     return;
   }
@@ -3198,7 +3256,7 @@ async function refreshWorkspaceFromDisk(): Promise<void> {
       || vaultSession.busy
       || assetDeletionState.request !== null
       || recoverySaveInFlight
-      || dirtyVersion > savedVersion
+      || vaultChanges.hasChanges
     ) {
       return;
     }

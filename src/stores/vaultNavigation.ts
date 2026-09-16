@@ -18,6 +18,7 @@ export interface NoteNavigationState {
 }
 
 interface VaultNavigationDependencies {
+  batchChanges: <T>( mutation: () => T ) => T;
   folderPath: ( id: string | null ) => string;
   isNoteVisible: ( id: string ) => boolean;
 }
@@ -132,12 +133,14 @@ export function createVaultNavigation(
     }
 
     const wasVisible = dependencies.isNoteVisible( id );
-    vaultState.activeNoteId = id;
-    touchRecentNote( id );
-    if ( !wasVisible ) {
-      vaultState.selectedFolderId = 'all';
-      uiState.noteFilter = '';
-    }
+    dependencies.batchChanges( () => {
+      vaultState.activeNoteId = id;
+      touchRecentNote( id );
+      if ( !wasVisible ) {
+        vaultState.selectedFolderId = 'all';
+        uiState.noteFilter = '';
+      }
+    });
 
     return true;
   }

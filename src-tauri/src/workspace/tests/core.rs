@@ -2058,3 +2058,504 @@ fn storage_lock_deadline_does_not_acquire_after_the_last_wait() {
     assert_eq!(result, Err("busy".to_owned()));
     assert_eq!(attempts, 1, "expired waiters must not start an operation");
 }
+
+#[test]
+fn incremental_save_preserves_omitted_notes_and_metadata() {
+    let workspace = TestWorkspace::new("incremental-preservation");
+    let mut vault = empty_vault("Test vault");
+    let first = test_note("First body");
+    let mut second = test_note("Second body");
+    second.id = "note-2".to_owned();
+    second.title = "Second".to_owned();
+    second.pinned = true;
+    vault.notes = vec![first.clone(), second.clone()];
+    vault.active_note_id = Some(second.id.clone());
+    let initial = save_workspace_files(
+        &workspace.root,
+        &vault,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    let second_path = workspace.root.join(&initial.note_paths[&second.id]);
+    let second_stamp = fs::metadata(&second_path).unwrap().modified().unwrap();
+    let mut updated = first;
+    updated.content = "---\ntags: [new]\n---\nEdited\n".to_owned();
+    updated.tags = vec!["new".to_owned()];
+    let (result, _) = save_workspace_changes(
+        &workspace.root,
+        &WorkspaceChanges {
+            notes: vec![updated.clone()],
+            ..Default::default()
+        },
+        initial.revision,
+    )
+    .unwrap();
+    assert_eq!(result.note_paths.len(), 1);
+    assert_eq!(fs::read_to_string(&second_path).unwrap(), second.content);
+    assert_eq!(
+        fs::metadata(&second_path).unwrap().modified().unwrap(),
+        second_stamp
+    );
+    let loaded = load_workspace(&workspace.root, &empty_vault("Reload")).unwrap();
+    assert_eq!(loaded.vault.notes.len(), 2);
+    assert_eq!(loaded.vault.active_note_id, Some(second.id.clone()));
+    assert!(
+        loaded
+            .vault
+            .notes
+            .iter()
+            .find(|note| note.id == second.id)
+            .unwrap()
+            .pinned
+    );
+    let saved = loaded
+        .vault
+        .notes
+        .iter()
+        .find(|note| note.id == updated.id)
+        .unwrap();
+    assert_eq!(saved.content, updated.content);
+    assert_eq!(saved.tags, updated.tags);
+}
+
+#[test]
+fn incremental_saves_return_the_persisted_name_for_recents() {
+    let workspace = TestWorkspace::new("incremental-recents-name");
+    let mut note = test_note("Original");
+    write_saved_note(&workspace, &note);
+    let mut revision = revision_for_root(&workspace.root).unwrap();
+
+    // Both the document and metadata-only paths must return the effective name,
+    // including normalization and retention when the next patch omits it.
+    let fallback = workspace.root.file_name().unwrap().to_str().unwrap();
+    for include_note in [false, true] {
+        for (requested, expected) in [
+            (Some("  Renamed vault  "), "Renamed vault"),
+            (None, "Renamed vault"),
+            (Some("  "), fallback),
+            (None, fallback),
+        ] {
+            note.content.push_str(" edited");
+            let (saved, name) = save_workspace_changes(
+                &workspace.root,
+                &WorkspaceChanges {
+                    name: requested.map(str::to_owned),
+                    notes: if include_note {
+                        vec![note.clone()]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                revision,
+            )
+            .unwrap();
+            revision = saved.revision;
+            let (state, _) =
+                read_workspace_state(&workspace.root, &mut WarningCollector::default());
+            assert_eq!(name, state.unwrap().name);
+            assert_eq!(name, expected);
+        }
+    }
+}
+
+#[test]
+fn incremental_save_requires_explicit_removal_and_allows_replacement() {
+    let workspace = TestWorkspace::new("incremental-membership");
+    let first = test_note("Original");
+    write_saved_note(&workspace, &first);
+    let mut added = test_note("New body");
+    added.id = "added".to_owned();
+    added.title = "Added".to_owned();
+    let (result, _) = save_workspace_changes(
+        &workspace.root,
+        &WorkspaceChanges {
+            notes: vec![added.clone()],
+            ..Default::default()
+        },
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    assert!(workspace.root.join(&first.relative_path).exists());
+    assert_eq!(result.note_paths.len(), 1);
+    let mut replacement = test_note("Replacement");
+    replacement.id = "replacement".to_owned();
+    let (result, _) = save_workspace_changes(
+        &workspace.root,
+        &WorkspaceChanges {
+            notes: vec![replacement.clone()],
+            removed_note_ids: vec![first.id],
+            ..Default::default()
+        },
+        result.revision,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&replacement.relative_path)).unwrap(),
+        replacement.content
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("Added.md")).unwrap(),
+        added.content
+    );
+    save_workspace_changes(
+        &workspace.root,
+        &WorkspaceChanges {
+            removed_note_ids: vec![replacement.id, added.id, "unsaved-note".to_owned()],
+            ..Default::default()
+        },
+        result.revision,
+    )
+    .unwrap();
+    let loaded = load_workspace(&workspace.root, &empty_vault("Reload")).unwrap();
+    assert!(loaded.vault.notes.is_empty());
+}
+
+#[test]
+fn incremental_save_rejects_invalid_batches_without_writes() {
+    let workspace = TestWorkspace::new("incremental-invalid");
+    let original = test_note("Original");
+    write_saved_note(&workspace, &original);
+    let before = fs::read(workspace_state_path(&workspace.root)).unwrap();
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let mut collision = original.clone();
+    collision.id = "another-id".to_owned();
+    let mut mismatch = original.clone();
+    mismatch.tags = vec!["absent".to_owned()];
+    for changes in [
+        WorkspaceChanges {
+            notes: vec![collision],
+            ..Default::default()
+        },
+        WorkspaceChanges {
+            notes: vec![original.clone(), original.clone()],
+            ..Default::default()
+        },
+        WorkspaceChanges {
+            notes: vec![original.clone()],
+            removed_note_ids: vec![original.id.clone()],
+            ..Default::default()
+        },
+        WorkspaceChanges {
+            removed_note_ids: vec![original.id.clone(), original.id.clone()],
+            ..Default::default()
+        },
+        WorkspaceChanges {
+            removed_note_ids: vec![String::new()],
+            ..Default::default()
+        },
+        WorkspaceChanges {
+            notes: vec![mismatch],
+            name: Some("Should not save".to_owned()),
+            ..Default::default()
+        },
+    ] {
+        assert!(save_workspace_changes(&workspace.root, &changes, revision).is_err());
+        assert_eq!(
+            fs::read(workspace_state_path(&workspace.root)).unwrap(),
+            before
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.root.join(&original.relative_path)).unwrap(),
+            original.content
+        );
+    }
+}
+
+#[test]
+fn incremental_metadata_save_does_not_plan_or_replace_documents() {
+    let workspace = TestWorkspace::new("incremental-metadata");
+    let original = test_note("Original");
+    let mut state = write_saved_note(&workspace, &original);
+    state.last_committed_transaction_id = Some("prior-transaction".to_owned());
+    write_workspace_state(&workspace.root, &state).unwrap();
+    // A metadata update needs fingerprints, not Markdown decoding or write plans.
+    let path = workspace.root.join(&original.relative_path);
+    let bytes = [0xff, 0xfe, 0x80];
+    fs::write(&path, bytes).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    let changes: WorkspaceChanges = serde_json::from_value(serde_json::json!({
+        "navigation": {"activeNoteId": null, "recentNoteIds": [], "selectedFolderId": "all"},
+        "imageEmbedSettings": {"location": "note-folder", "folderPath": ""}
+    }))
+    .unwrap();
+    let (saved, _) = save_workspace_changes(
+        &workspace.root,
+        &changes,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    assert!(saved.note_paths.is_empty());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    let (stored, _) = read_workspace_state(&workspace.root, &mut WarningCollector::default());
+    let stored = stored.unwrap();
+    assert_eq!(stored.active_note_id, None);
+    assert_eq!(
+        stored.image_embed_settings.location,
+        ImageEmbedLocation::NoteFolder
+    );
+    assert_eq!(stored.note_paths, state.note_paths);
+    assert_eq!(stored.note_metadata, state.note_metadata);
+    assert_eq!(
+        stored.last_committed_transaction_id,
+        state.last_committed_transaction_id
+    );
+    let state_path = workspace_state_path(&workspace.root);
+    let modified = fs::metadata(&state_path).unwrap().modified().unwrap();
+    let (unchanged, _) = save_workspace_changes(
+        &workspace.root,
+        &WorkspaceChanges::default(),
+        saved.revision,
+    )
+    .unwrap();
+    assert_eq!(unchanged.revision, saved.revision);
+    assert_eq!(
+        fs::metadata(&state_path).unwrap().modified().unwrap(),
+        modified
+    );
+    assert!(
+        serde_json::from_value::<WorkspaceChanges>(serde_json::json!({"unknown": true})).is_err()
+    );
+}
+
+#[test]
+fn incremental_saves_reject_same_metadata_external_edits() {
+    for metadata_only in [false, true] {
+        let workspace = TestWorkspace::new("incremental-conflict");
+        let note = test_note("before");
+        write_saved_note(&workspace, &note);
+        let path = workspace.root.join(&note.relative_path);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let revision = revision_for_root(&workspace.root).unwrap();
+        let state_before = fs::read(workspace_state_path(&workspace.root)).unwrap();
+        fs::write(&path, "edited").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(modified))
+            .unwrap();
+        let changes = WorkspaceChanges {
+            notes: if metadata_only { vec![] } else { vec![note] },
+            name: Some("App version".to_owned()),
+            ..Default::default()
+        };
+        let error = save_workspace_changes(&workspace.root, &changes, revision).unwrap_err();
+        assert!(error.contains("vault changed"));
+        assert_eq!(fs::read_to_string(path).unwrap(), "edited");
+        assert_eq!(
+            fs::read(workspace_state_path(&workspace.root)).unwrap(),
+            state_before
+        );
+    }
+}
+
+#[test]
+fn incremental_folder_changes_require_affected_notes_and_preserve_other_paths() {
+    let workspace = TestWorkspace::new("incremental-folders");
+    let mut vault = empty_vault("Test vault");
+    let mut note = test_note("Nested body");
+    note.folder_id = Some("folder".to_owned());
+    vault.notes.push(note.clone());
+    vault.folders.push(Folder {
+        id: "folder".to_owned(),
+        name: "Before".to_owned(),
+        parent_id: None,
+        created_at: 1,
+    });
+    let initial = save_workspace_files(
+        &workspace.root,
+        &vault,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    vault.folders[0].name = "After".to_owned();
+    let changes = WorkspaceChanges {
+        folders: Some(vault.folders.clone()),
+        ..Default::default()
+    };
+    let error = save_workspace_changes(&workspace.root, &changes, initial.revision).unwrap_err();
+    assert!(error.contains("omitted note"));
+    assert!(workspace.root.join("Before/First note.md").exists());
+    assert!(!workspace.root.join("After").exists());
+    let (moved, _) = save_workspace_changes(
+        &workspace.root,
+        &WorkspaceChanges {
+            notes: vec![note],
+            ..changes
+        },
+        initial.revision,
+    )
+    .unwrap();
+    assert_eq!(moved.note_paths["note-1"], "After/First note.md");
+    assert_eq!(
+        fs::read_to_string(workspace.root.join("After/First note.md")).unwrap(),
+        "Nested body"
+    );
+    assert!(!workspace.root.join("Before").exists());
+}
+
+#[test]
+fn incremental_save_recovers_an_interrupted_document_transaction() {
+    let workspace = TestWorkspace::new("incremental-recovery");
+    let original = test_note("Original");
+    let state = write_saved_note(&workspace, &original);
+    let revision = revision_for_root(&workspace.root).unwrap();
+    let mut vault = empty_vault("Test vault");
+    let mut edited = original.clone();
+    edited.content = "Interrupted".to_owned();
+    vault.notes.push(edited);
+    let plans = build_note_write_plans(
+        &workspace.root,
+        &vault,
+        &state,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let (transaction_root, mut manifest) = prepare_transaction(
+        &workspace.root,
+        new_transaction_id(),
+        &BTreeSet::from([original.relative_path.clone()]),
+        &plans,
+        &[],
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    manifest.phase = TransactionPhase::Applying;
+    write_transaction_manifest(&transaction_root, &manifest).unwrap();
+    apply_transaction(
+        &workspace.root,
+        &transaction_root,
+        &manifest,
+        &plans,
+        &mut WarningCollector::default(),
+    )
+    .unwrap();
+    let changes = WorkspaceChanges {
+        name: Some("Recovered".to_owned()),
+        ..Default::default()
+    };
+    // Recovery may restore the bytes with a new filesystem timestamp. In that
+    // case the stale revision must reject this request before metadata changes.
+    if let Err(error) = save_workspace_changes(&workspace.root, &changes, revision) {
+        assert!(error.contains("vault changed"));
+    }
+    let (result, _) = save_workspace_changes(
+        &workspace.root,
+        &changes,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    assert!(result.note_paths.is_empty());
+    assert_eq!(
+        fs::read_to_string(workspace.root.join(&original.relative_path)).unwrap(),
+        original.content
+    );
+    assert!(!transaction_root.exists());
+}
+
+#[test]
+fn incremental_saves_refuse_newer_or_unreadable_metadata() {
+    for bytes in ["{\"version\":999,\"name\":\"Newer\"}", "not json"] {
+        let workspace = TestWorkspace::new("incremental-read-only");
+        let note = test_note("Original");
+        write_saved_note(&workspace, &note);
+        fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
+        let revision = revision_for_root(&workspace.root).unwrap();
+        for notes in [vec![], vec![note.clone()]] {
+            assert!(save_workspace_changes(
+                &workspace.root,
+                &WorkspaceChanges {
+                    notes,
+                    name: Some("Blocked".to_owned()),
+                    ..Default::default()
+                },
+                revision
+            )
+            .is_err());
+            assert_eq!(
+                fs::read_to_string(workspace_state_path(&workspace.root)).unwrap(),
+                bytes
+            );
+            assert_eq!(
+                fs::read_to_string(workspace.root.join(&note.relative_path)).unwrap(),
+                note.content
+            );
+        }
+    }
+}
+
+#[test]
+fn incremental_limits_include_unchanged_documents() {
+    let mut state = WorkspaceState::default();
+    let mut baseline = BTreeMap::new();
+    for index in 0..51 {
+        let path = format!("Existing {index}.md");
+        state
+            .note_paths
+            .insert(format!("existing-{index}"), path.clone());
+        baseline.insert(
+            portable_path_key(&path),
+            FileStamp {
+                length: MAX_NOTE_BYTES,
+                modified_nanos: 1,
+                content_hash: Some(1),
+            },
+        );
+    }
+    let old_state = state.clone();
+    state
+        .note_paths
+        .insert("added".to_owned(), "Added.md".to_owned());
+    let mut plan = NoteWritePlan {
+        id: "added".to_owned(),
+        old_relative_path: None,
+        new_relative_path: "Added.md".to_owned(),
+        content: "x".repeat(3 * 1024 * 1024),
+        needs_write: true,
+        preserved_modified_at: None,
+    };
+    assert!(validate_incremental_notes(
+        &WorkspaceChanges::default(),
+        &old_state,
+        &state,
+        std::slice::from_ref(&plan),
+        &baseline
+    )
+    .unwrap_err()
+    .contains("MiB of Markdown"));
+    plan.content = "Within limit".to_owned();
+    validate_incremental_notes(
+        &WorkspaceChanges::default(),
+        &old_state,
+        &state,
+        std::slice::from_ref(&plan),
+        &baseline,
+    )
+    .unwrap();
+    baseline.values_mut().next().unwrap().length = MAX_NOTE_BYTES + 1;
+    assert!(validate_incremental_notes(
+        &WorkspaceChanges::default(),
+        &old_state,
+        &state,
+        &[plan],
+        &baseline
+    )
+    .unwrap_err()
+    .contains("too large"));
+    state.note_paths = (0..=MAX_NOTES)
+        .map(|index| (index.to_string(), format!("{index}.md")))
+        .collect();
+    assert!(validate_incremental_notes(
+        &WorkspaceChanges::default(),
+        &old_state,
+        &state,
+        &[],
+        &BTreeMap::new()
+    )
+    .unwrap_err()
+    .contains("at most"));
+}

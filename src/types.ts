@@ -139,6 +139,19 @@ export interface VaultData {
   attachmentEmbedSettings: AttachmentEmbedSettings;
 }
 
+// Omitted fields retain their saved values; note removals are always explicit.
+export interface WorkspaceChanges {
+  notes: Note[];
+  removedNoteIds: string[];
+  folders?: Folder[];
+  name?: string;
+  templates?: NoteTemplate[];
+  snippets?: CssSnippet[];
+  navigation?: Pick<VaultData, 'activeNoteId' | 'recentNoteIds' | 'selectedFolderId'>;
+  imageEmbedSettings?: ImageEmbedSettings;
+  attachmentEmbedSettings?: AttachmentEmbedSettings;
+}
+
 export interface VaultDescriptor {
   name: string;
   path: string;
