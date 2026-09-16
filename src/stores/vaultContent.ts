@@ -763,6 +763,7 @@ export function createVaultContent(
   }
 
   return {
+    noteById: ( id: string ) => notesById.value.get( id ),
     createFolder,
     createFromTemplate,
     createLinkedNote,

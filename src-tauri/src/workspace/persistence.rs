@@ -450,6 +450,178 @@ pub(super) fn persist_loaded_workspace(
     verify_workspace_load_revision(root, baseline, written_state.as_ref())
 }
 
+enum WorkspaceSave<'a> {
+    Full(&'a VaultData),
+    Changes(&'a WorkspaceChanges),
+}
+
+struct WorkspaceSaveOutcome {
+    result: SaveResult,
+    name: String,
+    deleted_note: Option<RecentlyDeletedNote>,
+    prepared_restore: Option<PreparedNoteRestore>,
+}
+
+impl WorkspaceChanges {
+    // Only changed bodies are materialized. Omitted fields retain stored values.
+    fn as_vault(&self, state: &WorkspaceState) -> VaultData {
+        VaultData {
+            name: self.name.clone().unwrap_or_else(|| state.name.clone()),
+            notes: self.notes.clone(),
+            folders: self.folders.clone().unwrap_or_default(),
+            templates: self
+                .templates
+                .clone()
+                .unwrap_or_else(|| state.templates.clone()),
+            snippets: self
+                .snippets
+                .clone()
+                .unwrap_or_else(|| state.snippets.clone()),
+            active_note_id: self.navigation.as_ref().map_or_else(
+                || state.active_note_id.clone(),
+                |navigation| navigation.active_note_id.clone(),
+            ),
+            recent_note_ids: self.navigation.as_ref().map_or_else(
+                || state.recent_note_ids.clone(),
+                |navigation| navigation.recent_note_ids.clone(),
+            ),
+            selected_folder_id: self.navigation.as_ref().map_or_else(
+                || state.selected_folder_id.clone(),
+                |navigation| navigation.selected_folder_id.clone(),
+            ),
+            image_embed_settings: self
+                .image_embed_settings
+                .clone()
+                .unwrap_or_else(|| state.image_embed_settings.clone()),
+            attachment_embed_settings: self
+                .attachment_embed_settings
+                .clone()
+                .unwrap_or_else(|| state.attachment_embed_settings.clone()),
+            embedded_images: Vec::new(),
+            image_files: Vec::new(),
+            embedded_attachments: Vec::new(),
+            attachment_files: Vec::new(),
+        }
+    }
+}
+
+pub(super) fn save_workspace_changes(
+    root: &Path,
+    changes: &WorkspaceChanges,
+    expected_revision: u64,
+) -> Result<(SaveResult, String), String> {
+    save_workspace_update(
+        root,
+        WorkspaceSave::Changes(changes),
+        expected_revision,
+        None,
+        None,
+        None,
+    )
+    // Return the effective persisted name for Recents without rereading the vault.
+    .map(|outcome| (outcome.result, outcome.name))
+}
+
+// Preferences/navigation have no note plans, backups, or document transactions.
+// Keep content-based revision checks: a same-size external edit is still a conflict.
+fn save_workspace_metadata(
+    root: &Path,
+    vault: &VaultData,
+    old_state: &WorkspaceState,
+    expected_revision: u64,
+    expected_state_fingerprint: Option<&FileFingerprint>,
+    warnings: WarningCollector,
+) -> Result<SaveResult, String> {
+    let baseline = revision_entries_for_root(root)?;
+    if revision_for_entries(&baseline) != expected_revision {
+        return Err(
+            "The vault changed outside Obsidian At Home. Reload it before saving.".to_owned(),
+        );
+    }
+    let mut state = old_state.clone();
+    state.version = STATE_VERSION;
+    state.name = display_vault_name(&vault.name, root);
+    state.templates = vault.templates.clone();
+    state.snippets = vault.snippets.clone();
+    state.active_note_id = vault.active_note_id.clone();
+    let note_ids = state.note_paths.keys().map(String::as_str).collect();
+    state.recent_note_ids = normalize_recent_note_ids(
+        &vault.recent_note_ids,
+        vault.active_note_id.as_deref(),
+        &note_ids,
+    );
+    state.selected_folder_id = vault.selected_folder_id.clone();
+    state.image_embed_settings = normalize_image_embed_settings(&vault.image_embed_settings)?;
+    state.attachment_embed_settings =
+        normalize_attachment_embed_settings(&vault.attachment_embed_settings)?;
+    let bytes = workspace_state_bytes(&state)?;
+    let fingerprint = fingerprint_bytes(&bytes);
+    verify_workspace_load_revision(root, &baseline, None)?;
+    if !workspace_state_matches_revision(&baseline, &fingerprint) {
+        write_loaded_workspace_state_bytes(root, &bytes, expected_state_fingerprint)?;
+    }
+    let revision = verify_workspace_load_revision(root, &baseline, Some(&fingerprint))?;
+    Ok(SaveResult {
+        note_paths: BTreeMap::new(),
+        revision,
+        saved_at: now_millis(),
+        warnings: warnings.finish(),
+    })
+}
+
+pub(super) fn validate_incremental_notes(
+    changes: &WorkspaceChanges,
+    old_state: &WorkspaceState,
+    state: &WorkspaceState,
+    plans: &[NoteWritePlan],
+    baseline: &BTreeMap<String, FileStamp>,
+) -> Result<(), String> {
+    validate_managed_path_ownership(&state.note_paths)?;
+    if state.note_paths.len() > MAX_NOTES {
+        return Err(format!(
+            "A vault can contain at most {MAX_NOTES} Markdown notes."
+        ));
+    }
+    let changed: HashSet<&str> = plans.iter().map(|plan| plan.id.as_str()).collect();
+    let old_folder_ids: HashMap<&str, &str> = old_state
+        .folder_paths
+        .iter()
+        .map(|(id, path)| (path.as_str(), id.as_str()))
+        .collect();
+    let mut bytes: u64 = plans.iter().map(|plan| plan.content.len() as u64).sum();
+    for (id, path) in &state.note_paths {
+        if changed.contains(id.as_str()) {
+            continue;
+        }
+        let stamp = baseline
+            .get(&portable_path_key(path))
+            .ok_or_else(|| format!("{path} is missing. Reload the vault before saving."))?;
+        if stamp.length > MAX_NOTE_BYTES {
+            return Err(format!(
+                "{path} is too large. Reload the vault before saving."
+            ));
+        }
+        bytes = bytes.saturating_add(stamp.length);
+        if changes.folders.is_some() {
+            let parent = path.rsplit_once('/').map(|(parent, _)| parent);
+            if let Some(folder_id) = parent.and_then(|parent| old_folder_ids.get(parent)) {
+                if state.folder_paths.get(*folder_id) != old_state.folder_paths.get(*folder_id) {
+                    return Err(format!(
+                        "The folder change omitted note {id}. Reload before saving."
+                    ));
+                }
+            }
+        }
+    }
+    if bytes > MAX_TOTAL_NOTE_BYTES {
+        return Err(format!(
+            "The vault contains more than {} MiB of Markdown text.",
+            MAX_TOTAL_NOTE_BYTES / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn save_workspace_files(
     root: &Path,
     vault: &VaultData,
@@ -606,6 +778,31 @@ pub(super) fn save_workspace_files_with_recovery(
     ),
     String,
 > {
+    save_workspace_update(
+        root,
+        WorkspaceSave::Full(vault),
+        expected_revision,
+        pending_archive,
+        pending_restore,
+        pending_image_import_id,
+    )
+    .map(|outcome| {
+        (
+            outcome.result,
+            outcome.deleted_note,
+            outcome.prepared_restore,
+        )
+    })
+}
+
+fn save_workspace_update(
+    root: &Path,
+    request: WorkspaceSave<'_>,
+    expected_revision: u64,
+    pending_archive: Option<PendingNoteArchive>,
+    pending_restore: Option<PendingNoteRestore>,
+    pending_image_import_id: Option<&str>,
+) -> Result<WorkspaceSaveOutcome, String> {
     if pending_archive.is_some() && pending_restore.is_some() {
         return Err("A note cannot be archived and restored in the same save.".to_owned());
     }
@@ -640,7 +837,52 @@ pub(super) fn save_workspace_files_with_recovery(
         );
     }
 
-    let desired_folder_paths = build_folder_paths(&vault.folders)?;
+    let changes = match request {
+        WorkspaceSave::Changes(changes) => Some(changes),
+        _ => None,
+    };
+    let changed_vault = changes.map(|changes| changes.as_vault(&old_state));
+    let vault = match request {
+        WorkspaceSave::Full(vault) => vault,
+        WorkspaceSave::Changes(_) => changed_vault
+            .as_ref()
+            .expect("incremental vault was prepared"),
+    };
+    let mut removed_ids = HashSet::new();
+    if let Some(changes) = changes {
+        let updated_ids: HashSet<&str> = vault.notes.iter().map(|note| note.id.as_str()).collect();
+        for id in &changes.removed_note_ids {
+            if id.trim().is_empty()
+                || !removed_ids.insert(id.as_str())
+                || updated_ids.contains(id.as_str())
+            {
+                return Err(
+                    "Removed note IDs must be unique and cannot also be updated.".to_owned(),
+                );
+            }
+        }
+        if vault.notes.is_empty() && removed_ids.is_empty() && changes.folders.is_none() {
+            return save_workspace_metadata(
+                &root,
+                vault,
+                &old_state,
+                expected_revision,
+                expected_state_fingerprint.as_ref(),
+                warnings,
+            )
+            .map(|result| WorkspaceSaveOutcome {
+                result,
+                name: display_vault_name(&vault.name, &root),
+                deleted_note: None,
+                prepared_restore: None,
+            });
+        }
+    }
+    let desired_folder_paths = if changes.is_some_and(|changes| changes.folders.is_none()) {
+        old_state.folder_paths.clone()
+    } else {
+        build_folder_paths(&vault.folders)?
+    };
     let prepared_restore = pending_restore
         .map(|restore| {
             prepare_note_restore(&root, vault, &old_state, &desired_folder_paths, restore)
@@ -668,13 +910,19 @@ pub(super) fn save_workspace_files_with_recovery(
         );
     }
 
+    let planned_paths: HashMap<&str, &str> = plans
+        .iter()
+        .map(|plan| (plan.id.as_str(), plan.new_relative_path.as_str()))
+        .collect();
     let mut paths_to_replace = BTreeSet::new();
     for (id, old_relative_path) in &old_state.note_paths {
-        let new_path = plans
-            .iter()
-            .find(|plan| plan.id == *id)
-            .map(|plan| plan.new_relative_path.as_str());
-        if new_path != Some(old_relative_path.as_str()) {
+        if changes.is_some()
+            && !planned_paths.contains_key(id.as_str())
+            && !removed_ids.contains(id.as_str())
+        {
+            continue;
+        }
+        if planned_paths.get(id.as_str()).copied() != Some(old_relative_path.as_str()) {
             paths_to_replace.insert(old_relative_path.clone());
         }
     }
@@ -705,8 +953,20 @@ pub(super) fn save_workspace_files_with_recovery(
     let prepared_archive = pending_archive
         .map(|archive| prepare_note_archive(&root, vault, &old_state, archive, saved_at))
         .transpose()?;
-    let mut note_paths = BTreeMap::new();
-    let mut note_metadata = BTreeMap::new();
+    let mut note_paths = if changes.is_some() {
+        old_state.note_paths.clone()
+    } else {
+        BTreeMap::new()
+    };
+    let mut note_metadata = if changes.is_some() {
+        old_state.note_metadata.clone()
+    } else {
+        BTreeMap::new()
+    };
+    for id in &removed_ids {
+        note_paths.remove(*id);
+        note_metadata.remove(*id);
+    }
     for (note, plan) in vault.notes.iter().zip(plans.iter()) {
         note_paths.insert(note.id.clone(), plan.new_relative_path.clone());
         note_metadata.insert(
@@ -721,7 +981,7 @@ pub(super) fn save_workspace_files_with_recovery(
             },
         );
     }
-    let note_ids: HashSet<&str> = vault.notes.iter().map(|note| note.id.as_str()).collect();
+    let note_ids: HashSet<&str> = note_paths.keys().map(String::as_str).collect();
     let recent_note_ids = normalize_recent_note_ids(
         &vault.recent_note_ids,
         vault.active_note_id.as_deref(),
@@ -763,6 +1023,10 @@ pub(super) fn save_workspace_files_with_recovery(
             .map(str::to_owned)
             .or_else(|| old_state.last_committed_image_import_id.clone()),
     };
+
+    if let Some(changes) = changes {
+        validate_incremental_notes(changes, &old_state, &state, &plans, &baseline)?;
+    }
 
     let needs_transaction = prepared_archive.is_some()
         || !paths_to_replace.is_empty()
@@ -985,16 +1249,24 @@ pub(super) fn save_workspace_files_with_recovery(
         revision
     };
     let deleted_note = prepared_archive.map(|archive| archive.deleted_note);
-    Ok((
-        SaveResult {
-            note_paths: state.note_paths.clone(),
+    Ok(WorkspaceSaveOutcome {
+        result: SaveResult {
+            note_paths: if changes.is_some() {
+                plans
+                    .iter()
+                    .map(|plan| (plan.id.clone(), plan.new_relative_path.clone()))
+                    .collect()
+            } else {
+                state.note_paths.clone()
+            },
             revision,
             saved_at,
             warnings: warnings.finish(),
         },
+        name: state.name,
         deleted_note,
         prepared_restore,
-    ))
+    })
 }
 
 pub(super) fn build_note_write_plans(

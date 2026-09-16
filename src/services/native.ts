@@ -16,6 +16,7 @@ import type {
   WorkspaceAttachmentCopyResult,
   WorkspaceAttachmentNoteUpdate,
   WorkspaceBootstrap,
+  WorkspaceChanges,
   WorkspaceEmbedImageResult,
   WorkspaceEmbedAttachmentResult,
   WorkspaceExternalAssetDiscardResult,
@@ -170,6 +171,14 @@ export async function saveWorkspace(
   expectedRevision: number
 ): Promise<WorkspaceSaveResult> {
   return invoke<WorkspaceSaveResult>( 'workspace_save', { path, vault, expectedRevision });
+}
+
+export async function saveWorkspaceChanges(
+  path: string,
+  changes: WorkspaceChanges,
+  expectedRevision: number
+): Promise<WorkspaceSaveResult> {
+  return invoke<WorkspaceSaveResult>( 'workspace_save_changes', { path, changes, expectedRevision });
 }
 
 export async function saveWorkspaceWithImageImport(
