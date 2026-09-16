@@ -39,7 +39,7 @@ This is not a complete Obsidian replacement: cloud sync, graph view, automation,
 
 ## Storage and Obsidian compatibility
 
-Each vault is a folder on your computer. Notes are ordinary Markdown files you can edit with other tools. App-only metadata, including cursor and viewport positions, stays in the vault's `.obsidian-at-home` folder.
+Each vault is a folder on your computer. Notes are ordinary Markdown files you can edit with other tools. App-only metadata, including cursor and viewport positions, stays in the vault's `.obsidian-at-home` folder. Other tools should not modify this private metadata while the vault is open.
 
 Open an existing Markdown or Obsidian vault directly, or use Settings to:
 
