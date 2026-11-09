@@ -9,7 +9,6 @@ import {
 import { EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import {
-  activeDocumentSearchMatch,
   codeMirrorDocumentSearchExtension,
   setDocumentSearchMatches
 } from '../lib/codeMirrorDocumentSearch';
@@ -73,6 +72,13 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
   async function openSearch(): Promise<void> {
     isOpen.value = true;
+    const view = editorView.value;
+    if ( view && view.state.selection.ranges.length > 1 ) {
+      view.dispatch({
+        selection: EditorSelection.create([ view.state.selection.main ]),
+        userEvent: 'select.search'
+      });
+    }
     await nextTick();
     editorView.value?.requestMeasure();
     searchInput.value?.focus();
@@ -90,20 +96,12 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
       return;
     }
 
-    const activeMatch = activeDocumentSearchMatch( view.state );
     view.requestMeasure();
     view.dispatch({
       effects: setDocumentSearchMatches.of({
         activeIndex: activeMatchIndex.value,
         matches: matches.value
-      }),
-      ...( activeMatch && activeMatch.to <= view.state.doc.length
-        ? {
-          selection: EditorSelection.range( activeMatch.from, activeMatch.to ),
-          scrollIntoView: true,
-          userEvent: 'select.search'
-        }
-        : {})
+      })
     });
     view.focus();
   }
@@ -114,7 +112,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     }
 
     const commandModifier = ( event.metaKey || event.ctrlKey ) && !event.altKey;
-    if ( commandModifier && event.key.toLocaleLowerCase() === 'f' ) {
+    if ( commandModifier && !event.shiftKey && event.key.toLocaleLowerCase() === 'f' ) {
       event.preventDefault();
       event.stopPropagation();
       void openSearch();
@@ -139,13 +137,17 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   }
 
   function handleSearchInputKeydown( event: KeyboardEvent ): void {
-    const modifiedTab = event.key === 'Tab' && (
+    // WebKit can report Shift+Tab as an unidentified key on Linux.
+    const key = event.key === 'Unidentified' && event.code === 'Tab'
+      ? 'Tab'
+      : event.key;
+    const modifiedTab = key === 'Tab' && (
       event.altKey || event.ctrlKey || event.metaKey
     );
     if (
       event.isComposing ||
       modifiedTab ||
-      ( event.key !== 'Tab' && event.key !== 'Enter' )
+      ( key !== 'Tab' && key !== 'Enter' )
     ) {
       return;
     }
@@ -156,13 +158,19 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   }
 
   function moveToMatch( direction: DocumentSearchDirection ): void {
+    // Step from the prior index, before refreshing initializes a pending query.
+    const currentIndex = activeMatchIndex.value;
+    if ( isPending.value ) {
+      cancelScheduledSearch();
+      performSearch( false );
+    }
     activeMatchIndex.value = stepDocumentSearchIndex(
-      activeMatchIndex.value,
+      currentIndex,
       matchCount.value,
       direction
     );
     updateDecorations();
-    scrollToActiveMatch();
+    selectActiveMatch();
   }
 
   function refreshSearch(): void {
@@ -213,12 +221,14 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     }
     isPending.value = false;
     updateDecorations();
-    if ( activeMatchIndex.value >= 0 ) {
-      scrollToActiveMatch();
+    // Refreshing highlights after an edit must not move the user's caret or
+    // viewport. A query change may navigate only while its input still has focus.
+    if ( resetActiveMatch && searchInput.value === document.activeElement ) {
+      selectActiveMatch();
     }
   }
 
-  function scrollToActiveMatch(): void {
+  function selectActiveMatch(): void {
     const view = editorView.value;
     const match = matches.value[ activeMatchIndex.value ];
     if ( !view || !match ) {
@@ -226,7 +236,9 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     }
 
     view.dispatch({
-      effects: EditorView.scrollIntoView( match.from, { y: 'center' })
+      selection: EditorSelection.single( match.from, match.to ),
+      effects: EditorView.scrollIntoView( match.from, { y: 'center' }),
+      userEvent: 'select.search'
     });
   }
 

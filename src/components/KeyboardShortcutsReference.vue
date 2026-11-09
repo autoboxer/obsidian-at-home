@@ -29,6 +29,7 @@ const shortcutGroups: ShortcutGroup[] = [
     title: 'Workspace',
     shortcuts: [
       { label: 'Quick search', keys: [ commandKey, 'O' ] },
+      { label: 'Search all notes', keys: [ commandKey, 'Shift', 'F' ] },
       { label: 'Create a note', keys: [ commandKey, 'N' ] },
       { label: 'Open templates', keys: [ commandKey, 'Shift', 'T' ] },
       { label: 'Toggle the vault panel', keys: [ commandKey, '\\' ] },

@@ -21,6 +21,7 @@ import {
   confirmVaultAssetDeletion,
   createNote,
   openQuickSearch,
+  openSearchWorkspace,
   resetZoom,
   uiState,
   vaultSession,
@@ -251,9 +252,12 @@ function handleKeyboard( event: KeyboardEvent ): void {
     && Boolean( target.closest(
       "input, textarea, select, [contenteditable]:not([contenteditable='false'])"
     ) );
+  const vaultSearchShortcut = modifier && event.shiftKey && key === 'f'
+    && !event.altKey && !event.isComposing;
   const appShortcut = (
     modifier && [ 'n', 'o', '\\' ].includes( key )
     || modifier && event.shiftKey && key === 't'
+    || vaultSearchShortcut
     || !modifier && !isEditing && key === '/'
   );
   const zoomShortcut = modifier
@@ -293,6 +297,12 @@ function handleKeyboard( event: KeyboardEvent ): void {
     return;
   }
 
+  if ( vaultSearchShortcut ) {
+    event.preventDefault();
+    openSearchWorkspace();
+
+    return;
+  }
   if ( modifier && key === 'o' ) {
     event.preventDefault();
     if ( uiState.commandOpen ) {
