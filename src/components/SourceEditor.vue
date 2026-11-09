@@ -683,7 +683,11 @@ function insertSuggestion( title: string ): void {
 }
 
 function blockPendingEditorInteraction( event: Event ): void {
-  if ( !editorRenderReady.value || ( props.readOnly && event.type !== 'keydown' ) ) {
+  const isSearchInput = event.target === documentSearchInput.value;
+  if (
+    !editorRenderReady.value
+    || ( props.readOnly && event.type !== 'keydown' && !isSearchInput )
+  ) {
     event.preventDefault();
     event.stopImmediatePropagation();
   }
