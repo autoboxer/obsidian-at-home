@@ -112,7 +112,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     }
 
     const commandModifier = ( event.metaKey || event.ctrlKey ) && !event.altKey;
-    if ( commandModifier && event.key.toLocaleLowerCase() === 'f' ) {
+    if ( commandModifier && !event.shiftKey && event.key.toLocaleLowerCase() === 'f' ) {
       event.preventDefault();
       event.stopPropagation();
       void openSearch();

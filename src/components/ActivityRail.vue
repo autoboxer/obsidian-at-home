@@ -18,16 +18,16 @@ import type { ToolView } from '../types';
 import AppIcon from './AppIcon.vue';
 import KeyboardShortcutsReference from './KeyboardShortcutsReference.vue';
 
+const commandKey = shortcutCommandKey();
 const primaryTools: Array<{ id: ToolView; label: string; icon: string; shortcut?: string }> = [
   { id: 'notes', label: 'Notes', icon: 'notes' },
-  { id: 'search', label: 'Search', icon: 'search' },
+  { id: 'search', label: 'Search', icon: 'search', shortcut: `${ commandKey } Shift F` },
   { id: 'templates', label: 'Templates', icon: 'templates' },
   { id: 'snippets', label: 'CSS snippets', icon: 'snippets' }
 ];
 
 const zoomMenuOpen = ref( false );
 const zoomPercent = computed( () => Math.round( uiState.zoom * 100 ) );
-const commandKey = shortcutCommandKey();
 const zoomInShortcut = formatCommandShortcut( '+' );
 const zoomOutShortcut = formatCommandShortcut( '−' );
 const zoomResetShortcut = formatCommandShortcut( '0' );
