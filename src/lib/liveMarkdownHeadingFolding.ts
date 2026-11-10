@@ -23,7 +23,7 @@ import type {
   Transaction,
   TransactionSpec
 } from '@codemirror/state';
-import type { DecorationSet } from '@codemirror/view';
+import type { DecorationSet, MouseSelectionStyle } from '@codemirror/view';
 
 interface HeadingSection {
   bodyFrom: number;
@@ -168,10 +168,74 @@ export function liveMarkdownHeadingFoldingExtension(
 
   return [
     headingFoldState,
+    EditorView.mouseSelectionStyle.of( ( view, event ) =>
+      collapsedHeadingMouseSelection( view, event, headingFoldState )
+    ),
     EditorState.transactionFilter.of( ( transaction ) =>
       separateFoldBoundaryInput( transaction, transaction.startState.field( headingFoldState ).collapsed )
     )
   ];
+}
+
+function collapsedHeadingMouseSelection(
+  view: EditorView,
+  event: MouseEvent,
+  field: StateField<HeadingFoldState>
+): MouseSelectionStyle | null {
+  if (
+    event.button !== 0 || event.detail < 3
+    || event.ctrlKey || event.metaKey || ( event.altKey && event.shiftKey )
+  ) {
+    return null;
+  }
+
+  const lineAtEvent = ( pointer: MouseEvent ) => view.state.doc.lineAt(
+    view.posAtCoords({ x: pointer.clientX, y: pointer.clientY }, false )
+  );
+  const initialLine = lineAtEvent( event );
+  const heading = view.state.field( field ).collapsed.find( ( fold ) =>
+    fold.from === initialLine.from
+  );
+  if ( !heading ) {
+    return null;
+  }
+
+  // Use the stored end so text typed below the fold stays outside the selection.
+  let start = EditorSelection.range( heading.from, heading.bodyTo );
+  let startSelection = view.state.selection;
+
+  return {
+    get( currentEvent, extend, multiple ) {
+      const line = lineAtEvent( currentEvent );
+      const fold = view.state.field( field ).collapsed.find( ( item ) =>
+        item.from === line.from
+      );
+      const end = fold?.bodyTo ?? Math.min( line.to + 1, view.state.doc.length );
+      const current = EditorSelection.range( line.from, end );
+      const range = extend ? current : current.from < start.from
+        ? EditorSelection.range( start.to, current.from )
+        : EditorSelection.range( start.from, Math.max( start.to, current.to ) );
+
+      if ( extend ) {
+        return startSelection.replaceRange(
+          startSelection.main.extend( range.from, range.to, range.assoc )
+        );
+      }
+      if ( multiple ) {
+        return startSelection.addRange( range );
+      }
+
+      return EditorSelection.create([ range ]);
+    },
+    update( update ) {
+      if ( update.docChanged ) {
+        start = start.map( update.changes );
+        startSelection = startSelection.map( update.changes );
+      }
+
+      return false;
+    }
+  };
 }
 
 function separateFoldBoundaryInput(
@@ -305,7 +369,7 @@ function normalizedCollapsedHeadings(
       && section.bodyTo > section.bodyFrom
       && !seenPositions.has( section.from )
       && !selections.some( ( range ) =>
-        selectionTouchesSectionBody( range, section )
+        selectionRevealsSectionBody( range, section )
       )
     ) {
       collapsed.push( collapsedHeading( section ) );
@@ -485,13 +549,15 @@ function sameCollapsedHeadings(
   );
 }
 
-function selectionTouchesSectionBody(
+function selectionRevealsSectionBody(
   selection: SelectionRange,
   section: HeadingSection
 ): boolean {
   return selection.empty
     ? selection.head >= section.bodyFrom && selection.head < section.bodyTo
-    : selection.from < section.bodyTo && selection.to > section.bodyFrom;
+    : selection.from < section.bodyTo && selection.to > section.bodyFrom
+      // Selecting a whole section need not reveal it; targeting its body does.
+      && !( selection.from <= section.from && selection.to >= section.bodyTo );
 }
 
 class HeadingFoldWidget extends LiveMarkdownWidget {
