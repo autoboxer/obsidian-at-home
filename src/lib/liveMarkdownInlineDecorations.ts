@@ -18,6 +18,7 @@ import { liveMarkdownDocumentModel } from './liveMarkdownDocumentModel';
 import { sanitizeImageUrl, sanitizeLinkUrl } from './markdown';
 import { parseMarkdownAttachmentAt } from './markdownAttachments';
 import { parseMarkdownImageAt } from './markdownImages';
+import { normalizeMarkdownLinkDestination } from './markdownLinks';
 import { parseWikiLinks } from './wikiLinks';
 import type { EditorState, Text } from '@codemirror/state';
 import type { SyntaxNodeRef } from '@lezer/common';
@@ -491,6 +492,14 @@ function addMarkdownLinkDecoration(
   }
 
   const rawHref = value.slice( urlNode.from, urlNode.to );
+  // Keep unfinished fields visible and clickable even when the caret leaves.
+  if (
+    !value.slice( labelOpening.to, labelClosing.from ).trim() ||
+    !normalizeMarkdownLinkDestination( rawHref ).trim()
+  ) {
+    return;
+  }
+
   const href = sanitizeLinkUrl(
     autolink && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test( rawHref )
       ? `mailto:${ rawHref }`
