@@ -464,15 +464,10 @@ function inlineMarkupSpanIsRevealed(
     return false;
   }
 
-  return view.state.selection.ranges.some( ( selection ) => {
-    if ( selection.empty ) {
-      return span.syntax.some( ( syntax ) =>
-        selection.head >= syntax.from && selection.head <= syntax.to
-      );
-    }
-
-    return span.syntax.some( ( syntax ) => rangesOverlap( selection, syntax ) );
-  });
+  return view.state.selection.ranges.some( ( selection ) =>
+    ( selection.from >= span.from && selection.to <= span.to ) ||
+    span.syntax.some( ( syntax ) => rangesOverlap( selection, syntax ) )
+  );
 }
 
 export function constructIsRevealed(
@@ -497,6 +492,15 @@ function selectionRevealsConstruct(
   selection: SelectionRange,
   construct: LiveConstruct
 ): boolean {
+  // A caret inside formatted text needs the same source access as a selection.
+  if (
+    construct.revealWhenSelectedWithin &&
+    selection.from >= construct.from &&
+    selection.to <= construct.to
+  ) {
+    return true;
+  }
+
   if ( selection.empty ) {
     const insideSyntax = construct.syntax.some( ( syntax ) =>
       selection.head > syntax.from && selection.head < syntax.to
@@ -514,14 +518,6 @@ function selectionRevealsConstruct(
     }
 
     return false;
-  }
-
-  if (
-    construct.revealWhenSelectedWithin &&
-    selection.from >= construct.from &&
-    selection.to <= construct.to
-  ) {
-    return true;
   }
 
   return construct.syntax.some( ( syntax ) =>
