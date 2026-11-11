@@ -133,6 +133,46 @@ export function parseWikiLinkAt(
   };
 }
 
+/** Source offsets for the caret boundaries in a rendered wiki-link label. */
+export function wikiLinkDisplayOffsets( raw: string ): number[] {
+  const opening = raw.startsWith( '!' ) ? 3 : 2;
+  const inner = raw.slice( opening, -2 );
+  const [ destination = '', alias ] = splitUnescaped( inner, '|', 2 );
+  const segment = ( value: string, start: number ) => {
+    let text = '';
+    const offsets: number[] = [];
+    for ( let index = 0; index < value.length; index += 1 ) {
+      offsets.push( start + index );
+      if ( value[ index ] === '\\' && /[\\|#[\]]/.test( value[ index + 1 ] ?? '' ) ) {
+        index += 1;
+      }
+      text += value[ index ];
+    }
+    offsets.push( start + value.length );
+    const from = text.length - text.trimStart().length;
+    const to = text.trimEnd().length;
+    return { text: text.slice( from, to ), offsets: offsets.slice( from, to + 1 ) };
+  };
+  const aliased = alias === undefined ? undefined : segment( alias, opening + destination.length + 1 );
+  if ( aliased?.text ) {
+    return aliased.offsets;
+  }
+  const [ rawTarget = '', ...headings ] = splitUnescaped( destination, '#' );
+  const target = segment( rawTarget, opening );
+  const path = target.text.replace( /\\/g, '/' );
+  const nameFrom = path.lastIndexOf( '/' ) + 1;
+  const nameTo = path.replace( NOTE_EXTENSION, '' ).length;
+  const name = target.offsets.slice( nameFrom, nameTo + 1 );
+  const heading = segment( headings.join( '#' ), opening + rawTarget.length + 1 );
+  // The displayed space and parentheses are synthetic. Keep the filename's
+  // end before its hidden extension, then map the heading to its own source.
+  return heading.text
+    ? target.text
+      ? [ ...name, heading.offsets[ 0 ]!, ...heading.offsets, heading.offsets.at( -1 )! ]
+      : heading.offsets
+    : name;
+}
+
 /** Resolve only a unique match; an explicit path never falls back to a basename. */
 export function resolveWikiLink(
   link: WikiLinkTarget | string,

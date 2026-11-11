@@ -11,6 +11,7 @@ import {
   renderedListIndentations
 } from './liveMarkdownBlockDecorations';
 import { parseLiveMarkdownCodeFences } from './liveMarkdownCode';
+import { WikiLinkWidget } from './liveMarkdownCodeMirrorWidgets';
 import {
   liveMarkdownDocumentModel,
   liveMarkdownDocumentModelField
@@ -22,10 +23,15 @@ import {
   supportedMarkdownLinkRanges
 } from './liveMarkdownInlineDecorations';
 import {
+  clearTablePointerSelection,
   constructIsRevealed,
+  finishTablePointerSelection,
+  handleTableLinkClick,
   inlineMarkupMouseSelection,
   selectionRendering,
-  tableCellCaretAssociation
+  tableCellCaretAssociation,
+  tablePointerSelectionActive,
+  updateTablePointerSelection
 } from './liveMarkdownSelection';
 import { parseMarkdownNoteTarget } from './markdownLinks';
 import type { EditorState, Extension } from '@codemirror/state';
@@ -48,7 +54,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
     private wikiResolutionVersion = 0;
 
     constructor(
-      view: EditorView,
+      readonly view: EditorView,
       readonly options: LiveMarkdownOptions
     ) {
       this.parsedTree = syntaxTree( view.state );
@@ -58,6 +64,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
     }
 
     update( update: ViewUpdate ): void {
+      updateTablePointerSelection( update );
       const nextTree = syntaxTree( update.state );
       const syntaxTreeChanged = nextTree !== this.parsedTree;
       const nextSearchMatches = documentSearchMatches( update.state );
@@ -65,7 +72,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
       const refreshed = update.transactions.some( ( transaction ) =>
         transaction.effects.some( ( effect ) => effect.is( refreshLiveMarkdownEffect ) )
       );
+      const pointerSelectionFinished = update.transactions.some( ( transaction ) =>
+        transaction.effects.some( ( effect ) => effect.is( finishTablePointerSelection ) )
+      );
       if ( refreshed ) {
+        clearTablePointerSelection( update.view );
         this.wikiResolutionVersion += 1;
       }
       if ( update.docChanged || syntaxTreeChanged || refreshed ) {
@@ -83,10 +94,15 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
         update.focusChanged ||
         syntaxTreeChanged ||
         searchMatchesChanged ||
-        refreshed
+        refreshed ||
+        pointerSelectionFinished
       ) {
         this.render( update.view );
       }
+    }
+
+    destroy(): void {
+      clearTablePointerSelection( this.view );
     }
 
     private render( view: EditorView ): void {
@@ -126,9 +142,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
               ...( syntax.widget ? { widget: syntax.widget } : {})
             }).range( syntax.from, syntax.to )
           );
-          atomicRanges.push(
-            Decoration.replace({ inclusive: false }).range( syntax.from, syntax.to )
-          );
+          if ( !( syntax.widget instanceof WikiLinkWidget && tablePointerSelectionActive( view ) ) ) {
+            atomicRanges.push(
+              Decoration.replace({ inclusive: false }).range( syntax.from, syntax.to )
+            );
+          }
         }
       }
 
@@ -140,11 +158,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
     decorations: ( plugin ) => plugin.decorations,
     eventHandlers: {
       click( event, view ) {
-        const link = renderedMarkdownLink( event.target, view );
+        const link = renderedEditorLink( event.target, view );
         if ( !link ) {
           return false;
         }
-        if ( isMultiCursorGesture( event ) ) {
+        if ( event.shiftKey || isMultiCursorGesture( event ) ) {
           event.preventDefault();
 
           return true;
@@ -152,12 +170,21 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
 
         const rawHref = link.dataset.liveHref ?? '';
         const href = rawHref.startsWith( '//' ) ? `https:${ rawHref }` : rawHref;
-        if ( parseMarkdownNoteTarget( rawHref ) ) {
-          this.options.openLink( rawHref );
-        } else if ( !window.__TAURI__ ) {
+        const wikiTarget = link.dataset.wikiTarget;
+        const wikiHeading = link.dataset.wikiHeading;
+        const noteTarget = parseMarkdownNoteTarget( rawHref );
+        if ( wikiTarget === undefined && !noteTarget && !window.__TAURI__ ) {
           return false;
-        } else if ( /^(?:https?|mailto):/i.test( href ) ) {
-          this.options.openLink( href );
+        }
+        const activate = () => {
+          if ( wikiTarget !== undefined ) {
+            this.options.openWiki( wikiTarget, wikiHeading );
+          } else if ( noteTarget || /^(?:https?|mailto):/i.test( href ) ) {
+            this.options.openLink( noteTarget ? rawHref : href );
+          }
+        };
+        if ( !handleTableLinkClick( view, event, link, activate ) ) {
+          activate();
         }
 
         event.preventDefault();
@@ -166,8 +193,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
         return true;
       },
       mousedown( event, view ) {
-        const link = renderedMarkdownLink( event.target, view );
-        if ( !link || event.button !== 0 || isMultiCursorGesture( event ) ) {
+        const link = renderedEditorLink( event.target, view );
+        if ( !link || event.button !== 0 || event.shiftKey || isMultiCursorGesture( event ) ) {
+          return false;
+        }
+        if ( !event.ctrlKey && !event.metaKey && link.closest( '.live-table-cell' ) ) {
           return false;
         }
 
@@ -306,7 +336,7 @@ function parseLiveMarkdownModel(
   return model;
 }
 
-function renderedMarkdownLink(
+function renderedEditorLink(
   eventTarget: EventTarget | null,
   view: EditorView
 ): HTMLAnchorElement | undefined {
@@ -314,7 +344,7 @@ function renderedMarkdownLink(
     return undefined;
   }
 
-  const link = eventTarget.closest<HTMLAnchorElement>( 'a[data-live-href]' );
+  const link = eventTarget.closest<HTMLAnchorElement>( 'a[data-live-href], a[data-wiki-target]' );
 
   return link && view.dom.contains( link ) ? link : undefined;
 }

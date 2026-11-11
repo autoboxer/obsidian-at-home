@@ -25,7 +25,7 @@ import type { SyntaxNodeRef } from '@lezer/common';
 import type { InlineMarkupKind } from './inlineMarkup';
 import type { LiveMarkdownRange } from './liveMarkdown';
 import type { MarkdownImageSourceResolver } from './liveMarkdownCodeMirrorWidgets';
-import type { LiveMarkdownModel, LiveMarkdownOptions } from './liveMarkdownDecorationModel';
+import type { LiveMarkdownModel, LiveMarkdownOptions, StoredDecoration } from './liveMarkdownDecorationModel';
 
 export interface InlineMarkupSpan extends LiveMarkdownRange {
   contentFrom: number;
@@ -522,16 +522,7 @@ function addMarkdownLinkDecoration(
     }
   }
 
-  addConstruct( model, node.from, node.to, [
-    { from: labelOpening.from, to: labelOpening.to },
-    {
-      from: labelClosing.from,
-      to: autolink ? labelClosing.to : node.to
-    }
-  ], [], {
-    boundaryReveal: 'construct',
-    revealWhenSelectedWithin: true
-  });
+  const renderedDecorations: StoredDecoration[] = [];
   if ( labelOpening.to < labelClosing.from ) {
     const className = href
       ? [
@@ -540,7 +531,7 @@ function addMarkdownLinkDecoration(
         ...( parseMarkdownHeadingTarget( href ) ? [ 'is-heading-link' ] : [])
       ].join( ' ' )
       : 'live-inline-segment is-unsafe-link';
-    model.decorations.push({
+    renderedDecorations.push({
       from: labelOpening.to,
       to: labelClosing.from,
       decoration: Decoration.mark({
@@ -554,6 +545,17 @@ function addMarkdownLinkDecoration(
       })
     });
   }
+
+  addConstruct( model, node.from, node.to, [
+    { from: labelOpening.from, to: labelOpening.to },
+    {
+      from: labelClosing.from,
+      to: autolink ? labelClosing.to : node.to
+    }
+  ], renderedDecorations, {
+    boundaryReveal: 'construct',
+    revealWhenSelectedWithin: true
+  });
 }
 
 function unwrapLinkTitle( value: string ): string {
