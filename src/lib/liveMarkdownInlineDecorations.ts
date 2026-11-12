@@ -18,13 +18,14 @@ import { liveMarkdownDocumentModel } from './liveMarkdownDocumentModel';
 import { sanitizeImageUrl, sanitizeLinkUrl } from './markdown';
 import { parseMarkdownAttachmentAt } from './markdownAttachments';
 import { parseMarkdownImageAt } from './markdownImages';
+import { normalizeMarkdownLinkDestination } from './markdownLinks';
 import { parseWikiLinks } from './wikiLinks';
 import type { EditorState, Text } from '@codemirror/state';
 import type { SyntaxNodeRef } from '@lezer/common';
 import type { InlineMarkupKind } from './inlineMarkup';
 import type { LiveMarkdownRange } from './liveMarkdown';
 import type { MarkdownImageSourceResolver } from './liveMarkdownCodeMirrorWidgets';
-import type { LiveMarkdownModel, LiveMarkdownOptions } from './liveMarkdownDecorationModel';
+import type { LiveMarkdownModel, LiveMarkdownOptions, StoredDecoration } from './liveMarkdownDecorationModel';
 
 export interface InlineMarkupSpan extends LiveMarkdownRange {
   contentFrom: number;
@@ -491,6 +492,14 @@ function addMarkdownLinkDecoration(
   }
 
   const rawHref = value.slice( urlNode.from, urlNode.to );
+  // Keep unfinished fields visible and clickable even when the caret leaves.
+  if (
+    !value.slice( labelOpening.to, labelClosing.from ).trim() ||
+    !normalizeMarkdownLinkDestination( rawHref ).trim()
+  ) {
+    return;
+  }
+
   const href = sanitizeLinkUrl(
     autolink && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test( rawHref )
       ? `mailto:${ rawHref }`
@@ -513,16 +522,7 @@ function addMarkdownLinkDecoration(
     }
   }
 
-  addConstruct( model, node.from, node.to, [
-    { from: labelOpening.from, to: labelOpening.to },
-    {
-      from: labelClosing.from,
-      to: autolink ? labelClosing.to : node.to
-    }
-  ], [], {
-    boundaryReveal: 'construct',
-    revealWhenSelectedWithin: true
-  });
+  const renderedDecorations: StoredDecoration[] = [];
   if ( labelOpening.to < labelClosing.from ) {
     const className = href
       ? [
@@ -531,7 +531,7 @@ function addMarkdownLinkDecoration(
         ...( parseMarkdownHeadingTarget( href ) ? [ 'is-heading-link' ] : [])
       ].join( ' ' )
       : 'live-inline-segment is-unsafe-link';
-    model.decorations.push({
+    renderedDecorations.push({
       from: labelOpening.to,
       to: labelClosing.from,
       decoration: Decoration.mark({
@@ -545,6 +545,17 @@ function addMarkdownLinkDecoration(
       })
     });
   }
+
+  addConstruct( model, node.from, node.to, [
+    { from: labelOpening.from, to: labelOpening.to },
+    {
+      from: labelClosing.from,
+      to: autolink ? labelClosing.to : node.to
+    }
+  ], renderedDecorations, {
+    boundaryReveal: 'construct',
+    revealWhenSelectedWithin: true
+  });
 }
 
 function unwrapLinkTitle( value: string ): string {

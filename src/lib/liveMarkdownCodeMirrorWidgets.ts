@@ -1,6 +1,7 @@
 import { EditorView, WidgetType } from '@codemirror/view';
 import { isMultiCursorGesture } from './codeMirrorMultiCursor';
 import { NOTE_IMAGE_DRAG_MIME } from './imageEmbeds';
+import { wikiLinkDisplayOffsets } from './wikiLinks';
 import {
   markdownAttachmentIsArchive,
   markdownAttachmentIsExecutable,
@@ -14,6 +15,37 @@ import type { LiveMarkdownBlock } from './liveMarkdown';
 import type { ParsedMarkdownImage } from './markdownImages';
 
 const UNORDERED_LIST_MARKERS = [ '•', '◦', '▪' ] as const;
+const wikiLabelRanges = new WeakMap<HTMLElement, { from: number; to: number }>();
+
+export function wikiLinkPointerPosition( view: EditorView, event: MouseEvent ): number | undefined {
+  const link = event.target instanceof Element
+    ? event.target.closest<HTMLElement>( 'a[data-wiki-target]' ) : null;
+  const source = link && view.dom.contains( link ) && wikiLabelRanges.get( link );
+  const text = link?.firstChild;
+  if ( !link || !source || !( text instanceof Text ) ) {
+    return undefined;
+  }
+  // A source edit can reuse the widget when its label and range stay the same.
+  const offsets = wikiLinkDisplayOffsets( view.state.sliceDoc( source.from, source.to ) );
+  const range = link.ownerDocument.createRange();
+  let distance = Infinity;
+  let position: number | undefined;
+  for ( let index = 0; index < text.length; index += 1 ) {
+    range.setStart( text, index );
+    range.setEnd( text, index + 1 );
+    const bounds = range.getBoundingClientRect();
+    const y = Math.max( bounds.top - event.clientY, 0, event.clientY - bounds.bottom );
+    for ( const [ offset, x ] of [[ index, bounds.left ], [ index + 1, bounds.right ]] as const ) {
+      const score = ( x - event.clientX ) ** 2 + y ** 2;
+      if ( score < distance ) {
+        distance = score;
+        position = source.from + offsets[ offset ]!;
+      }
+    }
+  }
+
+  return position;
+}
 
 // Selection gestures and drop feedback belong to CodeMirror over widgets too.
 export abstract class LiveMarkdownWidget extends WidgetType {
@@ -226,6 +258,18 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
       this.resolutionVersion === other.resolutionVersion;
   }
 
+  ignoreEvent( event: Event ): boolean {
+    if (
+      event instanceof MouseEvent &&
+      event.target instanceof Element &&
+      ( event.shiftKey || event.target.closest( '.live-table-cell' ) )
+    ) {
+      return false;
+    }
+
+    return super.ignoreEvent( event );
+  }
+
   toDOM( view: EditorView ): HTMLElement {
     const link = view.dom.ownerDocument.createElement( 'a' );
     link.className = [
@@ -237,6 +281,7 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
     link.href = '#';
     link.rel = 'noopener noreferrer';
     link.textContent = this.display;
+    wikiLabelRanges.set( link, { from: this.from, to: this.to });
     link.dataset.wikiTarget = this.target;
     if ( this.heading ) {
       link.dataset.wikiHeading = this.heading;
@@ -245,7 +290,11 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
       link.dataset.embedded = 'true';
     }
     link.addEventListener( 'mousedown', ( event ) => {
-      if ( isMultiCursorGesture( event ) ) {
+      if (
+        event.shiftKey || isMultiCursorGesture( event ) ||
+        ( event.button === 0 && !event.ctrlKey && !event.metaKey &&
+          link.closest( '.live-table-cell' ) )
+      ) {
         return;
       }
 
@@ -253,9 +302,13 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
       event.stopPropagation();
     });
     link.addEventListener( 'click', ( event ) => {
+      // Table-link activation is coordinated with selection by the editor.
+      if ( link.closest( '.live-table-cell' ) ) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      if ( isMultiCursorGesture( event ) ) {
+      if ( event.shiftKey || isMultiCursorGesture( event ) ) {
         return;
       }
       const target = this.target.trim();
