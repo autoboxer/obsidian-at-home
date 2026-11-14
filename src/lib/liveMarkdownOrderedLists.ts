@@ -111,9 +111,25 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
       continue;
     }
 
-    const oldFirst = previousGroup.items[ 0 ]!;
+    // Removing an item can leave a blank separator before its old siblings.
+    // Close that gap before treating the remainder as an independent list.
+    // Merely inserting a blank, or editing an already separate list, keeps its
+    // chosen starting number.
+    let removedBeforeFirst: LiveMarkdownBlock | undefined;
+    for ( let index = ( previousFirst?.index ?? 0 ) - 1; index >= 0; index -= 1 ) {
+      const item = previousGroup.items[ index ]!;
+      if (
+        survivors.has( item ) ||
+        !ranges.some( ( range ) => range.fromA <= item.list!.marker.from && range.toA >= item.to ) ||
+        after.lineAt( transaction.changes.mapPos( item.from, -1 ) ).text.trim()
+      ) {
+        break;
+      }
+      removedBeforeFirst = item;
+    }
+    const oldFirst = removedBeforeFirst ?? previousGroup.items[ 0 ]!;
     const oldStart = transaction.changes.mapPos( oldFirst.from, -1 );
-    const deletedStart = previousFirst && previousFirst.index > 0 &&
+    const deletedStart = Boolean( removedBeforeFirst ) || previousFirst && previousFirst.index > 0 &&
       !survivors.has( oldFirst ) && oldStart <= first.from &&
       liveMarkdownDocumentModelForText( after ).blocks
         .filter( ( block ) => block.from >= oldStart && block.from < first.from )

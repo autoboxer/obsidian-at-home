@@ -20,8 +20,7 @@ import {
   isLiveMarkdownTableCellBoundary,
   liveMarkdownTableCellTextBounds,
   moveAcrossLiveMarkdownTableCellBoundary,
-  navigateLiveMarkdownTable,
-  type LiveMarkdownTableNavigation
+  navigateLiveMarkdownTable
 } from './liveMarkdownTableNavigation';
 import { toggleInlineFormatting, wrapInlineCode, wrapMarkdownLink } from './markdownFormatting';
 import type { SelectionRange } from '@codemirror/state';
@@ -64,27 +63,49 @@ function enterAtSelections( view: EditorView, soft: boolean ): boolean {
   return applyRangeEdits( view, edits, 'input' );
 }
 
-function applyTableNavigation(
+function applyVerticalNavigation(
   view: EditorView,
-  navigation: LiveMarkdownTableNavigation
+  down: boolean
 ): boolean {
   const value = view.state.doc.toString();
-  const tables = liveMarkdownDocumentModel( view.state ).tables;
-  const edits = view.state.selection.ranges.map( ( range ) =>
-    navigateLiveMarkdownTable( value, tables, range.head, navigation )
-  );
-  if ( !edits.some( ( edit ) => edit ) ) {
-    return false;
-  }
-
-  return applyRangeEdits( view, edits.map( ( edit, index ) => {
-    const range = view.state.selection.ranges[ index ]!;
+  const { blocks, tables } = liveMarkdownDocumentModel( view.state );
+  let handled = false;
+  const edits = view.state.selection.ranges.map( ( range ) => {
+    const edit = navigateLiveMarkdownTable( value, tables, range.head, down ? 'down-row' : 'up-row' );
     if ( edit && ( !view.state.readOnly || edit.value === value ) ) {
+      handled = true;
       return markdownRangeEdit( value, edit );
     }
-    const down = navigation === 'down-row';
-    return { changes: [], range: view.moveVertically( range, down ) };
-  }), 'select.table' );
+    let target = range.empty
+      ? view.moveVertically( range, down )
+      : EditorSelection.cursor( down ? range.to : range.from );
+    const block = range.empty && blocks.find( ( candidate ) =>
+      ( candidate.type === 'list' || candidate.type === 'task' ) &&
+      target.head >= candidate.from && target.head < candidate.content.from &&
+      view.state.doc.lineAt( range.head ).from !== candidate.from
+    );
+    const rendered = block && view.state.facet( EditorView.atomicRanges ).some( ( source ) => {
+      let found = false;
+      source( view ).between( block.from, block.content.from, ( from, to ) => {
+        found ||= from === block.from && to === block.content.from;
+      });
+      return found;
+    });
+    if ( rendered ) {
+      // An empty rendered item can resolve to the start of its replacement
+      // marker. Enter its text instead of landing before the indentation.
+      const origin = view.coordsAtPos( range.head, range.assoc || ( down ? 1 : -1 ) );
+      const goal = target.goalColumn ?? range.goalColumn ??
+        ( origin ? origin.left - view.contentDOM.getBoundingClientRect().left : undefined );
+      target = EditorSelection.cursor( block.content.from, 1, undefined, goal );
+      handled = true;
+    } else if ( range.empty && target.head === range.head ) {
+      target = view.moveToLineBoundary( range, down );
+    }
+    return { changes: [], range: target };
+  });
+
+  return handled && applyRangeEdits( view, edits, 'select.table' );
 }
 
 export const handleTab: Command = ( view ) => indentSelections( view, false );
@@ -113,7 +134,7 @@ export const handleTableArrowDown: Command = ( view ) => {
     return false;
   }
 
-  return applyTableNavigation( view, 'down-row' );
+  return applyVerticalNavigation( view, true );
 };
 
 export const handleTableArrowUp: Command = ( view ) => {
@@ -121,7 +142,7 @@ export const handleTableArrowUp: Command = ( view ) => {
     return false;
   }
 
-  return applyTableNavigation( view, 'up-row' );
+  return applyVerticalNavigation( view, false );
 };
 
 function deleteAtTableSelections(
