@@ -155,21 +155,40 @@ watch( appInteractionBlocked, ( blocked ) => {
     uiState.commandOpen = false;
     commandReturnFocus = null;
     commandFocusNoteId = null;
+    uiState.noteTitleFocusId = null;
   }
 });
+
+watch(
+  [ () => uiState.noteTitleFocusId, () => activeNote.value?.id, () => uiState.tool, () => uiState.notesView, canEditVault ],
+  () => {
+    if ( uiState.noteTitleFocusId ) {
+      restoreWorkspaceFocus();
+    }
+  },
+  { flush: 'post' }
+);
 
 function commandNavigated( noteId: string ): void {
   commandFocusNoteId = noteId;
   commandReturnFocus = null;
 }
 
-function restoreCommandFocus(): void {
+function restoreWorkspaceFocus(): void {
+  if ( uiState.noteTitleFocusId && (
+    !canEditVault.value || appInteractionBlocked.value
+    || uiState.tool !== 'notes' || uiState.notesView !== 'editor'
+    || activeNote.value?.id !== uiState.noteTitleFocusId
+  ) ) {
+    uiState.noteTitleFocusId = null;
+  }
   if ( commandModalActive.value || uiState.commandOpen || appInteractionBlocked.value ) {
     return;
   }
   if ( document.querySelector( '[data-modal-scroll-active]' ) ) {
     commandReturnFocus = null;
     commandFocusNoteId = null;
+    uiState.noteTitleFocusId = null;
 
     return;
   }
@@ -179,22 +198,29 @@ function restoreCommandFocus(): void {
     || activeNote.value?.id !== commandFocusNoteId
   ) ) {
     commandFocusNoteId = null;
-
-    return;
   }
   const previous = commandReturnFocus;
-  if ( !previous && !commandFocusNoteId ) {
+  if ( !previous && !commandFocusNoteId && !uiState.noteTitleFocusId ) {
     return;
   }
-  const target = [
+  const title = uiState.noteTitleFocusId
+    ? document.querySelector<HTMLInputElement>( '.note-title-input' )
+    : null;
+  // A newly created note owns focus once its workspace and any outgoing modal
+  // have finished mounting/leaving. Do not fall back to its body while waiting.
+  const target = ( uiState.noteTitleFocusId ? [ title ] : [
     previous,
     document.querySelector<HTMLElement>( '.source-editor .cm-content' ),
     commandFocusNoteId ? null : document.querySelector<HTMLElement>( '.rail-nav .rail-button.active' )
-  ].find( ( element ) => element?.isConnected
+  ]).find( ( element ) => element?.isConnected
     && element.getClientRects().length
     // An outgoing sidebar/tool can still be connected during its transition.
     && !element.closest( '[inert], :disabled, [hidden], .panel-left-leave-active, .workspace-switch-leave-active' ) );
   target?.focus({ preventScroll: true });
+  if ( title && target === title && document.activeElement === title ) {
+    title.select();
+    uiState.noteTitleFocusId = null;
+  }
   commandReturnFocus = null;
   // A tool transition can still be mounting the chosen note's editor.
   if ( target ) {
@@ -208,7 +234,7 @@ async function finishCommandClose(): Promise<void> {
   }
   commandModalActive.value = false;
   await nextTick();
-  restoreCommandFocus();
+  restoreWorkspaceFocus();
 }
 
 function runToastAction(): void {
@@ -407,7 +433,7 @@ onBeforeUnmount( () => {
       <Transition
         name="workspace-switch"
         mode="out-in"
-        @after-enter="restoreCommandFocus"
+        @after-enter="restoreWorkspaceFocus"
       >
         <div
           v-if="uiState.tool === 'notes'"

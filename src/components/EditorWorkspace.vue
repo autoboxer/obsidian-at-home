@@ -745,6 +745,7 @@ watch( tagInput, () => {
           <SourceEditor
             :key="editorKey"
             ref="sourceEditor"
+            :focus-on-mount="uiState.noteTitleFocusId !== activeNote.id"
             :initial-position="savedEditorPosition( activeNote.id, activeNote.content )"
             :attachment-files="vaultState.attachmentFiles"
             :attachment-refresh-token="uiState.attachmentRefreshToken"

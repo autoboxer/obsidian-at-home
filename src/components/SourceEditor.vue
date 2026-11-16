@@ -80,6 +80,7 @@ import type { EmbeddedAttachment, EmbeddedImage, NoteEditorPosition, VaultAttach
 import AppIcon from './AppIcon.vue';
 
 const props = defineProps<{
+  focusOnMount?: boolean;
   initialPosition?: NoteEditorPosition;
   attachmentFiles: VaultAttachmentFile[];
   attachmentRefreshToken: number;
@@ -249,6 +250,7 @@ const closeSuggestions: Command = ( view ) => {
 };
 
 onMounted( () => {
+  const focusOnMount = props.focusOnMount !== false;
   const host = editorHost.value;
   if ( !host ) {
     return;
@@ -500,11 +502,13 @@ onMounted( () => {
   editorView.value = view;
   registerEditorPosition( view );
   updateSuggestions( view );
-  view.focus();
+  if ( focusOnMount ) {
+    view.focus();
+  }
 
   restoreEditorPosition( view, initialPosition );
   window.requestAnimationFrame( () => {
-    if ( editorView.value !== view || !view.dom.isConnected ) {
+    if ( !focusOnMount || editorView.value !== view || !view.dom.isConnected ) {
       return;
     }
 

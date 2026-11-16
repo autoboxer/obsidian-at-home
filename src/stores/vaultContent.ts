@@ -193,7 +193,7 @@ export function createVaultContent(
 
   function createNote(
     folderId?: string | null,
-    title = 'Untitled note',
+    title?: string,
     content?: string
   ): Note | undefined {
     if ( !canEditVault.value ) {
@@ -202,8 +202,8 @@ export function createVaultContent(
     const now = Date.now();
     const note: Note = {
       id: createId( 'note' ),
-      title: uniqueNoteTitle( vaultState, title.trim() || 'Untitled note' ),
-      content: content ?? '# Untitled note\n\n',
+      title: uniqueNoteTitle( vaultState, title?.trim() || 'Untitled note' ),
+      content: content ?? '',
       relativePath: '',
       folderId: folderId === undefined ? dependencies.currentFolderId() : folderId,
       tags: [],
@@ -211,9 +211,6 @@ export function createVaultContent(
       createdAt: now,
       updatedAt: now
     };
-    if ( content === undefined ) {
-      note.content = `# ${ note.title }\n\n`;
-    }
     note.tags = parseFrontmatterTags( note.content );
     dependencies.batchChanges( () => {
       vaultState.notes.unshift( note );
@@ -222,6 +219,9 @@ export function createVaultContent(
       uiState.tool = 'notes';
       uiState.notesView = 'editor';
       uiState.noteFilter = '';
+      // Only unnamed blank-note creation asks for a title. Linked notes and
+      // templates already supply their own names and content.
+      uiState.noteTitleFocusId = title === undefined && content === undefined ? note.id : null;
     });
     dependencies.notify( 'New note created', 'success' );
 
