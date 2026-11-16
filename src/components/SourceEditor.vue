@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue';
 import { defaultKeymap, history, historyField, historyKeymap } from '@codemirror/commands';
+import { syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { Annotation, Compartment, EditorSelection, EditorState, Prec, Transaction } from '@codemirror/state';
 import { drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap } from '@codemirror/view';
@@ -69,7 +70,8 @@ import {
   orderedListRenumberingExtension,
   refreshLiveMarkdownEffect
 } from '../lib/liveMarkdownCodeMirror';
-import { joinLeadingFrontmatter, markdownBodyStart } from '../lib/frontmatter';
+import { joinLeadingFrontmatter, leadingFrontmatterEnd, markdownBodyStart } from '../lib/frontmatter';
+import { normalizeWikiTarget, wikiLinkCompletionAt, type WikiLinkCompletion } from '../lib/wikiLinks';
 import { openNoteEditorHistory } from '../stores/editorHistories';
 import type { Extension } from '@codemirror/state';
 import type { Command } from '@codemirror/view';
@@ -88,6 +90,7 @@ const props = defineProps<{
   noteId: string;
   noteRelativePath: string;
   noteLinkTargets: string[];
+  noteLinkHeadings: ( target: string ) => string[];
   noteLinkForId: ( noteId: string ) => string | undefined;
   wikiLinkIsResolved: ( target: string ) => boolean;
   renameAttachment: (
@@ -110,7 +113,9 @@ const emit = defineEmits<CodeMirrorAssetEvents & {
 const editorHost = ref<HTMLElement>();
 const editorView = shallowRef<EditorView>();
 const suggestionIndex = ref( 0 );
-const suggestionQuery = ref<string | null>( null );
+const suggestionQuery = shallowRef<WikiLinkCompletion | null>( null );
+const suggestionsId = `wiki-suggestions-${ useId() }`;
+const suggestionList = ref<HTMLElement>();
 const externalUpdate = Annotation.define<boolean>();
 const historyCompartment = new Compartment();
 const lineNumbersCompartment = new Compartment();
@@ -158,21 +163,36 @@ const {
   showLiveMarkdownAttachmentInFolder
 } = useCodeMirrorAssets( props, emit, editorView, editorRenderReady, blockPendingEditorInteraction );
 
+// Keep heading parsing independent of the typed filter; re-evaluate only when
+// the destination or its reactive content changes.
+const suggestionTarget = computed( () => suggestionQuery.value?.target );
+const availableSuggestions = computed( () => suggestionTarget.value === undefined
+  ? props.noteLinkTargets.map( ( value ) => ({ label: normalizeWikiTarget( value ), value }) )
+  : props.noteLinkHeadings( suggestionTarget.value ).map( ( label ) => ({
+    label,
+    value: label.replace( /[\\|#[\]]/g, '\\$&' )
+  }) ) );
 const suggestions = computed( () => {
-  if ( suggestionQuery.value === null ) {
+  if ( !suggestionQuery.value ) {
     return [];
   }
-  const query = suggestionQuery.value.toLocaleLowerCase();
+  const query = suggestionQuery.value.query.trim().toLocaleLowerCase();
 
-  return props.noteLinkTargets
-    .filter( ( title ) => !query || title.toLocaleLowerCase().includes( query ) )
+  return availableSuggestions.value
+    .filter( ({ label }) => !query || label.toLocaleLowerCase().includes( query ) )
     .sort( ( a, b ) => {
-      const aStarts = a.toLocaleLowerCase().startsWith( query );
-      const bStarts = b.toLocaleLowerCase().startsWith( query );
+      const aStarts = a.label.toLocaleLowerCase().startsWith( query );
+      const bStarts = b.label.toLocaleLowerCase().startsWith( query );
 
-      return Number( bStarts ) - Number( aStarts ) || a.localeCompare( b );
-    })
-    .slice( 0, 6 );
+      return Number( bStarts ) - Number( aStarts ) || a.label.localeCompare( b.label );
+    });
+});
+
+watch([ suggestions, suggestionIndex ], async () => {
+  suggestionIndex.value = Math.min( suggestionIndex.value, Math.max( 0, suggestions.value.length - 1 ) );
+  editorView.value?.dispatch({});
+  await nextTick();
+  suggestionList.value?.querySelector( '.wiki-suggestion.active' )?.scrollIntoView({ block: 'nearest' });
 });
 
 const {
@@ -214,7 +234,7 @@ const acceptSuggestion: Command = ( view ) => {
     return false;
   }
 
-  insertSuggestion( suggestions.value[ suggestionIndex.value ]! );
+  insertSuggestion( suggestions.value[ suggestionIndex.value ]!.value );
 
   return true;
 };
@@ -306,7 +326,7 @@ onMounted( () => {
     codeMirrorMultiCursorExtension,
     EditorState.tabSize.of( 4 ),
     EditorView.lineWrapping,
-    EditorView.contentAttributes.of({
+    EditorView.contentAttributes.of( () => ({
       'aria-label': 'Markdown source',
       'aria-readonly': String( props.readOnly ),
       tabindex: '0',
@@ -314,8 +334,13 @@ onMounted( () => {
       autocorrect: 'off',
       class: 'source-textarea',
       spellcheck: 'true',
-      writingsuggestions: 'false'
-    }),
+      writingsuggestions: 'false',
+      ...( suggestions.value.length ? {
+        'aria-autocomplete': 'list',
+        'aria-controls': suggestionsId,
+        'aria-activedescendant': `${ suggestionsId }-${ suggestionIndex.value }`
+      } : {})
+    }) ),
     markdown({
       addKeymap: false,
       base: markdownLanguage,
@@ -347,6 +372,7 @@ onMounted( () => {
       { key: 'ArrowDown', run: handleTableArrowDown },
       { key: 'ArrowUp', run: handleTableArrowUp },
       { key: 'Enter', run: acceptSuggestion },
+      { key: 'Tab', run: acceptSuggestion },
       { key: 'Escape', run: closeSuggestions },
       { key: 'Shift-Enter', run: handleShiftEnter },
       { key: 'Enter', run: handleEnter },
@@ -657,25 +683,35 @@ function updateSuggestions( view: EditorView ): void {
   }
 
   const line = view.state.doc.lineAt( selection.head );
-  const beforeCursor = view.state.doc.sliceString( line.from, selection.head );
-  const match = beforeCursor.match( /\[\[([^\]\n|#]*)$/ );
-  suggestionQuery.value = match ? match[ 1 ] ?? '' : null;
+  const completion = wikiLinkCompletionAt( line.text, selection.head - line.from );
+  suggestionQuery.value = null;
+  if ( completion ) {
+    // Wiki destinations inside code or visible metadata are literal text.
+    if ( props.showFrontmatter && selection.head < ( leadingFrontmatterEnd( view.state.doc.toString() ) ?? 0 ) ) {
+      return;
+    }
+    for ( let node = syntaxTree( view.state ).resolveInner( selection.head, -1 ); node; node = node.parent! ) {
+      if ([ 'FencedCode', 'CodeBlock', 'InlineCode' ].includes( node.name ) ) {
+        return;
+      }
+    }
+    suggestionQuery.value = { ...completion, from: completion.from + line.from, to: completion.to + line.from };
+  }
   suggestionIndex.value = 0;
 }
 
-function insertSuggestion( title: string ): void {
+function insertSuggestion( value: string ): void {
   const view = editorView.value;
-  if ( props.readOnly || !view || view.state.selection.ranges.length !== 1 || suggestionQuery.value === null ) {
+  if ( props.readOnly || !view || view.composing || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty || !suggestionQuery.value ) {
     return;
   }
 
-  const cursor = view.state.selection.main.head;
-  const start = cursor - suggestionQuery.value.length;
-  const replacement = `${ title }]]`;
+  const { from, to, suffix } = suggestionQuery.value;
+  const replacement = value + suffix;
   suggestionQuery.value = null;
   view.dispatch({
-    changes: { from: start, to: cursor, insert: replacement },
-    selection: EditorSelection.cursor( start + replacement.length ),
+    changes: { from, to, insert: replacement },
+    selection: EditorSelection.cursor( from + replacement.length ),
     scrollIntoView: true,
     userEvent: 'input.complete'
   });
@@ -810,22 +846,31 @@ function handleSourceEditorKeydown( event: KeyboardEvent ): void {
     <Transition name="popover-fade">
       <div
         v-if="suggestions.length"
+        :id="suggestionsId"
+        ref="suggestionList"
         class="wiki-suggestions"
         role="listbox"
+        :aria-label="suggestionTarget === undefined ? 'Note suggestions' : 'Heading suggestions'"
       >
         <div class="suggestion-kicker">
-          Link a note
+          {{ suggestionTarget === undefined ? 'Link a note' : 'Link a heading' }}
         </div>
         <button
-          v-for="( title, index ) in suggestions"
-          :key="title"
+          v-for="( suggestion, index ) in suggestions"
+          :id="`${ suggestionsId }-${ index }`"
+          :key="suggestion.value"
           type="button"
+          role="option"
+          tabindex="-1"
+          :aria-selected="index === suggestionIndex"
+          :title="suggestion.label"
           class="wiki-suggestion"
           :class="{ active: index === suggestionIndex }"
-          @mousedown.prevent="insertSuggestion( title )"
+          @mousedown.prevent
+          @click="insertSuggestion( suggestion.value )"
         >
           <span class="suggestion-icon"><AppIcon name="link" :size="14" /></span>
-          <span>{{ title }}</span>
+          <span>{{ suggestion.label }}</span>
           <AppIcon
             v-if="index === suggestionIndex"
             name="enter"
