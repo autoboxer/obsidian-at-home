@@ -1,6 +1,8 @@
 import { markdownLanguage } from '@codemirror/lang-markdown';
 import type { Backlink, Note, NoteLink, WikiLink } from '../types';
 import { leadingFrontmatterEnd } from './frontmatter';
+import { parsePairedInlineMarkup } from './inlineMarkup';
+import { parseLiveMarkdownBlocks, type LiveMarkdownTextEdit } from './liveMarkdown';
 import {
   parseInlineMarkdownLinkAt,
   parseMarkdownNoteLinks,
@@ -630,6 +632,7 @@ export function findBacklinks(
       continue;
     }
 
+    const excerptEdits = new Map<string, LiveMarkdownTextEdit[]>();
     for ( const link of parseNoteLinks( note.content ) ) {
       const resolved = resolveNoteLink( link, notes, note, notePaths );
       if ( resolved?.id !== targetNote.id ) {
@@ -639,7 +642,7 @@ export function findBacklinks(
       backlinks.push({
         note,
         link,
-        excerpt: excerptAround( note.content, link.index, link.raw.length )
+        excerpt: excerptAround( note.content, link.index, link.raw.length, excerptEdits )
       });
     }
   }
@@ -650,25 +653,121 @@ export function findBacklinks(
 /** Alias that reads naturally at call sites displaying a backlink panel. */
 export const getBacklinks = findBacklinks;
 
-function excerptAround( content: string, index: number, length: number ): string {
+function excerptAround(
+  content: string,
+  index: number,
+  length: number,
+  excerptEdits: Map<string, LiveMarkdownTextEdit[]>
+): string {
   const lineStart = content.lastIndexOf( '\n', index - 1 ) + 1;
   const nextNewline = content.indexOf( '\n', index + length );
   const lineEnd = nextNewline < 0 ? content.length : nextNewline;
-  let excerpt = content
-    .slice( lineStart, lineEnd )
-    .replace( /^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/, '' )
-    .replace( /\s+/g, ' ' )
-    .trim();
+  let line = content.slice( lineStart, lineEnd ).trimEnd();
+  let relativeIndex = index - lineStart;
+  // Unwrap nested quote/list/task prefixes using the editor's block grammar.
+  while ( line ) {
+    const block = parseLiveMarkdownBlocks( line )[ 0 ]!;
+    if ( !block.content.from ) {
+      break;
+    }
+    relativeIndex -= block.content.from;
+    line = line.slice( block.content.from, block.content.to );
+    // Only containers can contain another block. Heading content is inline,
+    // so prefixes such as "2026." or ">" remain meaningful text.
+    if ( ![ 'blockquote', 'list', 'task' ].includes( block.type ) ) {
+      break;
+    }
+  }
+  relativeIndex -= line.length - line.trimStart().length;
+  line = line.trimStart();
+
+  // Several backlinks can share a long line; parse its presentation only once.
+  let edits = excerptEdits.get( line );
+  if ( !edits ) {
+    edits = backlinkExcerptEdits( line ).sort( ( a, b ) => a.from - b.from || b.to - a.to );
+    excerptEdits.set( line, edits );
+  }
+  let excerpt = '';
+  let cursor = 0;
+  let readableIndex = relativeIndex;
+  for ( const edit of edits ) {
+    if ( edit.from < cursor ) {
+      continue;
+    }
+    excerpt += line.slice( cursor, edit.from ) + edit.insert;
+    cursor = edit.to;
+    if ( edit.to <= relativeIndex ) {
+      readableIndex += edit.insert.length - ( edit.to - edit.from );
+    } else if ( edit.from < relativeIndex ) {
+      readableIndex += edit.from - relativeIndex;
+    }
+  }
+  excerpt += line.slice( cursor );
+  // Map this occurrence through both syntax removal and whitespace collapse
+  // before cropping; raw source offsets drift after long URLs or aliases.
+  readableIndex = excerpt.slice( 0, readableIndex ).replace( /\s+/g, ' ' ).trimStart().length;
+  excerpt = excerpt.replace( /\s+/g, ' ' ).trim();
 
   if ( excerpt.length > 180 ) {
-    const relativeIndex = index - lineStart;
-    const start = Math.max( 0, Math.min( relativeIndex - 65, excerpt.length - 180 ) );
+    const start = Math.max( 0, Math.min( readableIndex - 65, excerpt.length - 180 ) );
     excerpt = `${ start > 0 ? '…' : '' }${ excerpt.slice( start, start + 180 ).trim() }${
       start + 180 < excerpt.length ? '…' : ''
     }`;
   }
 
   return excerpt;
+}
+
+/** Plain text only: the backlink card owns navigation, not links in its excerpt. */
+function backlinkExcerptEdits( line: string ): LiveMarkdownTextEdit[] {
+  const edits: LiveMarkdownTextEdit[] = parseWikiLinks( line ).map( ( link ) => ({
+    from: link.index,
+    to: link.index + link.raw.length,
+    insert: link.display
+  }) );
+  markdownLanguage.parser.parse( line ).iterate({
+    enter( node ) {
+      if ( edits.some( ( edit ) => node.from >= edit.from && node.to <= edit.to ) ) {
+        return false;
+      }
+      if ( node.name === 'InlineCode' ) {
+        const marks = node.node.getChildren( 'CodeMark' );
+        let code = line.slice( marks[ 0 ]!.to, marks.at( -1 )!.from );
+        if ( code.startsWith( ' ' ) && code.endsWith( ' ' ) && code.trim() ) {
+          code = code.slice( 1, -1 );
+        }
+        edits.push({ from: node.from, to: node.to, insert: code });
+
+        return false;
+      }
+      if ( node.name === 'Link' || node.name === 'Image' ) {
+        const link = parseInlineMarkdownLinkAt( line, node.from, node.name === 'Image' );
+        if ( link && link.end + 1 === node.to ) {
+          const marks = node.node.getChildren( 'LinkMark' );
+          edits.push(
+            { from: node.from, to: marks[ 0 ]!.to, insert: '' },
+            { from: marks[ 1 ]!.from, to: node.to, insert: '' }
+          );
+        }
+      } else if ( node.name === 'EmphasisMark' || node.name === 'Escape' ) {
+        edits.push({
+          from: node.from,
+          to: node.name === 'Escape' ? node.from + 1 : node.to,
+          insert: ''
+        });
+      }
+    }
+  });
+  // Include the editor's additional paired markup (such as strikethrough),
+  // leaving code, literal wiki labels and already-handled syntax alone.
+  for ( const span of parsePairedInlineMarkup( line, edits ) ) {
+    edits.push(
+      { from: span.from, to: span.contentFrom, insert: '' },
+      { from: span.contentTo, to: span.to, insert: '' }
+    );
+  }
+
+  return edits;
 }
 
 function protectedWikiRanges( markdown: string ): TextRange[] {
