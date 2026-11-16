@@ -152,9 +152,11 @@ const {
   handleSourceEditorDragOver,
   handleSourceEditorDrop,
   handleSourceEditorPaste,
+  imageSourceContext,
   insertEmbeddedAttachment,
   insertEmbeddedImage,
   isKnownExtensionlessAttachment,
+  liveMarkdownImageSourceVersion,
   mapPendingImageInsertions,
   requestAttachmentEmbed,
   requestImageEmbed,
@@ -356,6 +358,7 @@ onMounted( () => {
       acceptExtensionlessAttachment: isKnownExtensionlessAttachment,
       activateAttachment: activateLiveMarkdownAttachment,
       documentId: `${ props.vaultId }\u0000${ props.noteId }`,
+      imageSourceVersion: liveMarkdownImageSourceVersion,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
       renameAttachment: ( target, fileName ) => props.readOnly
@@ -642,7 +645,7 @@ watch(
 );
 
 watch(
-  () => props.imageRefreshToken,
+  [ () => props.imageRefreshToken, imageSourceContext ],
   () => {
     clearLiveMarkdownImageSources();
     editorView.value?.dispatch({

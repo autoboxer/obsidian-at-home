@@ -715,8 +715,6 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
   constructor(
     private readonly image: ParsedMarkdownImage,
     private readonly resolveSource: MarkdownImageSourceResolver | undefined,
-    private readonly from: number,
-    private readonly to: number,
     private readonly resolutionVersion: number
   ) {
     super();
@@ -725,8 +723,6 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
   eq( other: MarkdownImageWidget ): boolean {
     return this.image.raw === other.image.raw &&
       this.resolveSource === other.resolveSource &&
-      this.from === other.from &&
-      this.to === other.to &&
       this.resolutionVersion === other.resolutionVersion;
   }
 
@@ -776,9 +772,11 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
         view.focus();
       }
     });
-    frame.addEventListener( 'click', ( event ) =>
-      revealWidgetSource( view, frame, event, this.from, this.to )
-    );
+    frame.addEventListener( 'click', ( event ) => {
+      // Unchanged images survive edits before them; resolve their current range.
+      const from = view.posAtDOM( frame );
+      revealWidgetSource( view, frame, event, from, from + this.image.raw.length );
+    });
     frame.addEventListener( 'dragstart', ( event ) => {
       if ( view.state.readOnly ) {
         event.preventDefault();
@@ -790,9 +788,10 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
       }
       event.dataTransfer.clearData();
       event.dataTransfer.effectAllowed = 'move';
+      const from = view.posAtDOM( frame );
       event.dataTransfer.setData( NOTE_IMAGE_DRAG_MIME, JSON.stringify({
-        from: this.from,
-        to: this.to
+        from,
+        to: from + this.image.raw.length
       }) );
       event.dataTransfer.setData( 'text/plain', this.image.raw );
       frame.classList.add( 'is-dragging' );

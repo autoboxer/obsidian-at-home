@@ -76,6 +76,14 @@ export function useCodeMirrorAssets(
   const pendingImageInsertions = new Map<string, PendingImageInsertion>();
   const imageSourcePromises = new Map<string, Promise<string>>();
   const imageObjectUrls = new Set<string>();
+  // Relative image paths depend on the containing folder, not the note's name.
+  const imageSourceContext = computed( () => `${ props.vaultPath ?? '' }\u0000${
+    props.noteRelativePath.slice( 0, props.noteRelativePath.lastIndexOf( '/' ) + 1 )
+  }` );
+
+  function liveMarkdownImageSourceVersion(): number {
+    return imageResolverGeneration;
+  }
 
   async function resolveLiveMarkdownImageSource(
     image: ParsedMarkdownImage
@@ -94,7 +102,7 @@ export function useCodeMirrorAssets(
     }
 
     const generation = imageResolverGeneration;
-    const cacheKey = `${ generation }\u0000${ props.vaultPath }\u0000${ props.noteRelativePath }\u0000${
+    const cacheKey = `${ generation }\u0000${ imageSourceContext.value }\u0000${
       image.assetId ?? ''
     }\u0000${ image.destination }`;
     const cached = imageSourcePromises.get( cacheKey );
@@ -682,9 +690,11 @@ export function useCodeMirrorAssets(
     handleSourceEditorDragOver,
     handleSourceEditorDrop,
     handleSourceEditorPaste,
+    imageSourceContext,
     insertEmbeddedAttachment,
     insertEmbeddedImage,
     isKnownExtensionlessAttachment,
+    liveMarkdownImageSourceVersion,
     mapPendingImageInsertions,
     requestAttachmentEmbed,
     requestImageEmbed,

@@ -447,9 +447,7 @@ function addMarkdownImageDecoration(
     widget: new MarkdownImageWidget(
       image,
       resolveSource,
-      range.from,
-      range.to,
-      resolutionVersion
+      options.imageSourceVersion?.() ?? resolutionVersion
     )
   }], [], {
     atomicRanges: [ range ],
