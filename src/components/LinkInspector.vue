@@ -1,19 +1,21 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { MarkdownNoteTarget } from '../lib/markdownLinks';
+import type { WikiLinkTarget } from '../lib/wikiLinks';
 import {
   activeNote,
   backlinks,
   canEditVault,
   createLinkedNote,
   folderPath,
+  noteLinkPaths,
   outgoingLinks,
-  selectNote,
   uiState
 } from '../stores/vault';
 import type { NoteLink } from '../types';
 import AppIcon from './AppIcon.vue';
 
-const emit = defineEmits<{ openNoteLink: [link: NoteLink] }>();
+const emit = defineEmits<{ openNoteLink: [link: WikiLinkTarget | MarkdownNoteTarget] }>();
 
 const uniqueOutgoing = computed( () => {
   const seen = new Set<string>();
@@ -41,6 +43,14 @@ function openOutgoing( link: NoteLink, noteId?: string ): void {
     emit( 'openNoteLink', link );
   } else if ( !( 'destination' in link ) ) {
     createLinkedNote( link );
+  }
+}
+
+function openBacklink( noteId: string ): void {
+  const path = noteLinkPaths.value.get( noteId );
+  if ( path ) {
+    // A backlink identifies an exact source note, regardless of duplicate names.
+    emit( 'openNoteLink', { target: `/${ path }` });
   }
 }
 
@@ -132,7 +142,7 @@ function formatDate( timestamp?: number ): string {
               :key="`${backlink.note.id}-${backlink.link.index}`"
               type="button"
               class="backlink-card"
-              @click="selectNote( backlink.note.id )"
+              @click="openBacklink( backlink.note.id )"
             >
               <span class="backlink-source">
                 <span class="backlink-dot" />

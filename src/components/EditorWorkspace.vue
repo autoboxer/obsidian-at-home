@@ -218,7 +218,10 @@ async function openRenderedLink( href: string ): Promise<void> {
 
 async function openWikiLink( target: string, heading?: string ): Promise<void> {
   if ( !heading ) {
-    createLinkedNote({ target });
+    const note = createLinkedNote({ target });
+    if ( note ) {
+      await focusLinkedNote( note.id, 0 );
+    }
 
     return;
   }
@@ -233,27 +236,31 @@ async function openNoteLink( link: WikiLinkTarget | MarkdownNoteTarget ): Promis
 
     return;
   }
-  if ( !link.heading ) {
-    selectNote( note.id );
-
-    return;
-  }
-
   const heading = link.heading;
-  const match = findMarkdownHeading( note.content, heading );
-  if ( !match ) {
+  const match = heading ? findMarkdownHeading( note.content, heading ) : undefined;
+  if ( heading && !match ) {
     notify( `Could not find heading “${ heading }” in “${ note.title }”`, 'warning' );
 
     return;
   }
 
-  if ( note.id !== activeNote.value?.id ) {
-    selectNote( note.id );
-    await nextTick();
+  await focusLinkedNote( note.id, match?.contentFrom ?? 0 );
+}
+
+async function focusLinkedNote( noteId: string, offset: number ): Promise<void> {
+  const vaultId = positionVaultId.value;
+  if ( noteId !== activeNote.value?.id ) {
+    selectNote( noteId );
+  }
+  // Link destinations override the restored position after the editor mounts,
+  // including self-links and notes just selected by createLinkedNote.
+  await nextTick();
+  if ( positionVaultId.value !== vaultId || activeNote.value?.id !== noteId ) {
+    return;
   }
 
-  if ( !sourceEditor.value?.focusDocumentOffset( match.contentFrom ) ) {
-    notify( 'Could not move to that heading', 'warning' );
+  if ( !sourceEditor.value?.focusDocumentOffset( offset ) ) {
+    notify( 'Could not move to that location', 'warning' );
   }
 }
 
