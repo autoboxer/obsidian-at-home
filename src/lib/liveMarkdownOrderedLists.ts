@@ -54,8 +54,8 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
     return [];
   }
 
-  const previousGroups = orderedListGroupsForText( before );
-  const nextGroups = orderedListGroupsForText( after );
+  const { groups: previousGroups } = orderedListModelForText( before );
+  const { blocks: nextBlocks, groups: nextGroups } = orderedListModelForText( after );
   const previousByLine = new Map<number, PreviousOrderedItem>();
   for ( const group of previousGroups ) {
     for ( const [ index, block ] of group.items.entries() ) {
@@ -111,17 +111,39 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
       continue;
     }
 
-    const oldFirst = previousGroup.items[ 0 ]!;
+    // Removing an item can leave a blank separator before its old siblings.
+    // Close that gap before treating the remainder as an independent list.
+    // Merely inserting a blank, or editing an already separate list, keeps its
+    // chosen starting number.
+    let removedBeforeFirst: number | undefined;
+    for ( let index = ( previousFirst?.index ?? 0 ) - 1; index >= 0; index -= 1 ) {
+      const item = previousGroup.items[ index ]!;
+      if (
+        survivors.has( item ) ||
+        !ranges.some( ( range ) => range.fromA <= item.list!.marker.from && range.toA >= item.to ) ||
+        after.lineAt( transaction.changes.mapPos( item.from, -1 ) ).text.trim()
+      ) {
+        break;
+      }
+      removedBeforeFirst = index;
+    }
+    const oldFirstIndex = removedBeforeFirst ?? 0;
+    const oldFirst = previousGroup.items[ oldFirstIndex ]!;
     const oldStart = transaction.changes.mapPos( oldFirst.from, -1 );
-    const deletedStart = previousFirst && previousFirst.index > 0 &&
+    const deletedStart = ( removedBeforeFirst !== undefined || previousFirst && previousFirst.index > 0 ) &&
       !survivors.has( oldFirst ) && oldStart <= first.from &&
-      liveMarkdownDocumentModelForText( after ).blocks
+      nextBlocks
         .filter( ( block ) => block.from >= oldStart && block.from < first.from )
         .every( ( block ) => block.type === 'text' ||
+          // Only a genuinely empty line can be left by removing an item;
+          // tables and standalone literal blocks also use the blank type.
+          ( removedBeforeFirst !== undefined && block.type === 'blank' && !block.source.trim() ) ||
           ( block.list && block.list.indentation > group.indentation )
         );
     const repeatedOnes = previousGroup.items.every( ( block ) => sourceListNumber( block ) === 1 );
-    let number = newlyNested ? 1 : deletedStart ? sourceListNumber( oldFirst ) : sourceListNumber( first );
+    // Repeated `1.` markers represent successive ordinals in this sibling group.
+    const oldNumber = repeatedOnes ? oldFirstIndex + 1 : sourceListNumber( oldFirst );
+    let number = newlyNested ? 1 : deletedStart ? oldNumber : sourceListNumber( first );
     let repairing = Boolean( deletedStart || newlyNested );
     let previousIndex = deletedStart ? 0 : previousFirst?.index ?? 0;
 
@@ -169,17 +191,19 @@ function listGroupParentItem( group: LiveMarkdownListGroup ): LiveMarkdownBlock 
   return undefined;
 }
 
-function orderedListGroupsForText( document: Text ): LiveMarkdownListGroup[] {
+function orderedListModelForText( document: Text ): { blocks: LiveMarkdownBlock[]; groups: LiveMarkdownListGroup[] } {
   const { blocks, tables } = liveMarkdownDocumentModelForText( document );
   const tableLines = new Set( tables.flatMap( ( table ) => table.lineNumbers ) );
   // The line model intentionally accepts loose list indentation. The Markdown
   // grammar distinguishes literal examples in nested fences and indented code.
+  // It also recognizes underline-style headings that separate sibling groups.
   const protectedRanges: ( LiveMarkdownRange & { insideList: boolean })[] = [];
   markdownLanguage.parser.parse( document.toString() ).iterate({
     enter( node ) {
       if ( node.name === 'FencedCode' || node.name === 'CodeBlock' ||
         node.name === 'HTMLBlock' || node.name === 'CommentBlock' ||
-        node.name === 'ProcessingInstructionBlock' ) {
+        node.name === 'ProcessingInstructionBlock' ||
+        node.name === 'SetextHeading1' || node.name === 'SetextHeading2' ) {
         let parent = node.node.parent;
         while ( parent && parent.name !== 'ListItem' ) {
           parent = parent.parent;
@@ -207,7 +231,10 @@ function orderedListGroupsForText( document: Text ): LiveMarkdownListGroup[] {
       : block;
   });
 
-  return liveMarkdownListGroups( editableBlocks ).filter( ( group ) => group.ordered );
+  return {
+    blocks: editableBlocks,
+    groups: liveMarkdownListGroups( editableBlocks ).filter( ( group ) => group.ordered )
+  };
 }
 
 function sourceListNumber( block: LiveMarkdownBlock ): number {
