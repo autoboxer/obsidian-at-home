@@ -67,8 +67,10 @@ const shortcutGroups: ShortcutGroup[] = [
     id: 'selection',
     title: 'Multiple cursors',
     shortcuts: [
-      { label: 'Select word or next occurrence', detail: 'First press selects the word at the caret; select a phrase first to match it', keys: [ commandKey, 'D' ] },
-      { label: 'Select all occurrences', detail: 'Matches the selected text or word at the caret; reveals folded matches', keys: [ commandKey, 'Shift', 'L' ] },
+      { label: 'Select word or next occurrence', detail: 'Ignores case; first press selects the word, or select a phrase first', keys: [ commandKey, 'D' ] },
+      { label: 'Select next occurrence (match case)', detail: 'Matches capitalization; first press selects the word', keys: [ commandKey, 'Shift', 'D' ] },
+      { label: 'Select all occurrences', detail: 'Ignores case; uses the selection or word at the caret; reveals folded matches', keys: [ commandKey, 'Shift', 'L' ] },
+      { label: 'Select all occurrences (match case)', detail: 'Matches capitalization', keys: [ commandKey, optionKey, 'Shift', 'L' ] },
       { label: 'Add a cursor', keys: [ optionKey, 'Click' ] },
       { label: 'Select a rectangle', keys: [ optionKey, 'Shift', 'Drag' ] },
       { label: 'Add a cursor above', keys: [ commandKey, verticalCursorModifier, '↑' ] },

@@ -84,7 +84,10 @@ export function multiCursorChanges(
   return { changes, selection: EditorSelection.create( ranges, state.selection.mainIndex ) };
 }
 
-export const selectNextOccurrence: Command = ( view ) => {
+export const selectNextOccurrence: Command = ( view ) => selectNextMatch( view, false );
+export const selectNextCaseSensitiveOccurrence: Command = ( view ) => selectNextMatch( view, true );
+
+function selectNextMatch( view: EditorView, matchCase: boolean ): boolean {
   if ( view.composing ) {
     return false;
   }
@@ -108,7 +111,7 @@ export const selectNextOccurrence: Command = ( view ) => {
   // match never merges or changes an existing selection.
   for ( const [ start, end ] of [[ selection.main.to, document.length ], [ 0, selection.main.from ]]) {
     let index = 0;
-    for ( const match of matchingOccurrences( document, text, start, end, true ) ) {
+    for ( const match of matchingOccurrences( document, text, matchCase, start, end, true ) ) {
       while ( index < selection.ranges.length && selection.ranges[ index ]!.to <= match.from ) {
         index += 1;
       }
@@ -127,9 +130,12 @@ export const selectNextOccurrence: Command = ( view ) => {
   }
 
   return true;
-};
+}
 
-export const selectAllOccurrences: Command = ( view ) => {
+export const selectAllOccurrences: Command = ( view ) => selectAllMatches( view, false );
+export const selectAllCaseSensitiveOccurrences: Command = ( view ) => selectAllMatches( view, true );
+
+function selectAllMatches( view: EditorView, matchCase: boolean ): boolean {
   if ( view.composing ) {
     return false;
   }
@@ -145,21 +151,22 @@ export const selectAllOccurrences: Command = ( view ) => {
   const ranges: SelectionRange[] = [];
   // Keep the original occurrence and direction, even when possible matches
   // overlap it (for example, selecting the middle "aa" in "aaaa").
-  for ( const match of matchingOccurrences( document, text, 0, target.from ) ) {
+  for ( const match of matchingOccurrences( document, text, matchCase, 0, target.from ) ) {
     ranges.push( match );
   }
   const mainIndex = ranges.length;
   ranges.push( target );
-  for ( const match of matchingOccurrences( document, text, target.to ) ) {
+  for ( const match of matchingOccurrences( document, text, matchCase, target.to ) ) {
     ranges.push( match );
   }
 
   return selectRanges( view, ranges, mainIndex );
-};
+}
 
 function* matchingOccurrences(
   document: string,
   text: string,
+  matchCase: boolean,
   from = 0,
   to = document.length,
   overlapping = false
@@ -168,7 +175,7 @@ function* matchingOccurrences(
   // Match original source offsets: lowercasing can change Unicode string lengths.
   // Next-occurrence needs overlapping candidates when skipping occupied ranges.
   // matchAll advances zero-width lookaheads by code point, including astral text.
-  const expression = new RegExp( overlapping ? `(?=(${ literal }))` : literal, 'giu' );
+  const expression = new RegExp( overlapping ? `(?=(${ literal }))` : literal, matchCase ? 'gu' : 'giu' );
   expression.lastIndex = from;
   for ( const match of document.matchAll( expression ) ) {
     if ( match.index >= to ) {
@@ -230,7 +237,9 @@ export const codeMirrorMultiCursorExtension: Extension = [
     { linux: 'Ctrl-Shift-ArrowUp', run: addCursorAbove, preventDefault: true },
     { linux: 'Ctrl-Shift-ArrowDown', run: addCursorBelow, preventDefault: true },
     { key: 'Mod-d', run: selectNextOccurrence, preventDefault: true },
-    { key: 'Mod-Shift-l', run: selectAllOccurrences, preventDefault: true }
+    { key: 'Mod-Shift-d', run: selectNextCaseSensitiveOccurrence, preventDefault: true },
+    { key: 'Mod-Shift-l', run: selectAllOccurrences, preventDefault: true },
+    { key: 'Mod-Alt-Shift-l', run: selectAllCaseSensitiveOccurrences, preventDefault: true }
   ])
 ];
 
