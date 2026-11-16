@@ -1220,7 +1220,8 @@
 .live-code-language-button[aria-expanded="true"],
 .live-code-copy-button:hover {
   border-color: var(--border);
-  background: var(--surface-control-hover);
+  /* Keep the opaque code surface beneath the translucent hover highlight. */
+  background-image: linear-gradient(var(--surface-control-hover), var(--surface-control-hover));
   color: var(--text-soft);
 }
 
