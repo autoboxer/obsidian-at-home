@@ -513,7 +513,22 @@
 }
 
 .source-editor .cm-line.live-markdown-block.is-blockquote {
+  --live-quote-content-indent: 1.24em;
+
   color: var(--blockquote-text);
+}
+
+.source-editor .cm-line.is-blockquote.quote-depth-2 {
+  --live-quote-content-indent: 1.86em;
+}
+
+.source-editor .cm-line.is-blockquote.quote-depth-3 {
+  --live-quote-content-indent: 2.48em;
+}
+
+.source-editor .cm-line.is-blockquote:has(.live-quote-control) {
+  position: relative;
+  padding-left: var(--live-quote-content-indent);
 }
 
 .live-markdown-syntax {
@@ -985,8 +1000,10 @@
 }
 
 .live-quote-control {
-  position: relative;
+  /* Keep source hit-testing inline while the bar spans the containing line. */
   display: inline-block;
+  width: var(--live-quote-content-indent);
+  margin-left: calc(-1 * var(--live-quote-content-indent));
   color: transparent;
   white-space: pre;
 }
@@ -1220,7 +1237,8 @@
 .live-code-language-button[aria-expanded="true"],
 .live-code-copy-button:hover {
   border-color: var(--border);
-  background: var(--surface-control-hover);
+  /* Keep the opaque code surface beneath the translucent hover highlight. */
+  background-image: linear-gradient(var(--surface-control-hover), var(--surface-control-hover));
   color: var(--text-soft);
 }
 

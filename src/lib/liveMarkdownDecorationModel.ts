@@ -12,6 +12,7 @@ export interface LiveMarkdownOptions {
   readonly acceptExtensionlessAttachment?: ( destination: string ) => boolean;
   readonly activateAttachment?: MarkdownAttachmentAction;
   readonly documentId: string;
+  readonly imageSourceVersion?: () => number;
   readonly openLink: ( href: string ) => void;
   readonly openWiki: ( target: string, heading?: string ) => void;
   readonly renameAttachment?: MarkdownAttachmentRenameAction;
