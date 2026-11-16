@@ -6,7 +6,7 @@ import {
   type AssetEmbeddingEditor
 } from '../composables/useAssetEmbedding';
 import { leadingFrontmatterEnd } from '../lib/frontmatter';
-import { findMarkdownHeading } from '../lib/headingLinks';
+import { findMarkdownHeading, markdownHeadingSuggestions } from '../lib/headingLinks';
 import { formatCommandShortcut } from '../lib/keyboard';
 import { parseMarkdownNoteTarget, type MarkdownNoteTarget } from '../lib/markdownLinks';
 import { resolveNoteLink, resolveWikiLink, wikiLinkSuggestions, type WikiLinkTarget } from '../lib/wikiLinks';
@@ -82,6 +82,12 @@ const {
 defineExpose({ openNoteLink, storeAndInsertAttachment });
 
 const noteLinkTargets = computed( () => wikiLinkSuggestions( vaultState.notes, noteLinkPaths.value ) );
+
+function noteLinkHeadings( target: string ): string[] {
+  const note = resolveWikiLink({ target }, vaultState.notes, activeNote.value, noteLinkPaths.value );
+
+  return note ? markdownHeadingSuggestions( note.content ) : [];
+}
 
 function noteLinkForId( noteId: string ): string | undefined {
   const path = noteLinkPaths.value.get( noteId );
@@ -749,6 +755,7 @@ watch( tagInput, () => {
             :note-id="activeNote.id"
             :note-relative-path="activeNote.relativePath"
             :note-link-targets="noteLinkTargets"
+            :note-link-headings="noteLinkHeadings"
             :note-link-for-id="noteLinkForId"
             :wiki-link-is-resolved="wikiLinkIsResolved"
             :rename-attachment="renameVaultAttachment"

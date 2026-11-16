@@ -10,11 +10,58 @@ import { relativeImageDestination } from './markdownImages';
 
 export type WikiLinkTarget = Pick<WikiLink, 'target' | 'heading'>;
 
+export interface WikiLinkCompletion {
+  from: number;
+  to: number;
+  query: string;
+  target?: string;
+  suffix: string;
+}
+
 const NOTE_EXTENSION = /\.(?:md|markdown)$/i;
 
 interface TextRange {
   start: number;
   end: number;
+}
+
+/** Complete the active destination on one line, preserving its heading/alias suffix. */
+export function wikiLinkCompletionAt( line: string, cursor: number ): WikiLinkCompletion | undefined {
+  if ( cursor < 2 || cursor > line.length ) {
+    return undefined;
+  }
+  let opening = line.lastIndexOf( '[[', cursor - 2 );
+  while ( opening >= 0 && isEscaped( line, opening ) ) {
+    opening = line.lastIndexOf( '[[', opening - 1 );
+  }
+  if ( opening < 0 ) {
+    return undefined;
+  }
+  const start = opening + 2;
+  const close = findWikiClose( line, start );
+  const before = line.slice( start, cursor );
+  if ( ( close >= 0 && cursor > close ) || splitUnescaped( before, '|', 2 ).length > 1 ) {
+    return undefined;
+  }
+
+  const after = line.slice( start, close >= 0 ? close : line.length );
+  const destination = splitUnescaped( after, '|', 2 )[ 0 ]!;
+  const rawTarget = splitUnescaped( destination, '#', 2 )[ 0 ]!;
+  const heading = cursor > start + rawTarget.length;
+  const from = heading ? start + rawTarget.length + 1 : start;
+  // An explicit heading or alias still belongs to an unclosed link. Otherwise
+  // complete only through the caret, leaving unfinished trailing text outside.
+  const hasSuffix = destination.length < after.length || ( !heading && rawTarget.length < destination.length );
+  const end = close >= 0 ? close : hasSuffix ? line.length : cursor;
+  const suffixFrom = heading ? start + destination.length : start + rawTarget.length;
+
+  return {
+    from,
+    to: close >= 0 ? close + 2 : end,
+    query: unescapeWikiPart( line.slice( from, cursor ) ),
+    ...( heading ? { target: normalizeWikiTarget( rawTarget ) } : {}),
+    suffix: line.slice( Math.min( suffixFrom, end ), end ) + ']]'
+  };
 }
 
 /** Preserve path prefixes and extensions while removing a wiki alias/heading. */
