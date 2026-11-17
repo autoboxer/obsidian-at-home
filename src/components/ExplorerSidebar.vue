@@ -19,8 +19,10 @@ import {
   recentNotes,
   recentlyDeletedNotes,
   selectFolder,
+  showCurrentVaultInFolder,
   treeDragState,
   uiState,
+  vaultSession,
   vaultState,
   vaultTreeItemIsRevealed,
   vaultTreeRevealTarget,
@@ -39,6 +41,9 @@ const folderField = ref<HTMLInputElement>();
 const rootExpanded = ref( true );
 const rootDropActive = ref( false );
 const rootDropInvalid = ref( false );
+const rootButton = ref<HTMLButtonElement>();
+const rootMenu = ref<HTMLElement>();
+const rootMenuPosition = ref<{ x: number; y: number }>();
 const fileTree = ref<HTMLElement>();
 const treePointerFocus = ref( false );
 let revealFrame: number | undefined;
@@ -169,6 +174,11 @@ const emptyTreeIcon = computed( () => {
 });
 
 watch(
+  () => [ vaultSession.backend, vaultSession.path, vaultState.selectedFolderId ],
+  () => closeRootMenu()
+);
+
+watch(
   () => [
     treeDragState.noteId,
     treeDragState.folderId,
@@ -272,11 +282,12 @@ function openFolderInput(): void {
 function cancelFolderInput(): void {
   folderName.value = '';
   folderInputOpen.value = false;
+  nextTick( () => rootButton.value?.focus() );
 }
 
 function submitFolder(): void {
-  if ( folderName.value.trim() ) {
-    createFolder( folderName.value );
+  if ( folderName.value.trim() && createFolder( folderName.value ) ) {
+    selectFolder( 'all' );
     rootExpanded.value = true;
   }
   folderName.value = '';
@@ -420,7 +431,105 @@ function isInvalidRootFolderDrop(): boolean {
   return vaultState.folders.find( ( folder ) => folder.id === treeDragState.folderId )?.parentId === null;
 }
 
+function openRootMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void {
+  rootMenuPosition.value = {
+    x: Math.max( 8, Math.min( event.clientX, window.innerWidth - 188 ) ),
+    y: Math.max( 8, Math.min( event.clientY, window.innerHeight - 132 ) )
+  };
+  nextTick( () => {
+    if ( !rootMenu.value || !rootMenuPosition.value ) {
+      return;
+    }
+    rootMenuPosition.value = {
+      x: Math.max( 8, Math.min( rootMenuPosition.value.x, window.innerWidth - rootMenu.value.offsetWidth - 8 ) ),
+      y: Math.max( 8, Math.min( rootMenuPosition.value.y, window.innerHeight - rootMenu.value.offsetHeight - 8 ) )
+    };
+    rootMenu.value.focus();
+  });
+}
+
+function closeRootMenu( restoreFocus = false ): void {
+  rootMenuPosition.value = undefined;
+  if ( restoreFocus ) {
+    nextTick( () => rootButton.value?.focus() );
+  }
+}
+
+function handleRootMenuFocusOut( event: FocusEvent ): void {
+  if ( event.relatedTarget instanceof Node && rootMenu.value?.contains( event.relatedTarget ) ) {
+    return;
+  }
+  closeRootMenu();
+}
+
+function handleRootMenuKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' ) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeRootMenu( true );
+
+    return;
+  }
+  const items = Array.from( rootMenu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []);
+  const currentIndex = items.indexOf( document.activeElement as HTMLButtonElement );
+  if (
+    ( event.key === 'Tab' || ( event.key === 'Unidentified' && event.code === 'Tab' ) )
+    && event.shiftKey
+    && currentIndex <= 0
+  ) {
+    event.preventDefault();
+    closeRootMenu( true );
+
+    return;
+  }
+  if ( !items.length || ![ 'ArrowDown', 'ArrowUp', 'Home', 'End' ].includes( event.key ) ) {
+    return;
+  }
+  event.preventDefault();
+  let nextIndex: number;
+  if ( event.key === 'Home' ) {
+    nextIndex = 0;
+  } else if ( event.key === 'End' || ( event.key === 'ArrowUp' && currentIndex < 0 ) ) {
+    nextIndex = items.length - 1;
+  } else if ( event.key === 'ArrowDown' ) {
+    nextIndex = ( currentIndex + 1 ) % items.length;
+  } else {
+    nextIndex = ( currentIndex - 1 + items.length ) % items.length;
+  }
+  items[ nextIndex ]?.focus();
+}
+
+function addRootNote(): void {
+  closeRootMenu();
+  if ( createNote( null ) ) {
+    rootExpanded.value = true;
+  }
+}
+
+function addRootFolder(): void {
+  closeRootMenu();
+  openFolderInput();
+}
+
+async function showRootInFolder(): Promise<void> {
+  closeRootMenu( true );
+  try {
+    await showCurrentVaultInFolder();
+  } catch {
+    notify( vaultSession.error || 'The vault folder could not be shown.', 'warning' );
+  }
+}
+
 function handleRootKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'ContextMenu' || ( event.key === 'F10' && event.shiftKey ) ) {
+    event.preventDefault();
+    const bounds = rootButton.value?.getBoundingClientRect();
+    if ( bounds ) {
+      openRootMenu({ clientX: bounds.left, clientY: bounds.bottom });
+    }
+
+    return;
+  }
   if ( event.key === 'ArrowRight' && !rootExpanded.value ) {
     event.preventDefault();
     rootExpanded.value = true;
@@ -645,8 +754,10 @@ function handleTreeFocusOut( event: FocusEvent ): void {
             <div
               class="vault-tree-root-row"
               :class="{ 'drop-active': rootDropActive, 'drop-invalid': rootDropInvalid }"
+              @contextmenu.prevent.stop="openRootMenu"
             >
               <button
+                ref="rootButton"
                 type="button"
                 class="vault-tree-root-main"
                 :aria-expanded="rootExpanded"
@@ -658,6 +769,44 @@ function handleTreeFocusOut( event: FocusEvent ): void {
                 <AppIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
                 <span>Vault root</span>
               </button>
+              <Transition name="popover-fade">
+                <div
+                  v-if="rootMenuPosition"
+                  ref="rootMenu"
+                  class="popover-menu tree-context-menu vault-tree-folder-popover"
+                  :style="{ left: `${rootMenuPosition.x}px`, top: `${rootMenuPosition.y}px`, right: 'auto' }"
+                  role="menu"
+                  tabindex="-1"
+                  aria-label="Actions for Vault root"
+                  @focusout="handleRootMenuFocusOut"
+                  @keydown="handleRootMenuKeydown"
+                >
+                  <button
+                    :disabled="vaultSession.backend !== 'native' || !vaultSession.path || vaultSession.busy"
+                    type="button"
+                    role="menuitem"
+                    @click="showRootInFolder"
+                  >
+                    <AppIcon name="folder-open" :size="14" /> Show in folder
+                  </button>
+                  <button
+                    :disabled="!canEditVault"
+                    type="button"
+                    role="menuitem"
+                    @click="addRootNote"
+                  >
+                    <AppIcon name="file-plus" :size="14" /> New note inside
+                  </button>
+                  <button
+                    :disabled="!canEditVault"
+                    type="button"
+                    role="menuitem"
+                    @click="addRootFolder"
+                  >
+                    <AppIcon name="folder-plus" :size="14" /> New folder inside
+                  </button>
+                </div>
+              </Transition>
             </div>
 
             <Transition name="collapse-fade">
