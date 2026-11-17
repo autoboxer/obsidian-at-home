@@ -310,18 +310,23 @@ function isTreeDrag( event: DragEvent ): boolean {
     || types.includes( VAULT_ATTACHMENT_DRAG_MIME );
 }
 
-function handleRootDragEnter( event: DragEvent ): void {
-  if ( !isTreeDrag( event ) ) {
-    return;
+function isRootDropTarget( target: EventTarget | null, clientY: number ): boolean {
+  const tree = fileTree.value;
+  if ( !tree || vaultState.selectedFolderId === 'recent' || !( target instanceof Element )
+    || target.closest( '.vault-tree-folder' ) ) {
+    return false;
   }
-  event.preventDefault();
-  event.stopPropagation();
-  rootDropInvalid.value = isInvalidRootFolderDrop();
-  rootDropActive.value = !rootDropInvalid.value;
+
+  return tree.contains( target )
+    || ( target.classList.contains( 'explorer-scroll' )
+      && clientY >= tree.getBoundingClientRect().bottom );
 }
 
 function handleRootDragOver( event: DragEvent ): void {
-  if ( !isTreeDrag( event ) ) {
+  if ( !isRootDropTarget( event.target, event.clientY ) || !isTreeDrag( event ) ) {
+    rootDropActive.value = false;
+    rootDropInvalid.value = false;
+
     return;
   }
   event.preventDefault();
@@ -334,8 +339,7 @@ function handleRootDragOver( event: DragEvent ): void {
 }
 
 function handleRootDragLeave( event: DragEvent ): void {
-  const target = event.currentTarget as HTMLElement;
-  if ( event.relatedTarget instanceof Node && target.contains( event.relatedTarget ) ) {
+  if ( isRootDropTarget( event.relatedTarget, event.clientY ) ) {
     return;
   }
   rootDropActive.value = false;
@@ -346,7 +350,7 @@ async function handleRootDrop( event: DragEvent ): Promise<void> {
   rootDropActive.value = false;
   const invalid = rootDropInvalid.value || isInvalidRootFolderDrop();
   rootDropInvalid.value = false;
-  if ( !isTreeDrag( event ) ) {
+  if ( !isRootDropTarget( event.target, event.clientY ) || !isTreeDrag( event ) ) {
     return;
   }
   event.preventDefault();
@@ -543,7 +547,13 @@ function handleTreeFocusOut( event: FocusEvent ): void {
       </form>
     </Transition>
 
-    <div class="explorer-scroll">
+    <div
+      class="explorer-scroll"
+      @dragenter.capture="handleRootDragOver"
+      @dragover.capture="handleRootDragOver"
+      @dragleave.capture="handleRootDragLeave"
+      @drop.capture="handleRootDrop"
+    >
       <section class="explorer-section smart-folders">
         <button
           type="button"
@@ -635,10 +645,6 @@ function handleTreeFocusOut( event: FocusEvent ): void {
             <div
               class="vault-tree-root-row"
               :class="{ 'drop-active': rootDropActive, 'drop-invalid': rootDropInvalid }"
-              @dragenter="handleRootDragEnter"
-              @dragover="handleRootDragOver"
-              @dragleave="handleRootDragLeave"
-              @drop="handleRootDrop"
             >
               <button
                 type="button"
