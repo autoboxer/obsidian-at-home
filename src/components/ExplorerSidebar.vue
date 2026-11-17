@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { formatCommandShortcut } from '../lib/keyboard';
 import { VAULT_IMAGE_DRAG_MIME } from '../lib/imageEmbeds';
 import { VAULT_ATTACHMENT_DRAG_MIME } from '../lib/markdownAttachments';
+import { appearanceState, MAX_EXPLORER_WIDTH, MIN_EXPLORER_WIDTH, setExplorerWidth } from '../stores/appearance';
 import {
   canEditVault,
   createFolder,
@@ -46,6 +47,17 @@ const rootMenu = ref<HTMLElement>();
 const rootMenuPosition = ref<{ x: number; y: number }>();
 const fileTree = ref<HTMLElement>();
 const treePointerFocus = ref( false );
+const sidebar = ref<HTMLElement>();
+const resizeHandle = ref<HTMLElement>();
+const sidebarWidth = ref( MIN_EXPLORER_WIDTH );
+const sidebarStyle = computed( () => ({
+  '--tree-label-extra-width': `${ Math.max( 0, sidebarWidth.value - 292 ) }px`,
+  ...( appearanceState.explorerWidth === null
+    ? {}
+    : { '--explorer-width': `${ appearanceState.explorerWidth }px` })
+}) );
+let sidebarObserver: ResizeObserver | undefined;
+let resizeDrag: { pointerId: number; startX: number; startWidth: number; previousWidth: number | null } | undefined;
 let revealFrame: number | undefined;
 
 const vaultMonogram = computed( () => {
@@ -205,11 +217,105 @@ watch(
   { immediate: true }
 );
 
+onMounted( () => {
+  sidebarObserver = new ResizeObserver( () => {
+    sidebarWidth.value = Math.round( sidebar.value?.getBoundingClientRect().width ?? MIN_EXPLORER_WIDTH );
+    if ( resizeHandle.value && getComputedStyle( resizeHandle.value ).display === 'none' ) {
+      cancelSidebarResize();
+    }
+  });
+  if ( sidebar.value ) {
+    sidebarObserver.observe( sidebar.value );
+  }
+  window.addEventListener( 'blur', cancelSidebarResize );
+});
+
 onBeforeUnmount( () => {
+  cancelSidebarResize();
+  sidebarObserver?.disconnect();
+  window.removeEventListener( 'blur', cancelSidebarResize );
   if ( revealFrame !== undefined ) {
     window.cancelAnimationFrame( revealFrame );
   }
 });
+
+function startSidebarResize( event: PointerEvent ): void {
+  if ( event.button !== 0 || !event.isPrimary || resizeDrag || !resizeHandle.value || !sidebar.value ) {
+    return;
+  }
+  event.preventDefault();
+  resizeHandle.value.setPointerCapture( event.pointerId );
+  resizeDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startWidth: sidebar.value.getBoundingClientRect().width,
+    previousWidth: appearanceState.explorerWidth
+  };
+  document.documentElement.classList.add( 'is-resizing-vault-panel' );
+  resizeHandle.value.focus({ preventScroll: true });
+}
+
+function moveSidebarResize( event: PointerEvent ): void {
+  if ( resizeDrag?.pointerId !== event.pointerId ) {
+    return;
+  }
+  event.preventDefault();
+  setExplorerWidth( resizeDrag.startWidth + event.clientX - resizeDrag.startX );
+}
+
+function stopSidebarResize( cancel: boolean ): void {
+  const drag = resizeDrag;
+  if ( !drag ) {
+    return;
+  }
+  resizeDrag = undefined;
+  if ( cancel ) {
+    setExplorerWidth( drag.previousWidth );
+  }
+  document.documentElement.classList.remove( 'is-resizing-vault-panel' );
+  if ( resizeHandle.value?.hasPointerCapture( drag.pointerId ) ) {
+    resizeHandle.value.releasePointerCapture( drag.pointerId );
+  }
+}
+
+function finishSidebarResize( event: PointerEvent ): void {
+  if ( resizeDrag?.pointerId === event.pointerId ) {
+    moveSidebarResize( event );
+    stopSidebarResize( false );
+  }
+}
+
+function cancelSidebarResize(): void {
+  stopSidebarResize( true );
+}
+
+function resetSidebarWidth(): void {
+  cancelSidebarResize();
+  setExplorerWidth( null );
+}
+
+function handleResizeKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Escape' && resizeDrag ) {
+    event.preventDefault();
+    event.stopPropagation();
+    cancelSidebarResize();
+
+    return;
+  }
+  if ( resizeDrag || event.altKey || event.ctrlKey || event.metaKey || event.isComposing ) {
+    return;
+  }
+  const step = event.shiftKey ? 50 : 10;
+  if ( event.key === 'Enter' ) {
+    event.preventDefault();
+    resetSidebarWidth();
+  } else if ([ 'ArrowLeft', 'ArrowRight', 'Home', 'End' ].includes( event.key ) ) {
+    event.preventDefault();
+    setExplorerWidth( event.key === 'Home' ? MIN_EXPLORER_WIDTH
+      : event.key === 'End' ? MAX_EXPLORER_WIDTH
+        : sidebarWidth.value + ( event.key === 'ArrowRight' ? step : -step ) );
+  }
+}
 
 function scheduleRevealTarget( requestId: number, attempt = 0 ): void {
   if ( revealFrame !== undefined ) {
@@ -565,7 +671,13 @@ function handleTreeFocusOut( event: FocusEvent ): void {
 </script>
 
 <template>
-  <aside class="explorer-sidebar" data-ui-region="vault-panel">
+  <aside
+    id="vault-panel"
+    ref="sidebar"
+    class="explorer-sidebar"
+    :style="sidebarStyle"
+    data-ui-region="vault-panel"
+  >
     <header class="vault-header">
       <button
         type="button"
@@ -878,5 +990,27 @@ function handleTreeFocusOut( event: FocusEvent ): void {
         {{ vaultState.attachmentFiles.length }} attachments
       </span>
     </footer>
+    <div
+      ref="resizeHandle"
+      class="explorer-resize-handle"
+      role="separator"
+      tabindex="0"
+      aria-label="Resize vault panel"
+      aria-controls="vault-panel"
+      aria-orientation="vertical"
+      :aria-valuemin="MIN_EXPLORER_WIDTH"
+      :aria-valuemax="MAX_EXPLORER_WIDTH"
+      :aria-valuenow="sidebarWidth"
+      :aria-valuetext="`${sidebarWidth} pixels`"
+      title="Resize vault panel · Left/Right to adjust, Shift for larger steps, Home/End for limits, Enter or double-click to reset"
+      @pointerdown="startSidebarResize"
+      @pointermove="moveSidebarResize"
+      @pointerup="finishSidebarResize"
+      @pointercancel="cancelSidebarResize"
+      @lostpointercapture="cancelSidebarResize"
+      @blur="cancelSidebarResize"
+      @dblclick="resetSidebarWidth"
+      @keydown="handleResizeKeydown"
+    />
   </aside>
 </template>

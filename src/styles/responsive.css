@@ -12,6 +12,10 @@
 }
 
 @media (max-width: 1180px) {
+  .explorer-resize-handle {
+    display: none;
+  }
+
   .notes-workspace .explorer-sidebar {
     position: absolute;
     z-index: 80;
