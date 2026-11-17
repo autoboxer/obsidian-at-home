@@ -56,6 +56,7 @@ interface AppearanceState {
   themeId: ThemeId;
   fontId: FontId;
   noteFontSize: number;
+  explorerWidth: number | null;
 }
 
 interface StoredAppearance {
@@ -63,6 +64,7 @@ interface StoredAppearance {
   themeId: ThemeId;
   fontId: FontId;
   noteFontSize: number;
+  explorerWidth?: number | null;
 }
 
 export const themes: readonly ThemeOption[] = [
@@ -206,6 +208,8 @@ export const installedFontsUnavailable = ref( false );
 
 export const MIN_NOTE_FONT_SIZE = 13;
 export const MAX_NOTE_FONT_SIZE = 22;
+export const MIN_EXPLORER_WIDTH = 240;
+export const MAX_EXPLORER_WIDTH = 480;
 
 const APPEARANCE_STORAGE_KEY = 'obsidian-at-home.appearance.v1';
 const APPEARANCE_STORAGE_VERSION = 1;
@@ -223,7 +227,8 @@ const bundledFontFamilies = new Set(
 export const appearanceState = reactive<AppearanceState>({
   themeId: DEFAULT_THEME_ID,
   fontId: DEFAULT_FONT_ID,
-  noteFontSize: DEFAULT_NOTE_FONT_SIZE
+  noteFontSize: DEFAULT_NOTE_FONT_SIZE,
+  explorerWidth: null
 });
 
 export const selectedFontOption = computed( () => resolveFontOption( appearanceState.fontId ) );
@@ -274,8 +279,19 @@ export function resetAppearancePreferences(): void {
   appearanceState.themeId = DEFAULT_THEME_ID;
   appearanceState.fontId = DEFAULT_FONT_ID;
   appearanceState.noteFontSize = DEFAULT_NOTE_FONT_SIZE;
+  appearanceState.explorerWidth = null;
   removeStoredAppearance();
   applyAppearance();
+}
+
+export function setExplorerWidth( width: number | null ): void {
+  if ( width !== null && !Number.isFinite( width ) ) {
+    return;
+  }
+  appearanceState.explorerWidth = width === null
+    ? null
+    : clampExplorerWidth( width );
+  persistAppearance();
 }
 
 export function loadInstalledFonts(): Promise<void> {
@@ -364,7 +380,8 @@ function readStoredAppearance(): AppearanceState {
   const defaults: AppearanceState = {
     themeId: DEFAULT_THEME_ID,
     fontId: DEFAULT_FONT_ID,
-    noteFontSize: DEFAULT_NOTE_FONT_SIZE
+    noteFontSize: DEFAULT_NOTE_FONT_SIZE,
+    explorerWidth: null
   };
   const raw = readStorage();
 
@@ -384,7 +401,10 @@ function readStoredAppearance(): AppearanceState {
       fontId: isFontId( stored.fontId ) ? stored.fontId : defaults.fontId,
       noteFontSize: typeof stored.noteFontSize === 'number' && Number.isFinite( stored.noteFontSize )
         ? clampFontSize( stored.noteFontSize )
-        : defaults.noteFontSize
+        : defaults.noteFontSize,
+      explorerWidth: typeof stored.explorerWidth === 'number' && Number.isFinite( stored.explorerWidth )
+        ? clampExplorerWidth( stored.explorerWidth )
+        : null
     };
   } catch {
     return defaults;
@@ -396,7 +416,8 @@ function persistAppearance(): void {
     version: APPEARANCE_STORAGE_VERSION,
     themeId: appearanceState.themeId,
     fontId: appearanceState.fontId,
-    noteFontSize: clampFontSize( appearanceState.noteFontSize )
+    noteFontSize: clampFontSize( appearanceState.noteFontSize ),
+    explorerWidth: appearanceState.explorerWidth
   };
 
   try {
@@ -444,6 +465,10 @@ function isFontId( value: unknown ): value is FontId {
 
 function clampFontSize( fontSize: number ): number {
   return Math.min( MAX_NOTE_FONT_SIZE, Math.max( MIN_NOTE_FONT_SIZE, Math.round( fontSize ) ) );
+}
+
+function clampExplorerWidth( width: number ): number {
+  return Math.round( Math.max( MIN_EXPLORER_WIDTH, Math.min( MAX_EXPLORER_WIDTH, width ) ) );
 }
 
 function resolveFontOption( fontId: FontId ): FontOption {

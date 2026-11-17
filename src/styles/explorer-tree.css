@@ -9,6 +9,8 @@
   z-index: 40;
   display: flex;
   width: var(--explorer-width);
+  min-width: min(240px, var(--explorer-max-width));
+  max-width: var(--explorer-max-width);
   flex-basis: var(--explorer-width);
   flex-direction: column;
   border-right: 1px solid var(--border-faint);
@@ -23,6 +25,41 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 11px 9px 12px;
+}
+
+.explorer-resize-handle {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+.explorer-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: var(--border);
+  content: "";
+}
+
+.explorer-resize-handle:hover::after,
+.explorer-resize-handle:focus-visible::after,
+.is-resizing-vault-panel .explorer-resize-handle::after {
+  background: var(--violet-bright);
+}
+
+.is-resizing-vault-panel,
+.is-resizing-vault-panel * {
+  cursor: col-resize !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 .vault-identity {
@@ -495,7 +532,7 @@
 .vault-tree-folder-name {
   min-width: 0;
   flex: 1;
-  max-width: 180px;
+  max-width: calc(180px + var(--tree-label-extra-width, 0px));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -703,7 +740,7 @@
 .vault-tree-note-title {
   min-width: 0;
   flex: 1;
-  max-width: 190px;
+  max-width: calc(190px + var(--tree-label-extra-width, 0px));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -790,7 +827,7 @@
 .vault-tree-attachment-title {
   min-width: 0;
   flex: 1;
-  max-width: 190px;
+  max-width: calc(190px + var(--tree-label-extra-width, 0px));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
