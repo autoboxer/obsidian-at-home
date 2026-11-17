@@ -50,14 +50,20 @@ const treePointerFocus = ref( false );
 const sidebar = ref<HTMLElement>();
 const resizeHandle = ref<HTMLElement>();
 const sidebarWidth = ref( MIN_EXPLORER_WIDTH );
-const sidebarStyle = computed( () => ({
-  '--tree-label-extra-width': `${ Math.max( 0, sidebarWidth.value - 292 ) }px`,
-  ...( appearanceState.explorerWidth === null
-    ? {}
-    : { '--explorer-width': `${ appearanceState.explorerWidth }px` })
-}) );
+const maximumSidebarWidth = ref( MAX_EXPLORER_WIDTH );
+const minimumSidebarWidth = computed( () => Math.min( MIN_EXPLORER_WIDTH, maximumSidebarWidth.value ) );
+const resizePreview = ref<number>();
+const sidebarStyle = computed( () => {
+  const width = resizePreview.value ?? appearanceState.explorerWidth;
+
+  return {
+    '--tree-label-extra-width': `${ Math.max( 0, sidebarWidth.value - 292 ) }px`,
+    '--explorer-max-width': `${ maximumSidebarWidth.value }px`,
+    ...( width === null ? {} : { '--explorer-width': `${ width }px` })
+  };
+});
 let sidebarObserver: ResizeObserver | undefined;
-let resizeDrag: { pointerId: number; startX: number; startWidth: number; previousWidth: number | null } | undefined;
+let resizeDrag: { pointerId: number; startX: number; startWidth: number; scale: number } | undefined;
 let revealFrame: number | undefined;
 
 const vaultMonogram = computed( () => {
@@ -217,27 +223,70 @@ watch(
   { immediate: true }
 );
 
+watch( () => [ uiState.contextOpen, uiState.notesView ], observeSidebarLayout, { flush: 'post' });
+
 onMounted( () => {
-  sidebarObserver = new ResizeObserver( () => {
-    sidebarWidth.value = Math.round( sidebar.value?.getBoundingClientRect().width ?? MIN_EXPLORER_WIDTH );
-    if ( resizeHandle.value && getComputedStyle( resizeHandle.value ).display === 'none' ) {
-      cancelSidebarResize();
-    }
-  });
-  if ( sidebar.value ) {
-    sidebarObserver.observe( sidebar.value );
-  }
+  sidebarObserver = new ResizeObserver( updateSidebarLayout );
+  observeSidebarLayout();
+  window.addEventListener( 'resize', updateSidebarLayout );
   window.addEventListener( 'blur', cancelSidebarResize );
 });
 
 onBeforeUnmount( () => {
   cancelSidebarResize();
   sidebarObserver?.disconnect();
+  window.removeEventListener( 'resize', updateSidebarLayout );
   window.removeEventListener( 'blur', cancelSidebarResize );
   if ( revealFrame !== undefined ) {
     window.cancelAnimationFrame( revealFrame );
   }
 });
+
+function observeSidebarLayout(): void {
+  sidebarObserver?.disconnect();
+  const workspace = sidebar.value?.parentElement;
+  if ( !workspace ) {
+    return;
+  }
+  sidebarObserver?.observe( workspace );
+  for ( const panel of workspace.children ) {
+    sidebarObserver?.observe( panel );
+  }
+  updateSidebarLayout();
+}
+
+function updateSidebarLayout(): void {
+  const panel = sidebar.value;
+  const workspace = panel?.parentElement;
+  if ( !panel || !workspace ) {
+    return;
+  }
+  sidebarWidth.value = panel.offsetWidth;
+  if ( resizeHandle.value && getComputedStyle( resizeHandle.value ).display === 'none' ) {
+    cancelSidebarResize();
+  }
+
+  // Measure the actual layout so snippets and context-panel visibility participate
+  // in the limit. Temporary constraints must not overwrite the preferred width.
+  let available = workspace.clientWidth;
+  for ( const sibling of workspace.children ) {
+    if ( !( sibling instanceof HTMLElement ) || sibling === panel ) {
+      continue;
+    }
+    const style = getComputedStyle( sibling );
+    if ( style.display === 'none' || style.position === 'absolute' || style.position === 'fixed' ) {
+      continue;
+    }
+    available -= sibling.matches( '.editor-workspace, .recently-deleted-workspace' )
+      ? Math.max( 320, parseFloat( style.minWidth ) || 0 )
+      : sibling.offsetWidth;
+  }
+  maximumSidebarWidth.value = Math.max( 0, Math.min( MAX_EXPLORER_WIDTH, Math.floor( available ) ) );
+}
+
+function constrainSidebarWidth( width: number ): number {
+  return Math.max( minimumSidebarWidth.value, Math.min( maximumSidebarWidth.value, Math.round( width ) ) );
+}
 
 function startSidebarResize( event: PointerEvent ): void {
   if ( event.button !== 0 || !event.isPrimary || resizeDrag || !resizeHandle.value || !sidebar.value ) {
@@ -248,8 +297,8 @@ function startSidebarResize( event: PointerEvent ): void {
   resizeDrag = {
     pointerId: event.pointerId,
     startX: event.clientX,
-    startWidth: sidebar.value.getBoundingClientRect().width,
-    previousWidth: appearanceState.explorerWidth
+    startWidth: sidebar.value.offsetWidth,
+    scale: sidebar.value.getBoundingClientRect().width / sidebar.value.offsetWidth || 1
   };
   document.documentElement.classList.add( 'is-resizing-vault-panel' );
   resizeHandle.value.focus({ preventScroll: true });
@@ -260,7 +309,9 @@ function moveSidebarResize( event: PointerEvent ): void {
     return;
   }
   event.preventDefault();
-  setExplorerWidth( resizeDrag.startWidth + event.clientX - resizeDrag.startX );
+  if ( event.clientX !== resizeDrag.startX || resizePreview.value !== undefined ) {
+    resizePreview.value = constrainSidebarWidth( resizeDrag.startWidth + ( event.clientX - resizeDrag.startX ) / resizeDrag.scale );
+  }
 }
 
 function stopSidebarResize( cancel: boolean ): void {
@@ -269,9 +320,10 @@ function stopSidebarResize( cancel: boolean ): void {
     return;
   }
   resizeDrag = undefined;
-  if ( cancel ) {
-    setExplorerWidth( drag.previousWidth );
+  if ( !cancel && resizePreview.value !== undefined ) {
+    setExplorerWidth( resizePreview.value );
   }
+  resizePreview.value = undefined;
   document.documentElement.classList.remove( 'is-resizing-vault-panel' );
   if ( resizeHandle.value?.hasPointerCapture( drag.pointerId ) ) {
     resizeHandle.value.releasePointerCapture( drag.pointerId );
@@ -311,9 +363,9 @@ function handleResizeKeydown( event: KeyboardEvent ): void {
     resetSidebarWidth();
   } else if ([ 'ArrowLeft', 'ArrowRight', 'Home', 'End' ].includes( event.key ) ) {
     event.preventDefault();
-    setExplorerWidth( event.key === 'Home' ? MIN_EXPLORER_WIDTH
-      : event.key === 'End' ? MAX_EXPLORER_WIDTH
-        : sidebarWidth.value + ( event.key === 'ArrowRight' ? step : -step ) );
+    setExplorerWidth( constrainSidebarWidth( event.key === 'Home' ? minimumSidebarWidth.value
+      : event.key === 'End' ? maximumSidebarWidth.value
+        : sidebarWidth.value + ( event.key === 'ArrowRight' ? step : -step ) ) );
   }
 }
 
@@ -998,8 +1050,8 @@ function handleTreeFocusOut( event: FocusEvent ): void {
       aria-label="Resize vault panel"
       aria-controls="vault-panel"
       aria-orientation="vertical"
-      :aria-valuemin="MIN_EXPLORER_WIDTH"
-      :aria-valuemax="MAX_EXPLORER_WIDTH"
+      :aria-valuemin="minimumSidebarWidth"
+      :aria-valuemax="maximumSidebarWidth"
       :aria-valuenow="sidebarWidth"
       :aria-valuetext="`${sidebarWidth} pixels`"
       title="Resize vault panel · Left/Right to adjust, Shift for larger steps, Home/End for limits, Enter or double-click to reset"

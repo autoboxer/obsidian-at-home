@@ -9,6 +9,8 @@
   z-index: 40;
   display: flex;
   width: var(--explorer-width);
+  min-width: min(240px, var(--explorer-max-width));
+  max-width: var(--explorer-max-width);
   flex-basis: var(--explorer-width);
   flex-direction: column;
   border-right: 1px solid var(--border-faint);

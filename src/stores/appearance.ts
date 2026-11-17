@@ -64,6 +64,7 @@ interface StoredAppearance {
   themeId: ThemeId;
   fontId: FontId;
   noteFontSize: number;
+  explorerWidth?: number | null;
 }
 
 export const themes: readonly ThemeOption[] = [
@@ -289,7 +290,8 @@ export function setExplorerWidth( width: number | null ): void {
   }
   appearanceState.explorerWidth = width === null
     ? null
-    : Math.round( Math.max( MIN_EXPLORER_WIDTH, Math.min( MAX_EXPLORER_WIDTH, width ) ) );
+    : clampExplorerWidth( width );
+  persistAppearance();
 }
 
 export function loadInstalledFonts(): Promise<void> {
@@ -400,7 +402,9 @@ function readStoredAppearance(): AppearanceState {
       noteFontSize: typeof stored.noteFontSize === 'number' && Number.isFinite( stored.noteFontSize )
         ? clampFontSize( stored.noteFontSize )
         : defaults.noteFontSize,
-      explorerWidth: null
+      explorerWidth: typeof stored.explorerWidth === 'number' && Number.isFinite( stored.explorerWidth )
+        ? clampExplorerWidth( stored.explorerWidth )
+        : null
     };
   } catch {
     return defaults;
@@ -412,7 +416,8 @@ function persistAppearance(): void {
     version: APPEARANCE_STORAGE_VERSION,
     themeId: appearanceState.themeId,
     fontId: appearanceState.fontId,
-    noteFontSize: clampFontSize( appearanceState.noteFontSize )
+    noteFontSize: clampFontSize( appearanceState.noteFontSize ),
+    explorerWidth: appearanceState.explorerWidth
   };
 
   try {
@@ -460,6 +465,10 @@ function isFontId( value: unknown ): value is FontId {
 
 function clampFontSize( fontSize: number ): number {
   return Math.min( MAX_NOTE_FONT_SIZE, Math.max( MIN_NOTE_FONT_SIZE, Math.round( fontSize ) ) );
+}
+
+function clampExplorerWidth( width: number ): number {
+  return Math.round( Math.max( MIN_EXPLORER_WIDTH, Math.min( MAX_EXPLORER_WIDTH, width ) ) );
 }
 
 function resolveFontOption( fontId: FontId ): FontOption {
