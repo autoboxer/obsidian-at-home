@@ -15,11 +15,16 @@ import VaultChooser from './components/VaultChooser.vue';
 import { applyAppZoom } from './services/native';
 import {
   activeNote,
+  activeNoteTab,
+  activateNoteTab,
   assetDeletionState,
   cancelVaultAssetDeletion,
   canEditVault,
+  closeNoteTab,
   confirmVaultAssetDeletion,
   createNote,
+  createNoteTab,
+  noteTabsState,
   openQuickSearch,
   openSearchWorkspace,
   resetZoom,
@@ -270,6 +275,43 @@ const titlebarContext = computed( () => {
   return 'Settings';
 });
 
+function handleTabKeyboard( event: KeyboardEvent ): void {
+  if ( event.altKey || event.isComposing ) {
+    return;
+  }
+  const key = event.key.toLocaleLowerCase();
+  const command = event.ctrlKey || event.metaKey;
+  const newTab = command && !event.shiftKey && key === 't';
+  const closeTab = command && !event.shiftKey && key === 'w';
+  const switchTab = event.ctrlKey && !event.metaKey
+    && ( key === 'tab' || key === 'unidentified' && event.code === 'Tab' );
+  if ( !newTab && !closeTab && !switchTab ) {
+    return;
+  }
+  // Handle before editor bindings and native window shortcuts. Blocking UI
+  // retains ownership; these keys must not edit text or close the app window.
+  event.preventDefault();
+  event.stopPropagation();
+  if (
+    appInteractionBlocked.value || commandModalActive.value || uiState.commandOpen
+    || document.documentElement.hasAttribute( 'data-modal-scroll-lock' )
+    || event.repeat && !switchTab
+  ) {
+    return;
+  }
+  if ( newTab ) {
+    createNoteTab();
+  } else if ( uiState.tool === 'notes' && uiState.notesView === 'editor' ) {
+    if ( closeTab ) {
+      closeNoteTab( activeNoteTab.value.id );
+    } else {
+      const tabs = noteTabsState.tabs;
+      const index = tabs.findIndex( ( tab ) => tab.id === activeNoteTab.value.id );
+      activateNoteTab( tabs[ ( index + ( event.shiftKey ? -1 : 1 ) + tabs.length ) % tabs.length ]!.id );
+    }
+  }
+}
+
 function handleKeyboard( event: KeyboardEvent ): void {
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLocaleLowerCase();
@@ -384,11 +426,13 @@ function preventExternalFileNavigation( event: DragEvent ): void {
 }
 
 onMounted( () => {
+  window.addEventListener( 'keydown', handleTabKeyboard, true );
   window.addEventListener( 'keydown', handleKeyboard );
   window.addEventListener( 'dragover', preventExternalFileNavigation, true );
   window.addEventListener( 'drop', preventExternalFileNavigation, true );
 });
 onBeforeUnmount( () => {
+  window.removeEventListener( 'keydown', handleTabKeyboard, true );
   window.removeEventListener( 'keydown', handleKeyboard );
   window.removeEventListener( 'dragover', preventExternalFileNavigation, true );
   window.removeEventListener( 'drop', preventExternalFileNavigation, true );
