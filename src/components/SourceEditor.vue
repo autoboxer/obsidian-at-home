@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId,
 import { defaultKeymap, history, historyField, historyKeymap } from '@codemirror/commands';
 import { syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { Annotation, Compartment, EditorSelection, EditorState, Prec, Transaction } from '@codemirror/state';
+import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, Transaction } from '@codemirror/state';
 import { drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap } from '@codemirror/view';
 import {
   useCodeMirrorAssets,
@@ -73,6 +73,7 @@ import {
 import { joinLeadingFrontmatter, leadingFrontmatterEnd, markdownBodyStart } from '../lib/frontmatter';
 import { normalizeWikiTarget, wikiLinkCompletionAt, type WikiLinkCompletion } from '../lib/wikiLinks';
 import { openNoteEditorHistory } from '../stores/editorHistories';
+import { getNoteTabEditorPosition, mapNoteTabEditorPositions, type NoteEditorViewPosition } from '../stores/editorPositions';
 import type { Extension } from '@codemirror/state';
 import type { Command } from '@codemirror/view';
 import type { MarkdownAttachmentRenameTarget } from '../lib/markdownAttachments';
@@ -80,6 +81,7 @@ import type { EmbeddedAttachment, EmbeddedImage, NoteEditorPosition, VaultAttach
 import AppIcon from './AppIcon.vue';
 
 const props = defineProps<{
+  tabId: string;
   focusOnMount?: boolean;
   initialPosition?: NoteEditorPosition;
   attachmentFiles: VaultAttachmentFile[];
@@ -264,8 +266,11 @@ onMounted( () => {
   );
   frontmatterLineOffset = editableDocument.lineNumberOffset;
   frontmatterPrefix = editableDocument.prefix;
+  const viewPosition: NoteEditorViewPosition | undefined = getNoteTabEditorPosition(
+    props.vaultId, props.tabId, props.noteId, props.modelValue
+  ) ?? props.initialPosition;
   const initialPosition = normalizeInitialPosition(
-    props.initialPosition,
+    viewPosition,
     editableDocument.body.length,
     editableDocument.bodyStart
   );
@@ -357,7 +362,7 @@ onMounted( () => {
     liveMarkdownExtension({
       acceptExtensionlessAttachment: isKnownExtensionlessAttachment,
       activateAttachment: activateLiveMarkdownAttachment,
-      documentId: `${ props.vaultId }\u0000${ props.noteId }`,
+      documentId: JSON.stringify([ props.vaultId, props.tabId, props.noteId ]),
       imageSourceVersion: liveMarkdownImageSourceVersion,
       openLink: openLiveMarkdownLink,
       openWiki: openLiveMarkdownWikiLink,
@@ -447,6 +452,21 @@ onMounted( () => {
         ( transaction ) => transaction.docChanged && !transaction.annotation( externalUpdate )
       );
       if ( localDocumentChange ) {
+        const previousBody = update.startState.doc.toString();
+        const nextBody = update.state.doc.toString();
+        const previousContent = joinLeadingFrontmatter( frontmatterPrefix, previousBody );
+        const nextContent = joinLeadingFrontmatter( frontmatterPrefix, nextBody );
+        const bodyStart = markdownBodyStart( frontmatterPrefix, previousBody );
+        const changes: Array<{ from: number; to: number; insert: string }> = [];
+        update.changes.iterChanges( ( from, to, _fromB, _toB, inserted ) => {
+          changes.push({ from: from + bodyStart, to: to + bodyStart, insert: inserted.toString() });
+        });
+        mapNoteTabEditorPositions(
+          props.vaultId, props.noteId, previousContent, nextContent,
+          ChangeSet.of( bodyStart === markdownBodyStart( frontmatterPrefix, nextBody )
+            ? changes
+            : minimalDocumentChange( previousContent, nextContent ), previousContent.length )
+        );
         if (
           props.showFrontmatter
           && changeTouchesLeadingFrontmatter( update )
@@ -472,11 +492,23 @@ onMounted( () => {
       scheduleEditorRenderReady( update.view );
     })
   ];
+  const initialBodyStart = savedState
+    ? markdownBodyStart( savedState.prefix, savedState.doc )
+    : editableDocument.bodyStart;
+  const initialDocumentLength = restoredState?.doc.length ?? editableDocument.body.length;
+  const initialRanges = viewPosition?.ranges ?? ( viewPosition ? [ viewPosition.selection ] : undefined );
+  const initialSelection = ( bodyStart: number, documentLength: number ) => {
+    const clamp = ( offset: number ) => Math.max( 0, Math.min( documentLength, offset - bodyStart ) );
+
+    return initialRanges
+      ? EditorSelection.create( initialRanges.map( ( range ) => EditorSelection.range(
+        clamp( range.anchor ), clamp( range.head )
+      ) ), viewPosition?.mainIndex ?? 0 )
+      : undefined;
+  };
   let state = EditorState.create({
     doc: restoredState?.doc ?? editableDocument.body,
-    selection: restoredState?.selection ?? ( initialPosition
-      ? EditorSelection.range( initialPosition.selection.anchor, initialPosition.selection.head )
-      : undefined ),
+    selection: initialSelection( initialBodyStart, initialDocumentLength ) ?? restoredState?.selection,
     extensions
   });
   if ( savedState && savedState.doc !== editableDocument.body ) {
@@ -487,7 +519,9 @@ onMounted( () => {
         Transaction.addToHistory.of( false )
       ],
       changes: minimalDocumentChange( savedState.doc, editableDocument.body ),
-      selection: frontmatterVisibilitySelection(
+      // The shared undo snapshot may hide metadata selected in this tab.
+      // Restore from full-document offsets instead of the clamped old projection.
+      selection: initialSelection( editableDocument.bodyStart, editableDocument.body.length ) ?? frontmatterVisibilitySelection(
         state.selection,
         currentBodyStart,
         editableDocument

@@ -2,15 +2,15 @@ import { ref, type Ref } from 'vue';
 import { syntaxTreeAvailable } from '@codemirror/language';
 import { EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { markdownBodyStart } from '../lib/frontmatter';
-import { registerNoteEditorPositionCapture } from '../stores/editorPositions';
+import { joinLeadingFrontmatter, markdownBodyStart } from '../lib/frontmatter';
+import { registerNoteEditorPositionCapture, setNoteTabEditorPosition, type NoteEditorViewPosition } from '../stores/editorPositions';
 import type { NoteEditorPosition } from '../types';
 
 const VIEWPORT_ANCHOR_MARGIN = 8;
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 
 export function useCodeMirrorViewport(
-  props: { vaultId: string; noteId: string },
+  props: { vaultId: string; noteId: string; tabId: string },
   emit: ( event: 'editorPosition', vaultId: string, noteId: string, position: NoteEditorPosition ) => void,
   editorView: Ref<EditorView | undefined>,
   getFrontmatterPrefix: () => string
@@ -102,7 +102,7 @@ export function useCodeMirrorViewport(
     });
   }
 
-  function captureEditorPosition( view: EditorView ): NoteEditorPosition {
+  function captureEditorPosition( view: EditorView ): NoteEditorViewPosition {
     const selection = view.state.selection.main;
     const bodyStart = markdownBodyStart(
       getFrontmatterPrefix(),
@@ -122,6 +122,8 @@ export function useCodeMirrorViewport(
         anchor: selection.anchor + bodyStart,
         head: selection.head + bodyStart
       },
+      ranges: view.state.selection.ranges.map( ( range ) => ({ anchor: range.anchor + bodyStart, head: range.head + bodyStart }) ),
+      mainIndex: view.state.selection.mainIndex,
       viewport: {
         anchor: viewportBlock.from + bodyStart,
         offset: viewportBlock.top - scrollTop,
@@ -130,7 +132,17 @@ export function useCodeMirrorViewport(
     };
   }
 
-  function emitEditorPosition( position: NoteEditorPosition ): void {
+  function emitEditorPosition( position: NoteEditorViewPosition ): void {
+    const view = editorView.value;
+    if ( view ) {
+      setNoteTabEditorPosition(
+        props.vaultId,
+        props.tabId,
+        props.noteId,
+        joinLeadingFrontmatter( getFrontmatterPrefix(), view.state.doc.toString() ),
+        position
+      );
+    }
     emit( 'editorPosition', props.vaultId, props.noteId, position );
   }
 

@@ -359,6 +359,11 @@ const vaultNavigation = createVaultNavigation({
 });
 
 export const {
+  activeNoteTab,
+  activateNoteTab,
+  closeNoteTab,
+  createNoteTab,
+  noteTabsState,
   backNavigationNote,
   canNavigateBack,
   canNavigateForward,

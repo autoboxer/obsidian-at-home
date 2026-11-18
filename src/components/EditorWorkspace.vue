@@ -18,6 +18,7 @@ import {
 import {
   canEditVault,
   activeNote,
+  activeNoteTab,
   backNavigationNote,
   canNavigateBack,
   canNavigateForward,
@@ -120,6 +121,7 @@ const positionVaultId = computed( () => editorPositionVaultId( vaultSession.back
 // Access changes rebuild the editor and its widget controls.
 const editorKey = computed( () => JSON.stringify([
   positionVaultId.value,
+  activeNoteTab.value.id,
   canEditVault.value,
   activeNote.value?.id ?? null
 ]) );
@@ -255,13 +257,14 @@ async function openNoteLink( link: WikiLinkTarget | MarkdownNoteTarget ): Promis
 
 async function focusLinkedNote( noteId: string, offset: number ): Promise<void> {
   const vaultId = positionVaultId.value;
+  const tabId = activeNoteTab.value.id;
   if ( noteId !== activeNote.value?.id ) {
     selectNote( noteId );
   }
   // Link destinations override the restored position after the editor mounts,
   // including self-links and notes just selected by createLinkedNote.
   await nextTick();
-  if ( positionVaultId.value !== vaultId || activeNote.value?.id !== noteId ) {
+  if ( positionVaultId.value !== vaultId || activeNoteTab.value.id !== tabId || activeNote.value?.id !== noteId ) {
     return;
   }
 
@@ -745,6 +748,7 @@ watch( tagInput, () => {
           <SourceEditor
             :key="editorKey"
             ref="sourceEditor"
+            :tab-id="activeNoteTab.id"
             :focus-on-mount="uiState.noteTitleFocusId !== activeNote.id"
             :initial-position="savedEditorPosition( activeNote.id, activeNote.content )"
             :attachment-files="vaultState.attachmentFiles"
