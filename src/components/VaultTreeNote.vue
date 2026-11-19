@@ -7,7 +7,9 @@ import {
   selectNote,
   showVaultItemInFolder,
   treeDragState,
+  uiState,
   updateNote,
+  vaultSession,
   vaultState
 } from '../stores/vault';
 import type { Note } from '../types';
@@ -22,6 +24,11 @@ const menu = ref<HTMLElement>();
 const editing = ref( false );
 const editValue = ref( '' );
 const renameInput = ref<HTMLInputElement>();
+
+function openNote(): void {
+  noteButton.value?.focus({ preventScroll: true });
+  selectNote( props.note.id );
+}
 
 function startDrag( event: DragEvent ): void {
   if ( !canEditVault.value ) {
@@ -149,6 +156,16 @@ function cancelRename(): void {
 }
 
 function handleRowKeydown( event: KeyboardEvent ): void {
+  if ( event.key === 'Delete' && !event.altKey && !event.ctrlKey && !event.metaKey
+    && !event.shiftKey && !event.isComposing ) {
+    event.preventDefault();
+    event.stopPropagation();
+    if ( !event.repeat ) {
+      void requestDelete();
+    }
+
+    return;
+  }
   if ( event.key === 'F2' && !event.altKey && !event.ctrlKey && !event.metaKey ) {
     event.preventDefault();
     beginRename();
@@ -164,14 +181,37 @@ function handleRowKeydown( event: KeyboardEvent ): void {
   }
 }
 
-function requestDelete(): void {
-  if ( !canEditVault.value ) {
+async function requestDelete(): Promise<void> {
+  if ( !canEditVault.value || vaultSession.busy || uiState.sidebarNoteDeletionPending ) {
     return;
   }
-  closeMenu();
-  const title = props.note.title || 'Untitled note';
-  if ( window.confirm( `Delete “${ title }”? It will remain in Recently Deleted for seven days.` ) ) {
-    void deleteNote( props.note.id );
+  const button = noteButton.value;
+  const tree = button?.closest( '.vault-file-tree' );
+  const rows = Array.from( tree?.querySelectorAll<HTMLButtonElement>(
+    '.vault-tree-root-main, .vault-tree-folder-main, .vault-tree-note-main, .vault-tree-image-main, .vault-tree-attachment-main'
+  ) ?? []);
+  const index = button ? rows.indexOf( button ) : -1;
+  const focusTargets = [
+    button,
+    rows[ index + 1 ],
+    rows[ index - 1 ],
+    tree?.querySelector<HTMLButtonElement>( '.vault-tree-root-main' ),
+    tree?.closest( '.explorer-sidebar' )?.querySelector<HTMLInputElement>( '.vault-tree-filter input' )
+  ];
+  uiState.sidebarNoteDeletionPending = true;
+  try {
+    closeMenu();
+    const title = props.note.title || 'Untitled note';
+    if ( window.confirm( `Delete “${ title }”? It will remain in Recently Deleted for seven days.` ) ) {
+      await deleteNote( props.note.id );
+    }
+    await nextTick();
+    const target = focusTargets.find( ( element ) => element?.isConnected
+      && element.getClientRects().length
+      && !element.closest( '[inert], :disabled, .collapse-fade-leave-active' ) );
+    target?.focus({ preventScroll: true });
+  } finally {
+    uiState.sidebarNoteDeletionPending = false;
   }
 }
 
@@ -205,7 +245,7 @@ function showInFolder(): void {
       :draggable="canEditVault"
       aria-haspopup="menu"
       :aria-expanded="menuOpen"
-      @click="selectNote( note.id )"
+      @click="openNote"
       @keydown="handleRowKeydown"
       @dragstart="startDrag"
       @dragend="finishDrag"
