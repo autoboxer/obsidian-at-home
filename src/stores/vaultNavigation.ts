@@ -60,6 +60,12 @@ export function createVaultNavigation(
   watch( () => uiState.frontmatterVisible, ( visible ) => {
     activeNoteTab.value.frontmatterVisible = visible;
   }, { flush: 'sync' });
+  // Reconcile after complete inventory mutations, including reload and rollback.
+  // Remember promoted IDs and the latest path even while a tab is inactive.
+  watch( () => vaultState.imageFiles, () => {
+    updateImageTargets( ( target ) => findImage( target ) );
+    pruneNoteNavigation();
+  }, { deep: true });
 
   function newTab( noteId: string | null ): NoteTab {
     return { id: createId( 'tab' ), noteId, image: null, back: [], forward: [], frontmatterVisible: false };
@@ -115,6 +121,7 @@ export function createVaultNavigation(
 
   const activeImage = computed( () => activeNoteTab.value.image
     ? resolveImageTarget( activeNoteTab.value.image ) : undefined );
+  const activeImageAvailable = computed( () => Boolean( activeImage.value && findImage( activeImage.value ) ) );
   const backNavigationTarget = computed( () => findNavigationTarget( activeNoteTab.value.back ) );
   const forwardNavigationTarget = computed( () => findNavigationTarget( activeNoteTab.value.forward ) );
   const backNavigationNote = computed( () => noteForTarget( backNavigationTarget.value ) );
@@ -131,6 +138,27 @@ export function createVaultNavigation(
 
   function resolveImageTarget( target: VaultImageFile ): VaultImageFile {
     return findImage( target ) ?? target;
+  }
+
+  function updateImageTargets( resolve: ( target: VaultImageFile ) => VaultImageFile | undefined ): void {
+    for ( const tab of noteTabsState.tabs ) {
+      for ( const target of [ tab.image, ...tab.back, ...tab.forward ]) {
+        if ( target && typeof target !== 'string' ) {
+          const image = resolve( target );
+          if ( image ) {
+            Object.assign( target, image );
+          }
+        }
+      }
+    }
+  }
+
+  function relocateImageNavigation( previousPath: string, image: VaultImageFile ): void {
+    // A first move assigns an ID to an untracked file. The operation's explicit
+    // old path connects that identity to previews and history opened beforehand.
+    updateImageTargets( ( target ) => (
+      target.assetId ? target.assetId === image.assetId : target.relativePath === previousPath
+    ) ? image : undefined );
   }
 
   function currentTarget(): TabNavigationTarget | null {
@@ -495,9 +523,11 @@ export function createVaultNavigation(
 
   return {
     activeImage,
+    activeImageAvailable,
     backNavigationTitle,
     forwardNavigationTitle,
     resolveImageTarget,
+    relocateImageNavigation,
     selectVaultImage,
     activeNoteTab,
     activateNoteTab,

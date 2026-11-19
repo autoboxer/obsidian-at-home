@@ -877,7 +877,9 @@ fn load_snapshot_initializes_metadata_and_protects_subsequent_saves() {
     let workspace = TestWorkspace::new("load-snapshot-save");
     let note_path = workspace.root.join("External.md");
     fs::write(&note_path, "original").unwrap();
+    let source_revision = revision_for_root(&workspace.root).unwrap();
     let loaded = load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
+    assert_eq!(loaded.source_revision, source_revision);
     assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     assert_eq!(loaded.vault.notes[0].content, "original");
     assert_eq!(loaded.revision, revision_for_root(&workspace.root).unwrap());
@@ -900,6 +902,49 @@ fn load_snapshot_initializes_metadata_and_protects_subsequent_saves() {
 }
 
 #[test]
+fn load_snapshot_reports_metadata_reconciliation_origin() {
+    let workspace = TestWorkspace::new("load-snapshot-origin");
+    let note = test_note("original");
+    let mut vault = empty_vault("Test vault");
+    vault.notes.push(note.clone());
+    let saved = save_workspace_files(
+        &workspace.root,
+        &vault,
+        revision_for_root(&workspace.root).unwrap(),
+    )
+    .unwrap();
+    // An image/blank tab persists no active note. Loading chooses a restart
+    // fallback, changing metadata even though no external writer was involved.
+    assert!(vault.active_note_id.is_none());
+    let loaded = load_workspace(&workspace.root, &vault).unwrap();
+    assert_eq!(loaded.source_revision, saved.revision);
+    assert_ne!(loaded.revision, saved.revision);
+    assert_eq!(loaded.vault.active_note_id.as_deref(), Some(note.id.as_str()));
+    assert_eq!(loaded.revision, revision_for_root(&workspace.root).unwrap());
+
+    let unchanged = load_workspace(&workspace.root, &vault).unwrap();
+    assert_eq!(unchanged.source_revision, loaded.revision);
+    assert_eq!(unchanged.revision, loaded.revision);
+
+    let note_path = workspace.root.join(&note.relative_path);
+    let modified = fs::metadata(&note_path).unwrap().modified().unwrap();
+    fs::write(&note_path, "external").unwrap();
+    File::options()
+        .write(true)
+        .open(&note_path)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(modified))
+        .unwrap();
+    let external_revision = revision_for_root(&workspace.root).unwrap();
+    let external = load_workspace(&workspace.root, &vault).unwrap();
+    assert_eq!(external.source_revision, external_revision);
+    assert_ne!(external.source_revision, loaded.revision);
+    assert_eq!(external.vault.notes[0].content, "external");
+    assert!(save_workspace_files(&workspace.root, &vault, loaded.revision).is_err());
+    assert_eq!(fs::read_to_string(&note_path).unwrap(), "external");
+}
+
+#[test]
 fn load_snapshot_preserves_unsupported_metadata() {
     for bytes in [
         b"not JSON".as_slice(),
@@ -915,6 +960,7 @@ fn load_snapshot_preserves_unsupported_metadata() {
         assert_eq!(loaded.vault.notes[0].content, "keep me");
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert_eq!(loaded.revision, before);
+        assert_eq!(loaded.source_revision, before);
         assert!(!loaded.warnings.is_empty());
     }
 }

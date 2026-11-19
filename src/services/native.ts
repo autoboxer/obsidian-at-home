@@ -629,6 +629,12 @@ export async function readWorkspaceImage(
   return bytes instanceof Uint8Array ? bytes : new Uint8Array( bytes );
 }
 
+export async function previewWorkspaceImage( path: string, relativePath: string ): Promise<Uint8Array> {
+  const bytes = await invoke<ArrayBuffer | Uint8Array>( 'workspace_preview_image', { path, relativePath });
+
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array( bytes );
+}
+
 export async function importObsidianVault( path: string ): Promise<ImportResult> {
   return invoke<ImportResult>( 'import_obsidian_vault', { path });
 }

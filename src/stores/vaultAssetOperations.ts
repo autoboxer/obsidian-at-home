@@ -32,6 +32,7 @@ interface VaultAssetOperationsDependencies {
   flushVault: () => Promise<boolean>;
   folderPath: ( id: string | null ) => string;
   notify: ( message: string, tone: ToastTone ) => void;
+  relocateImageNavigation: ( previousPath: string, image: VaultImageFile ) => void;
   runExclusiveVaultDataOperation: <T>( fallback: T, operation: () => Promise<T> ) => Promise<T>;
 }
 
@@ -44,6 +45,7 @@ export function createVaultAssetOperations(
     flushVault,
     folderPath,
     notify,
+    relocateImageNavigation,
     runExclusiveVaultDataOperation
   } = dependencies;
 
@@ -191,6 +193,11 @@ export function createVaultAssetOperations(
       }
       vaultState.embeddedImages.push( result.image );
       upsertWorkspaceImageFile({
+        assetId: result.image.id,
+        relativePath: result.image.relativePath,
+        mediaType: result.image.mediaType
+      });
+      relocateImageNavigation( result.previousRelativePath, {
         assetId: result.image.id,
         relativePath: result.image.relativePath,
         mediaType: result.image.mediaType

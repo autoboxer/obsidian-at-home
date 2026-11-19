@@ -9,7 +9,7 @@ import { leadingFrontmatterEnd } from '../lib/frontmatter';
 import { findMarkdownHeading, markdownHeadingSuggestions } from '../lib/headingLinks';
 import { formatCommandShortcut } from '../lib/keyboard';
 import { parseMarkdownNoteTarget, type MarkdownNoteTarget } from '../lib/markdownLinks';
-import { readWorkspaceImage } from '../services/native';
+import { previewWorkspaceImage } from '../services/native';
 import { resolveNoteLink, resolveWikiLink, wikiLinkSuggestions, type WikiLinkTarget } from '../lib/wikiLinks';
 import {
   editorPositionVaultId,
@@ -19,6 +19,7 @@ import {
 import {
   canEditVault,
   activeImage,
+  activeImageAvailable,
   activeNote,
   activeNoteTab,
   activateNoteTab,
@@ -41,6 +42,7 @@ import {
   noteLinkPaths,
   openQuickSearch,
   renameVaultAttachment,
+  reloadFilesystemVault,
   resolveImageTarget,
   selectNote,
   togglePinned,
@@ -216,12 +218,34 @@ const imageName = computed( () => activeImage.value?.relativePath.split( '/' ).a
 const previewUrl = ref<string>();
 const previewLoading = ref( false );
 const previewError = ref( '' );
+const previewRetrying = ref( false );
+
+async function retryImagePreview(): Promise<void> {
+  if ( previewRetrying.value || vaultSession.busy ) {
+    return;
+  }
+  const path = vaultSession.path;
+  const tab = activeNoteTab.value;
+  const image = tab.image;
+  const isCurrent = (): boolean => vaultSession.path === path
+    && activeNoteTab.value === tab && tab.image === image;
+  previewRetrying.value = true;
+  try {
+    // The lifecycle saves document/settings edits and reconciles navigation-only
+    // changes without requiring a write against a potentially stale revision.
+    await reloadFilesystemVault({ preserveChanges: true, isCurrent });
+  } finally {
+    previewRetrying.value = false;
+  }
+}
 
 watch( () => JSON.stringify([
   vaultSession.backend,
   vaultSession.path,
   activeNoteTab.value.id,
-  activeImage.value
+  activeImage.value,
+  activeImageAvailable.value,
+  uiState.imageRefreshToken
 ]), async ( _target, _previous, onCleanup ) => {
   let cancelled = false;
   let objectUrl: string | undefined;
@@ -243,11 +267,14 @@ watch( () => JSON.stringify([
 
     return;
   }
+  if ( !activeImageAvailable.value ) {
+    previewError.value = 'This image is no longer in the vault.';
+
+    return;
+  }
   previewLoading.value = true;
   try {
-    // Use the existing validated image reader. The virtual Markdown path is
-    // only a resolution base; the root-relative destination creates no note.
-    const bytes = await readWorkspaceImage( vaultSession.path, 'Image preview.md', `/${ image.relativePath }`, image.assetId );
+    const bytes = await previewWorkspaceImage( vaultSession.path, image.relativePath );
     if ( cancelled ) {
       return;
     }
@@ -1077,9 +1104,20 @@ watch( tagInput, () => {
         <p>{{ activeImage.relativePath }}</p>
       </header>
       <div class="image-preview-stage">
-        <p v-if="previewLoading || previewError" role="status">
-          {{ previewError || 'Loading image…' }}
-        </p>
+        <div v-if="previewLoading || previewError" class="image-preview-message">
+          <p role="status">
+            {{ previewError || 'Loading image…' }}
+          </p>
+          <button
+            v-if="previewError && nativeAvailable && vaultSession.path"
+            class="secondary-button"
+            type="button"
+            :disabled="vaultSession.busy || previewRetrying"
+            @click="retryImagePreview"
+          >
+            Reload vault and retry
+          </button>
+        </div>
         <img
           v-if="previewUrl"
           v-show="!previewLoading && !previewError"

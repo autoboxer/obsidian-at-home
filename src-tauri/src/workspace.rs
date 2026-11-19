@@ -325,6 +325,8 @@ pub struct WorkspaceLoad {
     pub editor_positions_revision: Option<String>,
     pub editor_positions_writable: bool,
     pub warnings: Vec<String>,
+    // Verified disk snapshot before the loader's metadata reconciliation.
+    pub source_revision: u64,
     pub revision: u64,
 }
 

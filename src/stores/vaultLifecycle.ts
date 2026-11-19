@@ -19,6 +19,8 @@ import {
 } from './editorPositions';
 import {
   errorMessage,
+  normalizeFolderSelection,
+  normalizeRecentNoteIds,
   normalizeVault,
   safeStorageGet,
   safeStorageSet,
@@ -51,7 +53,7 @@ interface VaultLifecycleDependencies {
   resetNoteNavigation: () => void;
   snapshotVault: () => VaultData;
   vaultChanges: Pick<ReturnType<typeof createVaultChangeTracker>,
-    'acknowledge' | 'hasChanges' | 'reset' | 'version'
+    'acknowledge' | 'hasChanges' | 'hasNonNavigationChanges' | 'reset' | 'version'
   >;
 }
 
@@ -84,6 +86,27 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
   let initializePromise: Promise<void> | null = null;
   let closeHandlerInstalled = false;
   let closingAfterSave = false;
+  let pendingWorkspaceReload: Promise<unknown> | null = null;
+
+  function trackWorkspaceReload<T>( operation: Promise<T> ): Promise<T> {
+    pendingWorkspaceReload = operation;
+
+    return operation.finally( () => {
+      if ( pendingWorkspaceReload === operation ) {
+        pendingWorkspaceReload = null;
+      }
+    });
+  }
+
+  function reconcileCancelledLoad( workspace: WorkspaceLoad, generation: number ): void {
+    // A discarded snapshot may still have normalized metadata on disk. Accept
+    // only writes derived from our exact revision, never an external change.
+    if ( generation === getSessionGeneration()
+      && workspace.descriptor.path === vaultSession.path
+      && workspace.sourceRevision === vaultSession.revision ) {
+      vaultSession.revision = workspace.revision;
+    }
+  }
 
   function initializeVault(): Promise<void> {
     if ( initializePromise ) {
@@ -338,28 +361,62 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     }
   }
 
-  async function reloadFilesystemVault(): Promise<boolean> {
+  async function reloadFilesystemVault(
+    options: { preserveChanges?: boolean; isCurrent?: () => boolean } = {}
+  ): Promise<boolean> {
     const path = vaultSession.path;
     if ( vaultSession.backend !== 'native' || !path || vaultSession.busy ) {
       return false;
     }
 
-    vaultSession.busy = true;
-    try {
-      await flushNoteEditorPositions( currentEditorPositionVaultId() );
-      const workspace = await openWorkspace( path, createEmptyVault() );
-      applyWorkspace( workspace );
-      notify( 'Reloaded the vault from disk', 'success' );
-
-      return true;
-    } catch ( error ) {
-      setVaultError( error, 'The vault could not be reloaded from disk.' );
-
-      return false;
-    } finally {
-      vaultSession.busy = false;
-      scheduleRecentlyDeletedExpiry();
+    await pendingWorkspaceReload;
+    if ( options.preserveChanges
+      && ( vaultChanges.hasNonNavigationChanges || hasSaveInFlight() || hasRecoverySaveInFlight() ) ) {
+      const saved = await flushVault();
+      if ( !saved && vaultChanges.hasNonNavigationChanges ) {
+        return false;
+      }
     }
+    if ( path !== vaultSession.path || vaultSession.busy || options.isCurrent && !options.isCurrent() ) {
+      return false;
+    }
+
+    const version = vaultChanges.version;
+    const generation = getSessionGeneration();
+    vaultSession.busy = true;
+    return trackWorkspaceReload( ( async () => {
+      try {
+        await flushNoteEditorPositions( currentEditorPositionVaultId() );
+        const workspace = await openWorkspace( path, createEmptyVault() );
+        // Optional refreshes must not replace edits made while reading disk.
+        // Explicit conflict-recovery reloads retain their discard behavior.
+        if ( options.isCurrent && !options.isCurrent()
+          || options.preserveChanges && ( vaultChanges.hasNonNavigationChanges || vaultChanges.version !== version ) ) {
+          reconcileCancelledLoad( workspace, generation );
+
+          return false;
+        }
+        const recentNoteIds = [ ...vaultState.recentNoteIds ];
+        const selectedFolderId = vaultState.selectedFolderId;
+        applyWorkspace( workspace );
+        if ( options.preserveChanges ) {
+          // Keep the session's navigation, dropping targets removed on disk.
+          // Track it again so it is saved against the newly loaded revision.
+          vaultState.recentNoteIds = normalizeRecentNoteIds( recentNoteIds, vaultState.notes, vaultState.activeNoteId );
+          vaultState.selectedFolderId = normalizeFolderSelection( selectedFolderId, vaultState.notes, vaultState.recentNoteIds );
+        }
+        notify( 'Reloaded the vault from disk', 'success' );
+
+        return true;
+      } catch ( error ) {
+        setVaultError( error, 'The vault could not be reloaded from disk.' );
+
+        return false;
+      } finally {
+        vaultSession.busy = false;
+        scheduleRecentlyDeletedExpiry();
+      }
+    })() );
   }
 
   function readStoredVault(): StoredBrowserWorkspace | null {
@@ -493,32 +550,35 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
     checkingExternalChanges = true;
     const generation = getSessionGeneration();
-    try {
-      const revision = await getWorkspaceRevision( path );
-      if ( revision === vaultSession.revision ) {
-        return;
-      }
-      await flushNoteEditorPositions( currentEditorPositionVaultId() );
-      const workspace = await openWorkspace( path, createEmptyVault() );
-      if (
-        generation !== getSessionGeneration()
+    return trackWorkspaceReload( ( async () => {
+      try {
+        const revision = await getWorkspaceRevision( path );
+        if ( revision === vaultSession.revision ) {
+          return;
+        }
+        await flushNoteEditorPositions( currentEditorPositionVaultId() );
+        const workspace = await openWorkspace( path, createEmptyVault() );
+        if (
+          generation !== getSessionGeneration()
         || path !== vaultSession.path
         || vaultSession.busy
         || assetDeletionState.request !== null
         || hasRecoverySaveInFlight()
         || vaultChanges.hasChanges
-      ) {
-        return;
+        ) {
+          reconcileCancelledLoad( workspace, generation );
+          return;
+        }
+        applyWorkspace( workspace );
+        notify( 'Reloaded changes from the vault folder', 'neutral' );
+      } catch ( error ) {
+        if ( generation === getSessionGeneration() && path === vaultSession.path ) {
+          vaultSession.error = errorMessage( error, 'The vault folder could not be checked for changes.' );
+        }
+      } finally {
+        checkingExternalChanges = false;
       }
-      applyWorkspace( workspace );
-      notify( 'Reloaded changes from the vault folder', 'neutral' );
-    } catch ( error ) {
-      if ( generation === getSessionGeneration() && path === vaultSession.path ) {
-        vaultSession.error = errorMessage( error, 'The vault folder could not be checked for changes.' );
-      }
-    } finally {
-      checkingExternalChanges = false;
-    }
+    })() );
   }
 
   function setVaultError( error: unknown, fallback: string ): void {
@@ -531,6 +591,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     flushApplicationState,
     forgetCurrentVault,
     initializeVault,
+    getPendingWorkspaceReload: () => pendingWorkspaceReload,
     openFilesystemVault,
     reloadFilesystemVault,
     showCurrentVaultInFolder,

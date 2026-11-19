@@ -171,6 +171,12 @@ export async function overwriteFilesystemVault(): Promise<boolean> {
 }
 
 export async function flushVault( imageImportTransactionId?: string ): Promise<boolean> {
+  // Loads can reconcile metadata even when their snapshot is later discarded.
+  // Wait for the revision handoff before starting a save against that metadata.
+  const pendingReload = vaultLifecycle.getPendingWorkspaceReload();
+  if ( pendingReload ) {
+    await pendingReload;
+  }
   vaultChanges.capture();
   clearTimeout( persistTimer );
   if ( vaultSession.access.mode === 'read-only' ) {
@@ -360,6 +366,7 @@ const vaultNavigation = createVaultNavigation({
 
 export const {
   activeImage,
+  activeImageAvailable,
   backNavigationTitle,
   forwardNavigationTitle,
   resolveImageTarget,
@@ -441,6 +448,7 @@ const vaultAssetOperations = createVaultAssetOperations({
   flushVault,
   folderPath,
   notify,
+  relocateImageNavigation: vaultNavigation.relocateImageNavigation,
   runExclusiveVaultDataOperation
 });
 
@@ -883,6 +891,9 @@ async function mergeImportedVaultExclusive(
       });
     }
 
+    if ( !replace && firstImportedNoteId ) {
+      recordDirectNoteNavigation( previousActiveNoteId, firstImportedNoteId );
+    }
     vaultState.activeNoteId = firstImportedNoteId ?? ( replace ? null : previousActiveNoteId );
     vaultState.selectedFolderId = 'all';
     if ( replace ) {
@@ -891,9 +902,6 @@ async function mergeImportedVaultExclusive(
     }
     if ( firstImportedNoteId ) {
       touchRecentNote( firstImportedNoteId );
-    }
-    if ( !replace && firstImportedNoteId ) {
-      recordDirectNoteNavigation( previousActiveNoteId, firstImportedNoteId );
     }
   });
   const saved = await flushVault( imageImportTransactionId );
@@ -1357,6 +1365,7 @@ function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.r
   clearAssetDeletionRequest();
   const previousPath = vaultSession.path;
   const previousNoteId = vaultState.activeNoteId;
+  const previousImage = activeImage.value ? { ...activeImage.value } : null;
   sessionGeneration += 1;
   clearTimeout( persistTimer );
   vaultSession.access = workspace.access;
@@ -1368,6 +1377,7 @@ function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.r
     && ( previousNoteId === null || vaultState.notes.some( ( note ) => note.id === previousNoteId ) )
   ) {
     vaultState.activeNoteId = previousNoteId;
+    activeNoteTab.value.image = previousImage;
   }
   uiState.imageRefreshToken += 1;
   uiState.attachmentRefreshToken += 1;
