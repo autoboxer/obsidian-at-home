@@ -327,7 +327,14 @@ export function addInlineDecorations(
       }
 
       if ( node.name === 'Escape' ) {
-        if ( !rangeOverlapsAny( range, wikiRanges ) && node.to - node.from >= 2 ) {
+        // Keep literal runs visible, including an odd final backslash before
+        // punctuation. The syntax tree still determines what they escape.
+        const inBackslashRun = value[ node.from + 1 ] === '\\' || value[ node.from - 1 ] === '\\';
+        if (
+          !inBackslashRun
+          && !rangeOverlapsAny( range, wikiRanges )
+          && node.to - node.from >= 2
+        ) {
           addConstruct( model, node.from, node.to, [{
             from: node.from,
             to: node.from + 1
