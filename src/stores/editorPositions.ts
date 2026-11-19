@@ -1,9 +1,107 @@
 import { saveWorkspaceEditorPositions } from '../services/native';
+import { ChangeSet } from '@codemirror/state';
+import { minimalDocumentChange, normalizeDocumentText } from '../lib/codeMirrorDocument';
 import type { Note, NoteEditorPosition } from '../types';
 
 const BROWSER_STORAGE_KEY = 'obsidian-at-home.editor-positions.v1';
 const STORAGE_VERSION = 1;
 const PERSIST_DELAY = 600;
+
+export interface NoteEditorViewPosition extends NoteEditorPosition {
+  ranges?: Array<{ anchor: number; head: number }>;
+  mainIndex?: number;
+}
+
+// Tab views are session-only. The existing per-note position remains the restart
+// fallback, and no additional editor instances or persisted document copies exist.
+const tabPositions = new Map<string, {
+  vaultId: string;
+  noteId: string;
+  content: string;
+  position: NoteEditorViewPosition;
+}>();
+
+export function pruneNoteTabEditorPositions( keepDocument: ( documentId: string ) => boolean ): void {
+  for ( const key of tabPositions.keys() ) {
+    if ( !keepDocument( key ) ) {
+      tabPositions.delete( key );
+    }
+  }
+}
+
+export function getNoteTabEditorPosition(
+  vaultId: string,
+  tabId: string,
+  noteId: string,
+  content: string
+): NoteEditorViewPosition | undefined {
+  const key = JSON.stringify([ vaultId, tabId, noteId ]);
+  const saved = tabPositions.get( key );
+  if ( !saved ) {
+    return undefined;
+  }
+  const current = normalizeDocumentText( content );
+  if ( current !== saved.content ) {
+    const changes = ChangeSet.of( minimalDocumentChange( saved.content, current ), saved.content.length );
+    saved.position = mapTabPosition( saved.position, changes );
+    saved.content = current;
+  }
+  tabPositions.delete( key );
+  tabPositions.set( key, saved );
+
+  return saved.position;
+}
+
+export function setNoteTabEditorPosition(
+  vaultId: string,
+  tabId: string,
+  noteId: string,
+  content: string,
+  position: NoteEditorViewPosition
+): void {
+  const key = JSON.stringify([ vaultId, tabId, noteId ]);
+  tabPositions.delete( key );
+  tabPositions.set( key, { vaultId, noteId, content, position });
+  // Bound retained view snapshots just as the note undo cache is bounded.
+  while ( tabPositions.size > 250 ) {
+    tabPositions.delete( tabPositions.keys().next().value! );
+  }
+}
+
+export function mapNoteTabEditorPositions(
+  vaultId: string,
+  noteId: string,
+  previous: string,
+  content: string,
+  changes: ChangeSet
+): void {
+  for ( const saved of tabPositions.values() ) {
+    if ( saved.vaultId !== vaultId || saved.noteId !== noteId ) {
+      continue;
+    }
+    if ( saved.content !== previous ) {
+      saved.position = mapTabPosition( saved.position, ChangeSet.of(
+        minimalDocumentChange( saved.content, previous ), saved.content.length
+      ) );
+    }
+    saved.position = mapTabPosition( saved.position, changes );
+    saved.content = content;
+  }
+}
+
+function mapTabPosition( position: NoteEditorViewPosition, changes: ChangeSet ): NoteEditorViewPosition {
+  const mapRange = ( range: { anchor: number; head: number }) => ({
+    anchor: changes.mapPos( range.anchor, 1 ),
+    head: changes.mapPos( range.head, 1 )
+  });
+
+  return {
+    ...position,
+    selection: mapRange( position.selection ),
+    ranges: position.ranges?.map( mapRange ),
+    viewport: { ...position.viewport, anchor: changes.mapPos( position.viewport.anchor, 1 ) }
+  };
+}
 
 interface EditorPositionVault {
   backend: 'native' | 'browser';
@@ -199,6 +297,11 @@ export function registerNoteEditorPositionCapture(
 }
 
 export function deleteNoteEditorPosition( vaultId: string, noteId: string ): void {
+  for ( const [ key, saved ] of tabPositions ) {
+    if ( saved.vaultId === vaultId && saved.noteId === noteId ) {
+      tabPositions.delete( key );
+    }
+  }
   removePositionCaptures( vaultId, new Set([ noteId ]) );
   const vault = positionVaults.get( vaultId );
   if ( vault?.positions.delete( noteId ) ) {
@@ -208,6 +311,11 @@ export function deleteNoteEditorPosition( vaultId: string, noteId: string ): voi
 
 export function pruneNoteEditorPositions( vaultId: string, notes: Note[]): void {
   const noteIds = new Set( notes.map( ( note ) => note.id ) );
+  for ( const [ key, saved ] of tabPositions ) {
+    if ( saved.vaultId === vaultId && !noteIds.has( saved.noteId ) ) {
+      tabPositions.delete( key );
+    }
+  }
   removePositionCaptures( vaultId, noteIds, true );
   const vault = positionVaults.get( vaultId );
   if (

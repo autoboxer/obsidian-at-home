@@ -12,6 +12,97 @@
     #0c0b10;
 }
 
+.note-tabs {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border-faint);
+  background: var(--surface-toolbar);
+}
+
+.note-tab-list {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: stretch;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.note-tab {
+  display: flex;
+  min-width: 120px;
+  max-width: 220px;
+  flex: none;
+  align-items: center;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-muted);
+}
+
+.note-tab:hover {
+  background: var(--surface-control-hover);
+}
+
+.note-tab.active {
+  border-bottom-color: var(--violet);
+  background: var(--surface-control-active);
+  color: var(--text);
+}
+
+.note-tab-select {
+  display: flex;
+  min-width: 0;
+  height: 32px;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.note-tab-select > svg {
+  flex: none;
+}
+
+.note-tab-select > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-tab-select:focus-visible {
+  outline-offset: -2px;
+}
+
+.note-tab .note-tab-close {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  margin-right: 4px;
+}
+
+.note-tabs > .new-note-tab {
+  flex: none;
+  margin-bottom: 4px;
+}
+
+.empty-tab-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .editor-toolbar {
   display: flex;
   height: 46px;

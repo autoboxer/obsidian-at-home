@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   useAssetEmbedding,
   type AssetEmbeddingEditor
@@ -18,12 +18,16 @@ import {
 import {
   canEditVault,
   activeNote,
+  activeNoteTab,
+  activateNoteTab,
   backNavigationNote,
   canNavigateBack,
   canNavigateForward,
+  closeNoteTab,
   createFolder,
   createLinkedNote,
   createNote,
+  createNoteTab,
   deleteNote,
   folderPath,
   forwardNavigationNote,
@@ -31,7 +35,9 @@ import {
   navigateForward,
   moveNoteToFolder,
   notify,
+  noteTabsState,
   noteLinkPaths,
+  openQuickSearch,
   renameVaultAttachment,
   selectNote,
   togglePinned,
@@ -47,6 +53,127 @@ import AppIcon from './AppIcon.vue';
 import SourceEditor from './SourceEditor.vue';
 
 const createNoteShortcut = formatCommandShortcut( 'N' );
+const newTabShortcut = formatCommandShortcut( 'T' );
+const closeTabShortcut = formatCommandShortcut( 'W' );
+const openNoteShortcut = formatCommandShortcut( 'O' );
+const tabList = ref<HTMLElement>();
+const emptyTabOpenButton = ref<HTMLButtonElement>();
+const keepTabFocus = ref( false );
+let tabResizeObserver: ResizeObserver | undefined;
+const noteTabs = computed( () => {
+  const notes = new Map( vaultState.notes.map( ( note ) => [ note.id, note ]) );
+
+  return noteTabsState.tabs.map( ( tab ) => {
+    const note = tab.noteId ? notes.get( tab.noteId ) : undefined;
+    const title = note ? note.title.trim() || 'Untitled note' : 'New tab';
+
+    return {
+      id: tab.id,
+      title,
+      path: note?.relativePath || ( note ? [ folderPath( note.folderId ), title ].filter( Boolean ).join( '/' ) : title )
+    };
+  });
+});
+
+function tabButton( id: string ): HTMLButtonElement | undefined {
+  return Array.from( tabList.value?.querySelectorAll<HTMLButtonElement>( '[role="tab"]' ) ?? [])
+    .find( ( button ) => button.dataset.noteTabId === id );
+}
+
+function revealActiveTab(): void {
+  const list = tabList.value;
+  const tab = tabButton( activeNoteTab.value.id )?.parentElement;
+  if ( !list || !tab ) {
+    return;
+  }
+  const bounds = list.getBoundingClientRect();
+  const item = tab.getBoundingClientRect();
+  if ( item.left < bounds.left ) {
+    list.scrollLeft += item.left - bounds.left;
+  } else if ( item.right > bounds.right ) {
+    list.scrollLeft += item.right - bounds.right;
+  }
+}
+
+function focusEmptyTab(): void {
+  if ( !activeNote.value && !keepTabFocus.value ) {
+    emptyTabOpenButton.value?.focus({ preventScroll: true });
+  }
+}
+
+async function selectTab( id: string, focusTab = false ): Promise<void> {
+  keepTabFocus.value = focusTab;
+  activateNoteTab( id );
+  await nextTick();
+  if ( activeNoteTab.value.id === id ) {
+    if ( focusTab ) {
+      tabButton( id )?.focus({ preventScroll: true });
+    } else if ( activeNote.value ) {
+      // Selecting the already active tab does not remount its editor.
+      document.querySelector<HTMLElement>( '.source-editor .cm-content' )?.focus({ preventScroll: true });
+    } else {
+      focusEmptyTab();
+    }
+  }
+  keepTabFocus.value = false;
+}
+
+async function closeTab( id: string ): Promise<void> {
+  const focusTab = Boolean( tabList.value?.contains( document.activeElement ) );
+  keepTabFocus.value = focusTab;
+  closeNoteTab( id );
+  await nextTick();
+  if ( focusTab ) {
+    tabButton( activeNoteTab.value.id )?.focus({ preventScroll: true });
+  }
+  keepTabFocus.value = false;
+}
+
+function handleTabKeydown( event: KeyboardEvent ): void {
+  if ( event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing ) {
+    return;
+  }
+  const target = event.target;
+  const id = target instanceof HTMLElement ? target.closest<HTMLElement>( '[data-note-tab-id]' )?.dataset.noteTabId : undefined;
+  const index = noteTabs.value.findIndex( ( tab ) => tab.id === id );
+  if ( index < 0 ) {
+    return;
+  }
+  const last = noteTabs.value.length - 1;
+  const next = event.key === 'ArrowRight' ? ( index + 1 ) % ( last + 1 )
+    : event.key === 'ArrowLeft' ? ( index + last ) % ( last + 1 )
+      : event.key === 'Home' ? 0 : event.key === 'End' ? last : undefined;
+  if ( next !== undefined ) {
+    event.preventDefault();
+    void selectTab( noteTabs.value[ next ]!.id, true );
+  } else if ( event.key === 'Delete' ) {
+    event.preventDefault();
+    void closeTab( id! );
+  }
+}
+
+function scrollTabs( event: WheelEvent ): void {
+  const list = tabList.value;
+  if ( !list || event.ctrlKey || event.shiftKey || event.deltaX || list.scrollWidth <= list.clientWidth ) {
+    return;
+  }
+  event.preventDefault();
+  list.scrollLeft += event.deltaY * ( event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1 );
+}
+
+watch([ () => activeNoteTab.value.id, noteTabs ], () => {
+  revealActiveTab();
+}, { flush: 'post' });
+watch( () => activeNoteTab.value.id, focusEmptyTab, { flush: 'post' });
+onMounted( () => {
+  tabResizeObserver = new ResizeObserver( revealActiveTab );
+  if ( tabList.value ) {
+    tabResizeObserver.observe( tabList.value );
+  }
+  revealActiveTab();
+  focusEmptyTab();
+});
+onBeforeUnmount( () => tabResizeObserver?.disconnect() );
 const embedAttachmentShortcut = formatCommandShortcut( 'Shift+A' );
 const embedImageShortcut = formatCommandShortcut( 'Shift+I' );
 const tagInputOpen = ref( false );
@@ -120,6 +247,7 @@ const positionVaultId = computed( () => editorPositionVaultId( vaultSession.back
 // Access changes rebuild the editor and its widget controls.
 const editorKey = computed( () => JSON.stringify([
   positionVaultId.value,
+  activeNoteTab.value.id,
   canEditVault.value,
   activeNote.value?.id ?? null
 ]) );
@@ -255,13 +383,14 @@ async function openNoteLink( link: WikiLinkTarget | MarkdownNoteTarget ): Promis
 
 async function focusLinkedNote( noteId: string, offset: number ): Promise<void> {
   const vaultId = positionVaultId.value;
+  const tabId = activeNoteTab.value.id;
   if ( noteId !== activeNote.value?.id ) {
     selectNote( noteId );
   }
   // Link destinations override the restored position after the editor mounts,
   // including self-links and notes just selected by createLinkedNote.
   await nextTick();
-  if ( positionVaultId.value !== vaultId || activeNote.value?.id !== noteId ) {
+  if ( positionVaultId.value !== vaultId || activeNoteTab.value.id !== tabId || activeNote.value?.id !== noteId ) {
     return;
   }
 
@@ -412,9 +541,11 @@ watch(
 );
 
 watch(
-  () => activeNote.value?.id,
+  [ () => activeNote.value?.id, () => activeNoteTab.value.id ],
   () => {
     noteMenuOpen.value = false;
+    cancelTagInput();
+    closeQuickFolder();
   }
 );
 
@@ -436,6 +567,63 @@ watch( tagInput, () => {
     data-ui-region="editor"
     data-editor-view="live"
   >
+    <div class="note-tabs" data-ui-region="note-tabs">
+      <div
+        ref="tabList"
+        class="note-tab-list"
+        role="tablist"
+        aria-label="Open notes"
+        @keydown="handleTabKeydown"
+        @wheel="scrollTabs"
+      >
+        <div
+          v-for="tab in noteTabs"
+          :key="tab.id"
+          class="note-tab"
+          :class="{ active: tab.id === activeNoteTab.id }"
+          role="presentation"
+          @mousedown.middle.prevent
+          @mouseup.middle.prevent="closeTab( tab.id )"
+        >
+          <button
+            :id="`note-tab-${tab.id}`"
+            class="note-tab-select"
+            type="button"
+            role="tab"
+            :data-note-tab-id="tab.id"
+            :aria-selected="tab.id === activeNoteTab.id"
+            aria-controls="note-tab-panel"
+            :tabindex="tab.id === activeNoteTab.id ? 0 : -1"
+            :title="tab.path"
+            @click.left="selectTab( tab.id )"
+          >
+            <AppIcon name="file-text" :size="14" />
+            <span>{{ tab.title }}</span>
+          </button>
+          <button
+            class="note-tab-close icon-button subtle"
+            type="button"
+            tabindex="-1"
+            :aria-label="`Close ${tab.title} tab`"
+            :title="`Close tab · ${closeTabShortcut}`"
+            @mousedown.prevent
+            @click.left="closeTab( tab.id )"
+          >
+            <AppIcon name="x" :size="12" />
+          </button>
+        </div>
+      </div>
+      <button
+        class="icon-button new-note-tab"
+        type="button"
+        data-note-action="new-tab"
+        aria-label="New tab"
+        :title="`New tab · ${newTabShortcut}`"
+        @click.left="createNoteTab()"
+      >
+        <AppIcon name="plus" :size="16" />
+      </button>
+    </div>
     <header class="editor-toolbar">
       <div class="editor-crumbs">
         <button
@@ -633,7 +821,12 @@ watch( tagInput, () => {
     </header>
 
     <template v-if="activeNote">
-      <section class="editor-document">
+      <section
+        id="note-tab-panel"
+        class="editor-document"
+        role="tabpanel"
+        :aria-labelledby="`note-tab-${activeNoteTab.id}`"
+      >
         <div class="document-heading">
           <input
             class="note-title-input"
@@ -745,7 +938,8 @@ watch( tagInput, () => {
           <SourceEditor
             :key="editorKey"
             ref="sourceEditor"
-            :focus-on-mount="uiState.noteTitleFocusId !== activeNote.id"
+            :tab-id="activeNoteTab.id"
+            :focus-on-mount="!keepTabFocus && uiState.noteTitleFocusId !== activeNote.id"
             :initial-position="savedEditorPosition( activeNote.id, activeNote.content )"
             :attachment-files="vaultState.attachmentFiles"
             :attachment-refresh-token="uiState.attachmentRefreshToken"
@@ -798,12 +992,38 @@ watch( tagInput, () => {
       </footer>
     </template>
 
-    <div v-else class="empty-editor">
+    <div
+      v-else
+      id="note-tab-panel"
+      class="empty-editor"
+      role="tabpanel"
+      :aria-labelledby="`note-tab-${activeNoteTab.id}`"
+    >
       <div class="empty-glyph">
         <AppIcon name="file-plus" :size="28" />
       </div>
       <h2>No note selected</h2>
       <p>{{ canEditVault ? "Select a note or create a new one." : "Select a note to read." }}</p>
+      <div class="empty-tab-actions">
+        <button
+          ref="emptyTabOpenButton"
+          class="secondary-button"
+          type="button"
+          :title="`Open a note · ${openNoteShortcut}`"
+          @click="openQuickSearch()"
+        >
+          <AppIcon name="search" :size="15" /> Open a note
+        </button>
+        <button
+          v-if="canEditVault"
+          class="primary-action-button"
+          type="button"
+          :title="`Create a note · ${createNoteShortcut}`"
+          @click="createNote()"
+        >
+          <AppIcon name="file-plus" :size="15" /> Create a note
+        </button>
+      </div>
     </div>
   </main>
 </template>

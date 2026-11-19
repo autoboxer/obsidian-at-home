@@ -1,4 +1,5 @@
-import { computed, reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
+import { createId } from './vaultModel';
 import type { Note, SearchScope } from '../types';
 import {
   recentlyDeletedState,
@@ -12,9 +13,17 @@ import {
 const NOTE_NAVIGATION_LIMIT = 100;
 const RECENT_NOTE_LIMIT = 10;
 
-export interface NoteNavigationState {
+export interface NoteTab {
+  id: string;
+  noteId: string | null;
   back: string[];
   forward: string[];
+  frontmatterVisible: boolean;
+}
+
+export interface NoteNavigationState {
+  tabs: NoteTab[];
+  activeTabId: string;
 }
 
 interface VaultNavigationDependencies {
@@ -26,17 +35,80 @@ interface VaultNavigationDependencies {
 export function createVaultNavigation(
   dependencies: VaultNavigationDependencies
 ) {
-  const noteNavigationState = reactive<NoteNavigationState>({
-    back: [],
-    forward: []
+  const initialTab = newTab( vaultState.activeNoteId );
+  const noteTabsState = reactive<NoteNavigationState>({
+    tabs: [ initialTab ],
+    activeTabId: initialTab.id
   });
+  const activeNoteTab = computed( () => noteTabsState.tabs.find(
+    ( tab ) => tab.id === noteTabsState.activeTabId
+  )! );
+
+  // Existing load/recovery paths still own the persisted active note. Reflect
+  // their changes in the active session tab without creating navigation entries.
+  watch( () => vaultState.activeNoteId, ( id ) => {
+    activeNoteTab.value.noteId = id;
+  }, { flush: 'sync' });
+  watch( () => uiState.frontmatterVisible, ( visible ) => {
+    activeNoteTab.value.frontmatterVisible = visible;
+  }, { flush: 'sync' });
+
+  function newTab( noteId: string | null ): NoteTab {
+    return { id: createId( 'tab' ), noteId, back: [], forward: [], frontmatterVisible: false };
+  }
+
+  function createNoteTab( noteId: string | null = null ): string | undefined {
+    if ( noteId !== null && !noteExists( noteId ) ) {
+      return undefined;
+    }
+    const tab = newTab( noteId );
+    noteTabsState.tabs.push( tab );
+    activateNoteTab( tab.id );
+
+    return tab.id;
+  }
+
+  function activateNoteTab( id: string ): boolean {
+    const tab = noteTabsState.tabs.find( ( candidate ) => candidate.id === id );
+    if ( !tab ) {
+      return false;
+    }
+    noteTabsState.activeTabId = id;
+    uiState.frontmatterVisible = tab.frontmatterVisible;
+    if ( !tab.noteId || !activateNote( tab.noteId ) ) {
+      vaultState.activeNoteId = null;
+    }
+    uiState.tool = 'notes';
+    uiState.notesView = 'editor';
+
+    return true;
+  }
+
+  function closeNoteTab( id: string ): void {
+    const index = noteTabsState.tabs.findIndex( ( tab ) => tab.id === id );
+    if ( index < 0 ) {
+      return;
+    }
+    const wasActive = noteTabsState.activeTabId === id;
+    // Switch before removing the active tab so synchronous observers always
+    // have a current owner for the active note and its view preferences.
+    if ( wasActive ) {
+      const neighbor = noteTabsState.tabs[ index - 1 ] ?? noteTabsState.tabs[ index + 1 ];
+      if ( neighbor ) {
+        activateNoteTab( neighbor.id );
+      } else {
+        createNoteTab();
+      }
+    }
+    noteTabsState.tabs.splice( index, 1 );
+  }
 
   const backNavigationNote = computed<Note | undefined>( () =>
-    findNoteNavigationTarget( noteNavigationState.back )
+    findNoteNavigationTarget( activeNoteTab.value.back )
   );
 
   const forwardNavigationNote = computed<Note | undefined>( () =>
-    findNoteNavigationTarget( noteNavigationState.forward )
+    findNoteNavigationTarget( activeNoteTab.value.forward )
   );
 
   const canNavigateBack = computed( () => Boolean( backNavigationNote.value ) );
@@ -57,8 +129,8 @@ export function createVaultNavigation(
 
   function navigateBack(): boolean {
     const navigated = traverseNoteNavigation(
-      noteNavigationState.back,
-      noteNavigationState.forward
+      activeNoteTab.value.back,
+      activeNoteTab.value.forward
     );
     if ( navigated ) {
       uiState.tool = 'notes';
@@ -70,8 +142,8 @@ export function createVaultNavigation(
 
   function navigateForward(): boolean {
     const navigated = traverseNoteNavigation(
-      noteNavigationState.forward,
-      noteNavigationState.back
+      activeNoteTab.value.forward,
+      activeNoteTab.value.back
     );
     if ( navigated ) {
       uiState.tool = 'notes';
@@ -175,9 +247,9 @@ export function createVaultNavigation(
       return;
     }
     if ( previousId && noteExists( previousId ) ) {
-      pushNoteNavigationEntry( noteNavigationState.back, previousId );
+      pushNoteNavigationEntry( activeNoteTab.value.back, previousId );
     }
-    noteNavigationState.forward.splice( 0 );
+    activeNoteTab.value.forward.splice( 0 );
   }
 
   function traverseNoteNavigation(
@@ -234,12 +306,13 @@ export function createVaultNavigation(
   }
 
   function removeNoteFromNavigation( id: string ): void {
-    noteNavigationState.back = noteNavigationState.back.filter(
-      ( noteId ) => noteId !== id
-    );
-    noteNavigationState.forward = noteNavigationState.forward.filter(
-      ( noteId ) => noteId !== id
-    );
+    for ( const tab of noteTabsState.tabs ) {
+      tab.back = tab.back.filter( ( noteId ) => noteId !== id );
+      tab.forward = tab.forward.filter( ( noteId ) => noteId !== id );
+      if ( tab.noteId === id ) {
+        tab.noteId = null;
+      }
+    }
   }
 
   function noteDeletionFallback( id: string ): string | undefined {
@@ -250,8 +323,8 @@ export function createVaultNavigation(
       return recentId;
     }
 
-    const navigationTarget = findNoteNavigationTarget( noteNavigationState.forward )
-      ?? findNoteNavigationTarget( noteNavigationState.back );
+    const navigationTarget = findNoteNavigationTarget( activeNoteTab.value.forward )
+      ?? findNoteNavigationTarget( activeNoteTab.value.back );
     if ( navigationTarget ) {
       return navigationTarget.id;
     }
@@ -264,19 +337,19 @@ export function createVaultNavigation(
 
   function activateNoteAfterDeletion( id: string ): boolean {
     if (
-      findNoteNavigationTarget( noteNavigationState.forward )?.id === id
+      findNoteNavigationTarget( activeNoteTab.value.forward )?.id === id
       && traverseNoteNavigation(
-        noteNavigationState.forward,
-        noteNavigationState.back
+        activeNoteTab.value.forward,
+        activeNoteTab.value.back
       )
     ) {
       return true;
     }
     if (
-      findNoteNavigationTarget( noteNavigationState.back )?.id === id
+      findNoteNavigationTarget( activeNoteTab.value.back )?.id === id
       && traverseNoteNavigation(
-        noteNavigationState.back,
-        noteNavigationState.forward
+        activeNoteTab.value.back,
+        activeNoteTab.value.forward
       )
     ) {
       return true;
@@ -299,37 +372,35 @@ export function createVaultNavigation(
 
   function pruneNoteNavigation(): void {
     const noteIds = new Set( vaultState.notes.map( ( note ) => note.id ) );
-    noteNavigationState.back = noteNavigationState.back.filter(
-      ( id ) => noteIds.has( id )
-    );
-    noteNavigationState.forward = noteNavigationState.forward.filter(
-      ( id ) => noteIds.has( id )
-    );
+    for ( const tab of noteTabsState.tabs ) {
+      tab.back = tab.back.filter( ( id ) => noteIds.has( id ) );
+      tab.forward = tab.forward.filter( ( id ) => noteIds.has( id ) );
+      if ( tab.noteId && !noteIds.has( tab.noteId ) ) {
+        tab.noteId = null;
+      }
+    }
   }
 
   function resetNoteNavigation(): void {
-    noteNavigationState.back.splice( 0 );
-    noteNavigationState.forward.splice( 0 );
+    const tab = newTab( vaultState.activeNoteId );
+    noteTabsState.tabs = [ tab ];
+    noteTabsState.activeTabId = tab.id;
+    uiState.frontmatterVisible = tab.frontmatterVisible;
   }
 
   function snapshotNoteNavigation(): NoteNavigationState {
     return {
-      back: [ ...noteNavigationState.back ],
-      forward: [ ...noteNavigationState.forward ]
+      activeTabId: noteTabsState.activeTabId,
+      tabs: noteTabsState.tabs.map( ( tab ) => ({ ...tab, back: [ ...tab.back ], forward: [ ...tab.forward ] }) )
     };
   }
 
   function restoreNoteNavigation( snapshot: NoteNavigationState ): void {
-    noteNavigationState.back.splice(
-      0,
-      noteNavigationState.back.length,
-      ...snapshot.back
-    );
-    noteNavigationState.forward.splice(
-      0,
-      noteNavigationState.forward.length,
-      ...snapshot.forward
-    );
+    noteTabsState.tabs = snapshot.tabs.map( ( tab ) => ({ ...tab, back: [ ...tab.back ], forward: [ ...tab.forward ] }) );
+    noteTabsState.activeTabId = snapshot.activeTabId;
+    pruneNoteNavigation();
+    vaultState.activeNoteId = activeNoteTab.value.noteId;
+    uiState.frontmatterVisible = activeNoteTab.value.frontmatterVisible;
   }
 
   function noteExists( id: string ): boolean {
@@ -351,6 +422,11 @@ export function createVaultNavigation(
   }
 
   return {
+    activeNoteTab,
+    activateNoteTab,
+    closeNoteTab,
+    createNoteTab,
+    noteTabsState,
     activateNote,
     activateNoteAfterDeletion,
     backNavigationNote,
