@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch, type CSSProperties } from 'vue';
 import { defaultKeymap, history, historyField, historyKeymap } from '@codemirror/commands';
 import { syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -119,6 +119,8 @@ const suggestionIndex = ref( 0 );
 const suggestionQuery = shallowRef<WikiLinkCompletion | null>( null );
 const suggestionsId = `wiki-suggestions-${ useId() }`;
 const suggestionList = ref<HTMLElement>();
+const suggestionPosition = shallowRef<CSSProperties | null>( null );
+const suggestionPositionKey = {};
 const externalUpdate = Annotation.define<boolean>();
 const historyCompartment = new Compartment();
 const lineNumbersCompartment = new Compartment();
@@ -195,10 +197,80 @@ const suggestions = computed( () => {
 
 watch([ suggestions, suggestionIndex ], async () => {
   suggestionIndex.value = Math.min( suggestionIndex.value, Math.max( 0, suggestions.value.length - 1 ) );
+  if ( !suggestions.value.length ) {
+    suggestionPosition.value = null;
+  }
   editorView.value?.dispatch({});
   await nextTick();
-  suggestionList.value?.querySelector( '.wiki-suggestion.active' )?.scrollIntoView({ block: 'nearest' });
+  if ( editorView.value ) {
+    scheduleSuggestionPosition( editorView.value );
+  }
 });
+
+function scheduleSuggestionPosition( view: EditorView ): void {
+  if ( !suggestions.value.length ) {
+    return;
+  }
+
+  view.requestMeasure({
+    key: suggestionPositionKey,
+    read: ( measuredView ): CSSProperties | null => {
+      const list = suggestionList.value;
+      const panel = list?.offsetParent;
+      if ( !list || !( panel instanceof HTMLElement ) || !measuredView.hasFocus ) {
+        return null;
+      }
+
+      const caret = measuredView.coordsAtPos( measuredView.state.selection.main.head );
+      const bounds = panel.getBoundingClientRect();
+      const scroller = measuredView.scrollDOM.getBoundingClientRect();
+      const left = Math.max( bounds.left, scroller.left, 0 );
+      const right = Math.min( bounds.right, scroller.left + measuredView.scrollDOM.clientWidth, window.innerWidth );
+      const top = Math.max( bounds.top, scroller.top, 0 );
+      const bottom = Math.min( bounds.bottom, scroller.top + measuredView.scrollDOM.clientHeight, window.innerHeight );
+      // A scrolled-away caret must not leave a detached menu over other text.
+      if ( !caret || caret.top < top || caret.bottom > bottom || caret.left < left || caret.left > right ) {
+        return null;
+      }
+
+      const margin = 8;
+      const gap = 4;
+      const width = Math.min( 310, right - left - margin * 2 );
+      const desiredHeight = Math.min( 292, list.scrollHeight + list.offsetHeight - list.clientHeight );
+      const below = Math.max( 0, bottom - margin - caret.bottom - gap );
+      const above = Math.max( 0, caret.top - gap - top - margin );
+      const openAbove = below < desiredHeight && above > below;
+      const maxHeight = Math.min( 292, openAbove ? above : below );
+      if ( width <= 0 || maxHeight <= 0 ) {
+        return null;
+      }
+
+      return {
+        left: `${ Math.max( left + margin, Math.min( caret.left, right - margin - width ) ) - bounds.left }px`,
+        top: `${ ( openAbove ? caret.top - gap - Math.min( desiredHeight, maxHeight ) : caret.bottom + gap ) - bounds.top }px`,
+        width: `${ width }px`,
+        maxHeight: `${ maxHeight }px`
+      };
+    },
+    write: ( position, measuredView ) => {
+      if ( editorView.value !== measuredView || !suggestions.value.length ) {
+        return;
+      }
+      suggestionPosition.value = position;
+      void nextTick( () => {
+        const list = suggestionList.value;
+        const active = list?.querySelector<HTMLElement>( '.wiki-suggestion.active' );
+        if ( !suggestionPosition.value || !list || !active ) {
+          return;
+        }
+        // Scroll only the options; scrollIntoView can also move the note/page.
+        const top = active.offsetTop;
+        const bottom = top + active.offsetHeight;
+        list.scrollTop = Math.max( bottom - list.clientHeight, Math.min( list.scrollTop, top ) );
+      });
+    }
+  });
+}
 
 const {
   acceptSearch: acceptDocumentSearch,
@@ -221,6 +293,9 @@ const suggestionDown: Command = ( view ) => {
     return false;
   }
   suggestionIndex.value = ( suggestionIndex.value + 1 ) % suggestions.value.length;
+  if ( !suggestionPosition.value ) {
+    view.dispatch({ scrollIntoView: true });
+  }
 
   return true;
 };
@@ -232,6 +307,9 @@ const suggestionUp: Command = ( view ) => {
   suggestionIndex.value = (
     suggestionIndex.value - 1 + suggestions.value.length
   ) % suggestions.value.length;
+  if ( !suggestionPosition.value ) {
+    view.dispatch({ scrollIntoView: true });
+  }
 
   return true;
 };
@@ -323,6 +401,9 @@ onMounted( () => {
     dropCursor(),
     // Let the drop-cursor observers run before a custom drop consumes the event.
     EditorView.domEventHandlers({
+      scroll: ( _event, view ) => {
+        scheduleSuggestionPosition( view );
+      },
       dragover: ( event ) => {
         handleSourceEditorDragOver( event );
 
@@ -490,6 +571,9 @@ onMounted( () => {
       if ( update.docChanged || update.selectionSet ) {
         updateSuggestions( update.view );
         schedulePositionCapture( update.view );
+      }
+      if ( update.geometryChanged || update.viewportChanged || update.selectionSet || update.focusChanged ) {
+        scheduleSuggestionPosition( update.view );
       }
       scheduleEditorRenderReady( update.view );
     })
@@ -896,6 +980,7 @@ function handleSourceEditorKeydown( event: KeyboardEvent ): void {
         :id="suggestionsId"
         ref="suggestionList"
         class="wiki-suggestions"
+        :style="suggestionPosition ?? { visibility: 'hidden' }"
         role="listbox"
         :aria-label="suggestionTarget === undefined ? 'Note suggestions' : 'Heading suggestions'"
       >

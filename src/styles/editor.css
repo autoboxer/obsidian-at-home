@@ -1493,10 +1493,10 @@
 .wiki-suggestions {
   position: absolute;
   z-index: 80;
-  bottom: 34px;
-  left: 68px;
+  top: 0;
+  left: 0;
   display: flex;
-  width: min(310px, calc(100% - 92px));
+  width: min(310px, calc(100% - 16px));
   max-height: 292px;
   flex-direction: column;
   gap: 2px;
