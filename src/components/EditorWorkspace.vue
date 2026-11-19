@@ -406,6 +406,17 @@ function resetTitle( event: FocusEvent ): void {
   ( event.target as HTMLInputElement ).value = activeNote.value?.title ?? '';
 }
 
+function handleTitleKeydown( event: KeyboardEvent ): void {
+  if ( event.key !== 'Enter' || event.altKey || event.ctrlKey || event.metaKey
+    || event.shiftKey || event.isComposing || !canEditVault.value ) {
+    return;
+  }
+
+  if ( sourceEditor.value?.focusDocumentOffset( 0 ) ) {
+    event.preventDefault();
+  }
+}
+
 function setContent( content: string ): void {
   if ( activeNote.value ) {
     updateNote( activeNote.value.id, { content });
@@ -941,6 +952,7 @@ watch( tagInput, () => {
             placeholder="Untitled note"
             @input="setTitle"
             @blur="resetTitle"
+            @keydown="handleTitleKeydown"
           >
           <div class="note-properties">
             <label class="property-control folder-property">
