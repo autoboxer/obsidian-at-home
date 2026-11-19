@@ -37,6 +37,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: 'Previous tab', detail: 'While viewing notes; wraps to the last tab', keys: [ 'Ctrl', 'Shift', 'Tab' ] },
       { label: 'Navigate the tab strip', detail: 'With a tab focused; Home/End go to the first/last', keys: [ '← / →' ], keyLabel: 'Left or right arrow' },
       { label: 'Close a focused tab', detail: 'Or middle-click any tab', keys: [ 'Delete' ] },
+      { label: 'Delete a note', detail: 'With its sidebar row focused; moves to Recently Deleted', keys: [ 'Delete' ] },
       { label: 'Open templates', keys: [ commandKey, 'Shift', 'T' ] },
       { label: 'Toggle the vault panel', keys: [ commandKey, '\\' ] },
       { label: 'Focus the vault filter', detail: 'Outside a text field', keys: [ '/' ] }

@@ -104,9 +104,16 @@ function revealActiveTab(): void {
 }
 
 function focusNonNoteTab(): void {
-  if ( !activeNote.value && !keepTabFocus.value ) {
+  if ( !activeNote.value && !keepTabFocus.value && !uiState.sidebarNoteDeletionPending ) {
     ( activeImage.value ? imagePreviewPanel.value : emptyTabOpenButton.value )?.focus({ preventScroll: true });
   }
+}
+
+function shouldFocusEditorOnMount(): boolean {
+  // Sidebar deletion owns focus even while its row is blurred or removed.
+  return !keepTabFocus.value && !uiState.sidebarNoteDeletionPending
+    && uiState.noteTitleFocusId !== activeNote.value?.id
+    && !document.activeElement?.matches( '.vault-tree-note-main' );
 }
 
 async function selectTab( id: string, focusTab = false ): Promise<void> {
@@ -1036,7 +1043,7 @@ watch( tagInput, () => {
             :key="editorKey"
             ref="sourceEditor"
             :tab-id="activeNoteTab.id"
-            :focus-on-mount="!keepTabFocus && uiState.noteTitleFocusId !== activeNote.id"
+            :focus-on-mount="shouldFocusEditorOnMount()"
             :initial-position="savedEditorPosition( activeNote.id, activeNote.content )"
             :attachment-files="vaultState.attachmentFiles"
             :attachment-refresh-token="uiState.attachmentRefreshToken"

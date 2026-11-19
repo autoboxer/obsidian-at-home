@@ -26,6 +26,7 @@ export interface UiState {
   notesView: 'editor' | 'recently-deleted';
   noteFilter: string;
   noteTitleFocusId: string | null;
+  sidebarNoteDeletionPending: boolean;
   commandOpen: boolean;
   contextOpen: boolean;
   explorerOpen: boolean;
@@ -143,6 +144,7 @@ export const uiState = reactive<UiState>({
   notesView: 'editor',
   noteFilter: '',
   noteTitleFocusId: null,
+  sidebarNoteDeletionPending: false,
   commandOpen: false,
   contextOpen: true,
   explorerOpen: true,
