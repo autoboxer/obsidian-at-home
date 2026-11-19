@@ -713,7 +713,8 @@
   text-align: left;
 }
 
-.vault-tree-note.active {
+.vault-tree-note.active,
+.vault-tree-image.active {
   background: linear-gradient(90deg, rgba(136, 91, 192, 0.18), rgba(126, 82, 167, 0.045));
   box-shadow: inset 2px 0 var(--violet);
   color: #eee6f7;
@@ -733,7 +734,8 @@
   color: #877993;
 }
 
-.vault-tree-note.active .vault-tree-note-icon {
+.vault-tree-note.active .vault-tree-note-icon,
+.vault-tree-image.active .vault-tree-image-icon {
   color: var(--violet-bright);
 }
 

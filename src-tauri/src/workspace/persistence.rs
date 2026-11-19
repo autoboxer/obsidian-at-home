@@ -393,6 +393,7 @@ pub(super) fn load_workspace(root: &Path, defaults: &VaultData) -> Result<Worksp
         editor_positions_revision,
         editor_positions_writable,
         warnings: warnings.finish(),
+        source_revision: revision_for_entries(&baseline),
         revision,
     })
 }

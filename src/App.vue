@@ -16,6 +16,7 @@ import { applyAppZoom } from './services/native';
 import { pruneLiveMarkdownHeadingFolds } from './lib/liveMarkdownHeadingFolding';
 import { editorPositionVaultId, pruneNoteTabEditorPositions } from './stores/editorPositions';
 import {
+  activeImage,
   activeNote,
   activeNoteTab,
   activateNoteTab,
@@ -290,7 +291,7 @@ const titlebarContext = computed( () => {
       return 'Recently Deleted';
     }
 
-    return activeNote.value?.title || vaultState.name;
+    return activeImage.value?.relativePath.split( '/' ).at( -1 ) || activeNote.value?.title || vaultState.name;
   }
   if ( uiState.tool === 'search' ) {
     return 'Search';
@@ -523,7 +524,7 @@ onBeforeUnmount( () => {
             <EditorWorkspace ref="editorWorkspace" />
             <Transition name="panel-right">
               <LinkInspector
-                v-if="uiState.contextOpen"
+                v-if="uiState.contextOpen && !activeImage"
                 @open-note-link="editorWorkspace?.openNoteLink( $event )"
               />
             </Transition>

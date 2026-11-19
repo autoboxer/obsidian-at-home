@@ -166,6 +166,7 @@ export interface WorkspaceLoad {
   editorPositions: Record<string, NoteEditorPosition>;
   editorPositionsRevision: string | null;
   editorPositionsWritable: boolean;
+  sourceRevision: number;
   revision: number;
   warnings: string[];
 }

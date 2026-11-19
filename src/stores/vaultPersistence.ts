@@ -8,6 +8,7 @@ import type { SmartFolderSelection } from './vaultState';
 const APP_ZOOM_KEY = 'obsidian-at-home.zoom.v1';
 const RECENT_NOTE_LIMIT = 10;
 const ZOOM_STEP = 0.1;
+const NAVIGATION_FIELDS = new Set<keyof VaultData>([ 'activeNoteId', 'recentNoteIds', 'selectedFolderId' ]);
 
 export const MIN_ZOOM = 0.7;
 export const MAX_ZOOM = 1.5;
@@ -128,6 +129,10 @@ export function createVaultChangeTracker(
     },
     get hasChanges() {
       return Boolean( notes.size || fields.size || pendingNotes.size || pendingFields.size );
+    },
+    get hasNonNavigationChanges() {
+      return Boolean( notes.size || pendingNotes.size )
+        || [ ...fields.keys(), ...pendingFields ].some( ( field ) => !NAVIGATION_FIELDS.has( field ) );
     },
     capture() {
       // An explicit save inside a batch must include changes already made.
@@ -433,7 +438,7 @@ function normalizeAssetEmbedSettings(
   return { location: 'vault-root', folderPath: '' };
 }
 
-function normalizeFolderSelection(
+export function normalizeFolderSelection(
   selection: unknown,
   notes: Note[],
   recentNoteIds: string[]
@@ -448,7 +453,7 @@ function normalizeFolderSelection(
   return 'all';
 }
 
-function normalizeRecentNoteIds(
+export function normalizeRecentNoteIds(
   value: unknown,
   notes: Note[],
   activeNoteId: string | null

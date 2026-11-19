@@ -47,6 +47,7 @@ pub fn run() {
             workspace::workspace_discard_external_asset,
             workspace::workspace_delete_asset,
             workspace::workspace_read_image,
+            workspace::workspace_preview_image,
             workspace::workspace_import_images,
             workspace::workspace_import_assets,
         ])

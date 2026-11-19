@@ -956,6 +956,24 @@ pub async fn workspace_read_image(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn workspace_preview_image(
+    app: AppHandle,
+    path: String,
+    relative_path: String,
+) -> Result<tauri::ipc::Response, String> {
+    run_vault_io(move || {
+        let _guard = lock_workspace_io()?;
+        let root = validate_workspace_root(&path)?;
+        reject_home_vault(&app, &root)?;
+        let _workspace_guard = lock_workspace_files(&root)?;
+        // Sidebar filenames are literal vault paths, not Markdown destinations.
+        // Reuse the same containment, symlink, format and byte-limit checks.
+        read_relative_workspace_image(&root, &relative_path).map(tauri::ipc::Response::new)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn workspace_import_images(
     app: AppHandle,
     path: String,

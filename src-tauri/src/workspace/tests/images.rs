@@ -1,4 +1,49 @@
 #[test]
+fn image_preview_reads_literal_paths_without_metadata() {
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\npreview-fixture";
+    let workspace = TestWorkspace::new("image-preview-literal-paths");
+    fs::create_dir(workspace.root.join("Images #1")).unwrap();
+    let relative_path = "Images #1/Photo %20 #2.png";
+    fs::write(workspace.root.join(relative_path), PNG).unwrap();
+    assert_eq!(
+        read_relative_workspace_image(&workspace.root, relative_path).unwrap(),
+        PNG
+    );
+    assert_eq!(fs::read_dir(&workspace.root).unwrap().count(), 1);
+    assert!(resolve_markdown_image_path("Note.md", relative_path).is_err());
+
+    for unsafe_path in [
+        "../Outside.png",
+        "/Outside.png",
+        "Images #1/../Outside.png",
+        ".obsidian-at-home/Private.png",
+        "Images #1/Photo.txt",
+    ] {
+        assert!(read_relative_workspace_image(&workspace.root, unsafe_path).is_err());
+    }
+    fs::write(workspace.root.join("Invalid.png"), b"not an image").unwrap();
+    assert!(read_relative_workspace_image(&workspace.root, "Invalid.png").is_err());
+    fs::File::create(workspace.root.join("Oversized.png"))
+        .unwrap()
+        .set_len(MAX_IMAGE_BYTES + 1)
+        .unwrap();
+    assert!(read_relative_workspace_image(&workspace.root, "Oversized.png").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn image_preview_refuses_file_and_folder_symlinks() {
+    use std::os::unix::fs::symlink;
+    let workspace = TestWorkspace::new("image-preview-symlinks");
+    let outside = TestWorkspace::new("image-preview-outside");
+    fs::write(outside.root.join("Photo.png"), b"\x89PNG\r\n\x1a\npreview").unwrap();
+    symlink(outside.root.join("Photo.png"), workspace.root.join("Link.png")).unwrap();
+    symlink(&outside.root, workspace.root.join("Linked")).unwrap();
+    assert!(read_relative_workspace_image(&workspace.root, "Link.png").is_err());
+    assert!(read_relative_workspace_image(&workspace.root, "Linked/Photo.png").is_err());
+}
+
+#[test]
 fn embeds_reads_and_recovers_moved_images() {
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\nembedded-image-fixture";
     let workspace = TestWorkspace::new("embedded-image-storage");
