@@ -41,6 +41,7 @@ import {
   applyExternalAssetDiscardResult,
   flushVault,
   notify,
+  noteTabsState,
   revealVaultItemInTree,
   showVaultItemInFolder,
   vaultSession,
@@ -72,6 +73,8 @@ export interface AssetEmbeddingEditor {
 }
 
 interface AssetEmbedContext {
+  editor: AssetEmbeddingEditor;
+  tabId: string;
   note: Note;
   noteRelativePath: string;
   vaultPath: string;
@@ -123,10 +126,8 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       );
     }
     if (
-      !canEditVault.value
+      !assetEmbedContextIsCurrent( context )
       || signal.aborted
-      || vaultSession.path !== context.vaultPath
-      || activeNote.value?.id !== context.note.id
       || context.note.relativePath !== context.noteRelativePath
     ) {
       throw new Error( 'The note or vault changed before the file drop could finish.' );
@@ -151,15 +152,26 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   ): AssetEmbedContext | undefined {
     const note = vaultState.notes.find( ( candidate ) => candidate.id === capture.noteId );
     const vaultPath = vaultSession.backend === 'native' ? vaultSession.path : null;
-    if ( !canEditVault.value || !nativeAvailable || !note || !vaultPath || activeNote.value?.id !== note.id ) {
+    const editor = sourceEditor.value;
+    if ( !canEditVault.value || !nativeAvailable || !note || !vaultPath || !editor || activeNote.value?.id !== note.id ) {
       return undefined;
     }
 
     return {
+      editor,
+      tabId: noteTabsState.activeTabId,
       note,
       noteRelativePath: note.relativePath,
       vaultPath
     };
+  }
+
+  function assetEmbedContextIsCurrent( context: AssetEmbedContext ): boolean {
+    return canEditVault.value
+      && vaultSession.path === context.vaultPath
+      && activeNote.value === context.note
+      && noteTabsState.activeTabId === context.tabId
+      && sourceEditor.value === context.editor;
   }
 
   async function storeAndInsertImage(
@@ -179,11 +191,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
         vaultSession.error || 'Save the current note before embedding an image.'
       );
     }
-    if (
-      !canEditVault.value
-      || vaultSession.path !== context.vaultPath
-      || activeNote.value?.id !== context.note.id
-    ) {
+    if ( !assetEmbedContextIsCurrent( context ) ) {
       throw new Error( 'The note or vault changed before the image could be embedded.' );
     }
     context.noteRelativePath = context.note.relativePath;
@@ -194,11 +202,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     }
 
     const result = await embed( context, vaultSession.revision );
-    if (
-      !canEditVault.value
-      || vaultSession.path !== context.vaultPath
-      || activeNote.value?.id !== context.note.id
-    ) {
+    if ( !assetEmbedContextIsCurrent( context ) ) {
       await retainOrDiscardFailedImage( context, result, options );
       throw new Error( 'The note or vault changed before the image could be inserted.' );
     }
@@ -217,10 +221,10 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       ),
       inTable: capture.inTable
     }) }`;
-    const inserted = sourceEditor.value?.insertEmbeddedImage(
+    const inserted = context.editor.insertEmbeddedImage(
       capture,
       markdownImage
-    ) ?? false;
+    );
     if ( !inserted ) {
       const discarded = await retainOrDiscardFailedImage( context, result, options );
       notify(
@@ -311,11 +315,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       if ( !sourcePath ) {
         return;
       }
-      if (
-        !canEditVault.value
-        || vaultSession.path !== context.vaultPath
-        || activeNote.value?.id !== context.note.id
-      ) {
+      if ( !assetEmbedContextIsCurrent( context ) ) {
         throw new Error( 'The note or vault changed before the image could be embedded.' );
       }
       await storeAndInsertImage( capture, ( current, expectedRevision ) =>
@@ -351,9 +351,16 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
     imageEmbedBusy.value = true;
     try {
+      const context = assetEmbedContext( capture );
+      if ( !context ) {
+        return;
+      }
       const bytes = file
         ? new Uint8Array( await file.arrayBuffer() )
         : await readClipboardImagePng();
+      if ( !assetEmbedContextIsCurrent( context ) ) {
+        throw new Error( 'The note or vault changed before the image could be embedded.' );
+      }
       const fileName = file?.name?.trim() || pastedImageFileName();
       await storeAndInsertImage( capture, ( context, expectedRevision ) =>
         embedWorkspaceImageBytes(
@@ -433,11 +440,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
         vaultSession.error || 'Save the current note before embedding a file.'
       );
     }
-    if (
-      !canEditVault.value
-      || vaultSession.path !== context.vaultPath
-      || activeNote.value?.id !== context.note.id
-    ) {
+    if ( !assetEmbedContextIsCurrent( context ) ) {
       throw new Error( 'The note or vault changed before the file could be embedded.' );
     }
     context.noteRelativePath = context.note.relativePath;
@@ -446,11 +449,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     }
 
     const result = await embed( context, vaultSession.revision );
-    if (
-      !canEditVault.value
-      || vaultSession.path !== context.vaultPath
-      || activeNote.value?.id !== context.note.id
-    ) {
+    if ( !assetEmbedContextIsCurrent( context ) ) {
       await retainOrDiscardFailedAttachment( context, result, options );
       throw new Error( 'The note or vault changed before the file could be inserted.' );
     }
@@ -469,10 +468,10 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       ),
       inTable: capture.inTable
     }) }`;
-    const inserted = sourceEditor.value?.insertEmbeddedAttachment(
+    const inserted = context.editor.insertEmbeddedAttachment(
       capture,
       markdownAttachment
-    ) ?? false;
+    );
     if ( !inserted ) {
       const discarded = await retainOrDiscardFailedAttachment(
         context,
@@ -567,11 +566,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       if ( !sourcePath ) {
         return;
       }
-      if (
-        !canEditVault.value
-        || vaultSession.path !== context.vaultPath
-        || activeNote.value?.id !== context.note.id
-      ) {
+      if ( !assetEmbedContextIsCurrent( context ) ) {
         throw new Error( 'The note or vault changed before the file could be embedded.' );
       }
       await storeAndInsertAttachment( capture, ( current, expectedRevision ) =>
@@ -816,8 +811,15 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
   }
 
   watch(
-    [ () => vaultSession.path, () => activeNote.value?.id, () => canEditVault.value ],
-    () => externalFileDropAbort?.abort()
+    [
+      () => vaultSession.path,
+      () => activeNote.value,
+      () => noteTabsState.activeTabId,
+      () => canEditVault.value,
+      sourceEditor
+    ],
+    () => externalFileDropAbort?.abort(),
+    { flush: 'sync' }
   );
 
   onBeforeUnmount( () => externalFileDropAbort?.abort() );

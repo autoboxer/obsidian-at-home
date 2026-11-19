@@ -383,9 +383,9 @@ export function createVaultNavigation(
 
   function resetNoteNavigation(): void {
     const tab = newTab( vaultState.activeNoteId );
-    tab.frontmatterVisible = uiState.frontmatterVisible;
     noteTabsState.tabs = [ tab ];
     noteTabsState.activeTabId = tab.id;
+    uiState.frontmatterVisible = tab.frontmatterVisible;
   }
 
   function snapshotNoteNavigation(): NoteNavigationState {
@@ -398,6 +398,8 @@ export function createVaultNavigation(
   function restoreNoteNavigation( snapshot: NoteNavigationState ): void {
     noteTabsState.tabs = snapshot.tabs.map( ( tab ) => ({ ...tab, back: [ ...tab.back ], forward: [ ...tab.forward ] }) );
     noteTabsState.activeTabId = snapshot.activeTabId;
+    pruneNoteNavigation();
+    vaultState.activeNoteId = activeNoteTab.value.noteId;
     uiState.frontmatterVisible = activeNoteTab.value.frontmatterVisible;
   }
 

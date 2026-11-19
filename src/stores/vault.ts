@@ -1351,10 +1351,19 @@ function hydrateVault( vault: Partial<VaultData> ): void {
 function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.recentVaults ): void {
   clearAssetDeletionRequest();
   const previousPath = vaultSession.path;
+  const previousNoteId = vaultState.activeNoteId;
   sessionGeneration += 1;
   clearTimeout( persistTimer );
   vaultSession.access = workspace.access;
   hydrateVault({ ...workspace.vault, name: workspace.descriptor.name });
+  // The saved active note is a restart fallback. A reload of this vault must
+  // preserve the current session tab, including an intentionally empty tab.
+  if (
+    previousPath === workspace.descriptor.path
+    && ( previousNoteId === null || vaultState.notes.some( ( note ) => note.id === previousNoteId ) )
+  ) {
+    vaultState.activeNoteId = previousNoteId;
+  }
   uiState.imageRefreshToken += 1;
   uiState.attachmentRefreshToken += 1;
   hydrateRecentlyDeletedNotes( workspace.recentlyDeletedNotes );

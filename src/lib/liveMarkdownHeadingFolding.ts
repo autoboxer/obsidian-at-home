@@ -65,6 +65,15 @@ const collapsedHeadingsByDocument = new Map<string, {
   document: Text;
   headings: readonly CollapsedHeading[];
 }>();
+
+export function pruneLiveMarkdownHeadingFolds( keepDocument: ( documentId: string ) => boolean ): void {
+  for ( const key of collapsedHeadingsByDocument.keys() ) {
+    if ( !keepDocument( key ) ) {
+      collapsedHeadingsByDocument.delete( key );
+    }
+  }
+}
+
 const setHeadingCollapsedEffect = StateEffect.define<SetHeadingCollapsed>({
   map( value, changes ) {
     const from = changes.mapPos( value.from, 1, MapMode.TrackAfter );
@@ -528,10 +537,14 @@ function persistCollapsedHeadings(
   collapsed: readonly CollapsedHeading[]
 ): void {
   if ( collapsed.length ) {
+    collapsedHeadingsByDocument.delete( documentId );
     collapsedHeadingsByDocument.set(
       documentId,
       { document, headings: collapsed }
     );
+    while ( collapsedHeadingsByDocument.size > 250 ) {
+      collapsedHeadingsByDocument.delete( collapsedHeadingsByDocument.keys().next().value! );
+    }
   } else {
     collapsedHeadingsByDocument.delete( documentId );
   }

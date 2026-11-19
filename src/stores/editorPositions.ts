@@ -21,6 +21,14 @@ const tabPositions = new Map<string, {
   position: NoteEditorViewPosition;
 }>();
 
+export function pruneNoteTabEditorPositions( keepDocument: ( documentId: string ) => boolean ): void {
+  for ( const key of tabPositions.keys() ) {
+    if ( !keepDocument( key ) ) {
+      tabPositions.delete( key );
+    }
+  }
+}
+
 export function getNoteTabEditorPosition(
   vaultId: string,
   tabId: string,

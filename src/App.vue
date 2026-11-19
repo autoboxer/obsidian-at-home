@@ -13,6 +13,8 @@ import SnippetStudio from './components/SnippetStudio.vue';
 import TemplateGallery from './components/TemplateGallery.vue';
 import VaultChooser from './components/VaultChooser.vue';
 import { applyAppZoom } from './services/native';
+import { pruneLiveMarkdownHeadingFolds } from './lib/liveMarkdownHeadingFolding';
+import { editorPositionVaultId, pruneNoteTabEditorPositions } from './stores/editorPositions';
 import {
   activeNote,
   activeNoteTab,
@@ -37,6 +39,34 @@ import {
 import type { ToolView } from './types';
 
 const editorWorkspace = ref<InstanceType<typeof EditorWorkspace>>();
+
+watch(
+  [
+    () => editorPositionVaultId( vaultSession.backend, vaultSession.path ),
+    () => noteTabsState.tabs.map( ( tab ) => tab.id ),
+    () => vaultState.notes.map( ( note ) => note.id ),
+    () => vaultSession.busy
+  ],
+  ([ vaultId, tabIds, noteIds, busy ]) => {
+    // Keep rollback snapshots until the operation settles. Run after the old
+    // editor unmounts so its final position capture cannot revive a closed tab.
+    if ( busy ) {
+      return;
+    }
+    const tabs = new Set( tabIds );
+    const notes = new Set( noteIds );
+    const keepDocument = ( documentId: string ): boolean => {
+      // SourceEditor uses the same vault/tab/note key for both view caches.
+      const [ savedVault, tabId, noteId ] = JSON.parse( documentId ) as string[];
+
+      return savedVault === vaultId && tabs.has( tabId! ) && notes.has( noteId! );
+    };
+    pruneNoteTabEditorPositions( keepDocument );
+    pruneLiveMarkdownHeadingFolds( keepDocument );
+  },
+  { flush: 'post' }
+);
+
 const commandModalActive = ref( false );
 let commandReturnFocus: HTMLElement | null = null;
 let commandFocusNoteId: string | null = null;
