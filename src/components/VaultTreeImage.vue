@@ -2,7 +2,9 @@
 import { computed, nextTick, ref } from 'vue';
 import { VAULT_IMAGE_DRAG_MIME } from '../lib/imageEmbeds';
 import {
+  activeImage,
   canEditVault,
+  selectVaultImage,
   requestVaultAssetDeletion,
   renameVaultImage,
   showVaultItemInFolder,
@@ -23,6 +25,15 @@ const menuOpen = ref( false );
 const menuPosition = ref<{ x: number; y: number }>();
 const menu = ref<HTMLElement>();
 const mainButton = ref<HTMLButtonElement>();
+
+const active = computed( () => activeImage.value?.assetId && props.image.assetId
+  ? activeImage.value.assetId === props.image.assetId
+  : activeImage.value?.relativePath === props.image.relativePath );
+
+function previewImage(): void {
+  closeMenu();
+  selectVaultImage( props.image );
+}
 
 const fileName = computed( () => props.image.relativePath.split( '/' ).at( -1 ) || 'Image' );
 const rowTitle = computed( () =>
@@ -200,7 +211,8 @@ function handleMenuFocusOut( event: FocusEvent ): void {
     data-vault-item-kind="image"
     :data-vault-item-asset-id="image.assetId"
     :data-vault-item-relative-path="image.relativePath"
-    :class="{ 'is-dragging': dragging }"
+    :class="{ active, 'is-dragging': dragging }"
+    :aria-current="active ? 'page' : undefined"
     :style="{ '--tree-depth': depth }"
     :title="rowTitle"
     @contextmenu.prevent.stop="openContextMenu"
@@ -216,7 +228,7 @@ function handleMenuFocusOut( event: FocusEvent ): void {
         :aria-label="fileName"
         aria-haspopup="menu"
         :aria-expanded="menuOpen"
-        @click="closeMenu()"
+        @click.left="previewImage"
         @keydown="handleRowKeydown"
         @dragstart="startDrag"
         @dragend="finishDrag"

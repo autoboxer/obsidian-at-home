@@ -9,6 +9,7 @@ import { leadingFrontmatterEnd } from '../lib/frontmatter';
 import { findMarkdownHeading, markdownHeadingSuggestions } from '../lib/headingLinks';
 import { formatCommandShortcut } from '../lib/keyboard';
 import { parseMarkdownNoteTarget, type MarkdownNoteTarget } from '../lib/markdownLinks';
+import { readWorkspaceImage } from '../services/native';
 import { resolveNoteLink, resolveWikiLink, wikiLinkSuggestions, type WikiLinkTarget } from '../lib/wikiLinks';
 import {
   editorPositionVaultId,
@@ -17,10 +18,11 @@ import {
 } from '../stores/editorPositions';
 import {
   canEditVault,
+  activeImage,
   activeNote,
   activeNoteTab,
   activateNoteTab,
-  backNavigationNote,
+  backNavigationTitle,
   canNavigateBack,
   canNavigateForward,
   closeNoteTab,
@@ -30,7 +32,7 @@ import {
   createNoteTab,
   deleteNote,
   folderPath,
-  forwardNavigationNote,
+  forwardNavigationTitle,
   navigateBack,
   navigateForward,
   moveNoteToFolder,
@@ -39,6 +41,7 @@ import {
   noteLinkPaths,
   openQuickSearch,
   renameVaultAttachment,
+  resolveImageTarget,
   selectNote,
   togglePinned,
   uiState,
@@ -58,6 +61,7 @@ const closeTabShortcut = formatCommandShortcut( 'W' );
 const openNoteShortcut = formatCommandShortcut( 'O' );
 const tabList = ref<HTMLElement>();
 const emptyTabOpenButton = ref<HTMLButtonElement>();
+const imagePreviewPanel = ref<HTMLElement>();
 const keepTabFocus = ref( false );
 let tabResizeObserver: ResizeObserver | undefined;
 const noteTabs = computed( () => {
@@ -65,12 +69,14 @@ const noteTabs = computed( () => {
 
   return noteTabsState.tabs.map( ( tab ) => {
     const note = tab.noteId ? notes.get( tab.noteId ) : undefined;
-    const title = note ? note.title.trim() || 'Untitled note' : 'New tab';
+    const image = tab.image ? resolveImageTarget( tab.image ) : undefined;
+    const title = image ? image.relativePath.split( '/' ).at( -1 )! : note ? note.title.trim() || 'Untitled note' : 'New tab';
 
     return {
       id: tab.id,
       title,
-      path: note?.relativePath || ( note ? [ folderPath( note.folderId ), title ].filter( Boolean ).join( '/' ) : title )
+      image: Boolean( image ),
+      path: image?.relativePath || note?.relativePath || ( note ? [ folderPath( note.folderId ), title ].filter( Boolean ).join( '/' ) : title )
     };
   });
 });
@@ -95,9 +101,9 @@ function revealActiveTab(): void {
   }
 }
 
-function focusEmptyTab(): void {
+function focusNonNoteTab(): void {
   if ( !activeNote.value && !keepTabFocus.value ) {
-    emptyTabOpenButton.value?.focus({ preventScroll: true });
+    ( activeImage.value ? imagePreviewPanel.value : emptyTabOpenButton.value )?.focus({ preventScroll: true });
   }
 }
 
@@ -112,7 +118,7 @@ async function selectTab( id: string, focusTab = false ): Promise<void> {
       // Selecting the already active tab does not remount its editor.
       document.querySelector<HTMLElement>( '.source-editor .cm-content' )?.focus({ preventScroll: true });
     } else {
-      focusEmptyTab();
+      focusNonNoteTab();
     }
   }
   keepTabFocus.value = false;
@@ -164,14 +170,14 @@ function scrollTabs( event: WheelEvent ): void {
 watch([ () => activeNoteTab.value.id, noteTabs ], () => {
   revealActiveTab();
 }, { flush: 'post' });
-watch( () => activeNoteTab.value.id, focusEmptyTab, { flush: 'post' });
+watch( () => activeNoteTab.value.id, focusNonNoteTab, { flush: 'post' });
 onMounted( () => {
   tabResizeObserver = new ResizeObserver( revealActiveTab );
   if ( tabList.value ) {
     tabResizeObserver.observe( tabList.value );
   }
   revealActiveTab();
-  focusEmptyTab();
+  focusNonNoteTab();
 });
 onBeforeUnmount( () => tabResizeObserver?.disconnect() );
 const embedAttachmentShortcut = formatCommandShortcut( 'Shift+A' );
@@ -205,6 +211,65 @@ const {
   storeAndInsertAttachment,
   showEmbeddedAttachmentInFolder
 } = useAssetEmbedding( sourceEditor );
+
+const imageName = computed( () => activeImage.value?.relativePath.split( '/' ).at( -1 ) ?? '' );
+const previewUrl = ref<string>();
+const previewLoading = ref( false );
+const previewError = ref( '' );
+
+watch( () => JSON.stringify([
+  vaultSession.backend,
+  vaultSession.path,
+  activeNoteTab.value.id,
+  activeImage.value
+]), async ( _target, _previous, onCleanup ) => {
+  let cancelled = false;
+  let objectUrl: string | undefined;
+  onCleanup( () => {
+    cancelled = true;
+    if ( objectUrl ) {
+      URL.revokeObjectURL( objectUrl );
+    }
+  });
+  previewUrl.value = undefined;
+  previewError.value = '';
+  previewLoading.value = false;
+  const image = activeImage.value;
+  if ( !image ) {
+    return;
+  }
+  if ( !nativeAvailable || vaultSession.backend !== 'native' || !vaultSession.path ) {
+    previewError.value = 'Open this vault in the desktop app to preview its images.';
+
+    return;
+  }
+  previewLoading.value = true;
+  try {
+    // Use the existing validated image reader. The virtual Markdown path is
+    // only a resolution base; the root-relative destination creates no note.
+    const bytes = await readWorkspaceImage( vaultSession.path, 'Image preview.md', `/${ image.relativePath }`, image.assetId );
+    if ( cancelled ) {
+      return;
+    }
+    objectUrl = URL.createObjectURL( new Blob([ new Uint8Array( bytes ) ], { type: image.mediaType }) );
+    previewUrl.value = objectUrl;
+  } catch {
+    if ( !cancelled ) {
+      previewLoading.value = false;
+      previewError.value = 'This image could not be loaded. It may be missing, unsupported, or too large.';
+    }
+  }
+}, { immediate: true });
+
+function finishImagePreview( event: Event ): void {
+  if ( ( event.target as HTMLImageElement ).src !== previewUrl.value ) {
+    return;
+  }
+  previewLoading.value = false;
+  if ( event.type === 'error' ) {
+    previewError.value = 'This image format could not be displayed.';
+  }
+}
 
 defineExpose({ openNoteLink, storeAndInsertAttachment });
 
@@ -287,12 +352,12 @@ const hasFrontmatter = computed( () => (
     ? leadingFrontmatterEnd( activeNote.value.content ) !== undefined
     : false
 ) );
-const backNavigationLabel = computed( () => backNavigationNote.value
-  ? `Back to “${ backNavigationNote.value.title.trim() || 'Untitled note' }”`
-  : 'No previous note' );
-const forwardNavigationLabel = computed( () => forwardNavigationNote.value
-  ? `Forward to “${ forwardNavigationNote.value.title.trim() || 'Untitled note' }”`
-  : 'No next note' );
+const backNavigationLabel = computed( () => backNavigationTitle.value
+  ? `Back to “${ backNavigationTitle.value }”`
+  : 'No previous item' );
+const forwardNavigationLabel = computed( () => forwardNavigationTitle.value
+  ? `Forward to “${ forwardNavigationTitle.value }”`
+  : 'No next item' );
 
 function setTitle( event: Event ): void {
   if ( !activeNote.value ) {
@@ -572,7 +637,7 @@ watch( tagInput, () => {
         ref="tabList"
         class="note-tab-list"
         role="tablist"
-        aria-label="Open notes"
+        aria-label="Open tabs"
         @keydown="handleTabKeydown"
         @wheel="scrollTabs"
       >
@@ -597,7 +662,7 @@ watch( tagInput, () => {
             :title="tab.path"
             @click.left="selectTab( tab.id )"
           >
-            <AppIcon name="file-text" :size="14" />
+            <AppIcon :name="tab.image ? 'image' : 'file-text'" :size="14" />
             <span>{{ tab.title }}</span>
           </button>
           <button
@@ -638,11 +703,11 @@ watch( tagInput, () => {
           <AppIcon name="sidebar" :size="17" />
         </button>
         <div
-          v-if="activeNote"
+          v-if="activeNote || activeImage || canNavigateBack || canNavigateForward"
           class="note-navigation"
           data-ui-region="note-history"
           role="group"
-          aria-label="Note history"
+          aria-label="Tab history"
         >
           <button
             class="icon-button subtle"
@@ -735,6 +800,11 @@ watch( tagInput, () => {
             :size="12"
           />
           <span class="crumb-note">{{ activeNote.title || "Untitled note" }}</span>
+        </template>
+        <template v-else-if="activeImage">
+          <span class="crumb-vault">{{ vaultState.name }}</span>
+          <AppIcon name="chevron" :size="12" />
+          <span class="crumb-note" :title="activeImage.relativePath">{{ imageName }}</span>
         </template>
       </div>
 
@@ -991,6 +1061,37 @@ watch( tagInput, () => {
         </div>
       </footer>
     </template>
+
+    <section
+      v-else-if="activeImage"
+      id="note-tab-panel"
+      ref="imagePreviewPanel"
+      class="image-preview"
+      role="tabpanel"
+      tabindex="-1"
+      :aria-labelledby="`note-tab-${activeNoteTab.id}`"
+      :aria-busy="previewLoading"
+    >
+      <header class="image-preview-heading">
+        <h1>{{ imageName }}</h1>
+        <p>{{ activeImage.relativePath }}</p>
+      </header>
+      <div class="image-preview-stage">
+        <p v-if="previewLoading || previewError" role="status">
+          {{ previewError || 'Loading image…' }}
+        </p>
+        <img
+          v-if="previewUrl"
+          v-show="!previewLoading && !previewError"
+          :key="previewUrl"
+          :src="previewUrl"
+          :alt="imageName"
+          draggable="false"
+          @load="finishImagePreview"
+          @error="finishImagePreview"
+        >
+      </div>
+    </section>
 
     <div
       v-else

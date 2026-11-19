@@ -134,6 +134,7 @@
 .smart-folders > button.active,
 .vault-tree-folder-row.drop-active,
 .vault-tree-note.active,
+.vault-tree-image.active,
 .inspector-tabs button.active,
 .search-scopes button.active,
 .snippet-list-item.active,
@@ -202,13 +203,16 @@
   color: var(--violet-bright);
 }
 
-.vault-tree-note.active {
+.vault-tree-note.active,
+.vault-tree-image.active {
   box-shadow: inset 2px 0 var(--violet);
 }
 
 .smart-folders > button.active > small,
 .vault-tree-note.active,
-.vault-tree-note.active .vault-tree-note-icon {
+.vault-tree-note.active .vault-tree-note-icon,
+.vault-tree-image.active,
+.vault-tree-image.active .vault-tree-image-icon {
   color: var(--violet-bright);
 }
 

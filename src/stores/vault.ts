@@ -359,6 +359,11 @@ const vaultNavigation = createVaultNavigation({
 });
 
 export const {
+  activeImage,
+  backNavigationTitle,
+  forwardNavigationTitle,
+  resolveImageTarget,
+  selectVaultImage,
   activeNoteTab,
   activateNoteTab,
   closeNoteTab,

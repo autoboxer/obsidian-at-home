@@ -1605,6 +1605,62 @@
   to { opacity: 0.45; }
 }
 
+.image-preview {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+}
+
+.image-preview-heading {
+  flex: none;
+  overflow-wrap: anywhere;
+}
+
+.image-preview-heading h1 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 550;
+}
+
+.image-preview-heading p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.image-preview-stage {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--border-faint);
+  border-radius: 8px;
+  background: var(--surface-control);
+}
+
+.image-preview-stage p {
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.image-preview-stage img {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: scale-down;
+  user-select: none;
+}
+
 .empty-editor {
   width: 100%;
   height: 100%;
