@@ -367,8 +367,9 @@ function handleDragOver( event: DragEvent ): void {
 }
 
 function handleDragLeave( event: DragEvent ): void {
-  const row = event.currentTarget as HTMLElement;
-  if ( event.relatedTarget instanceof Node && row.contains( event.relatedTarget ) ) {
+  // Entering a nested folder transfers the drop target to that folder.
+  if ( event.relatedTarget instanceof Element
+    && event.relatedTarget.closest( '.vault-tree-folder' ) === event.currentTarget ) {
     return;
   }
   dropActive.value = false;
@@ -635,15 +636,15 @@ function showInFolder(): void {
     v-if="branchVisible"
     class="vault-tree-folder"
     :class="{ 'is-expanded': expanded, 'is-empty': !hasContents, 'is-dragging': dragging }"
+    @dragenter="handleDragEnter"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
   >
     <div
       class="vault-tree-folder-row"
       :class="{ 'drop-active': dropActive, 'drop-invalid': dropInvalid }"
       :style="{ '--tree-depth': depth }"
-      @dragenter="handleDragEnter"
-      @dragover="handleDragOver"
-      @dragleave="handleDragLeave"
-      @drop="handleDrop"
       @contextmenu.prevent.stop="openContextMenu"
     >
       <button
