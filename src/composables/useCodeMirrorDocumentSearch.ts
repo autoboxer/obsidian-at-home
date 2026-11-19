@@ -60,7 +60,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     if ( isOpen.value ) {
       scheduleSearch( true );
     }
-  });
+  }, { flush: 'sync' });
 
   watch( editorView, () => {
     if ( isOpen.value && normalizedQuery.value ) {
@@ -86,13 +86,13 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     scheduleSearch( true, 0 );
   }
 
-  async function closeSearch(): Promise<void> {
+  async function closeSearch( focusEditor = true ): Promise<void> {
+    const view = editorView.value;
     isOpen.value = false;
     cancelScheduledSearch();
     resetResults();
     await nextTick();
-    const view = editorView.value;
-    if ( !view ) {
+    if ( !view || view !== editorView.value || isOpen.value ) {
       return;
     }
 
@@ -103,7 +103,29 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
         matches: matches.value
       })
     });
-    view.focus();
+    if ( focusEditor ) {
+      view.focus();
+    }
+  }
+
+  function acceptSearch(): void {
+    if ( !isOpen.value ) {
+      return;
+    }
+    if ( isPending.value ) {
+      cancelScheduledSearch();
+      performSearch( false );
+    }
+    selectActiveMatch();
+    void closeSearch();
+  }
+
+  function handleEditorClick(): void {
+    if ( isOpen.value ) {
+      // Let the completed pointer gesture keep its selection and focus,
+      // including clicks on controls embedded in the document.
+      void closeSearch( false );
+    }
   }
 
   function handleEditorSearchKeydown( event: KeyboardEvent ): void {
@@ -154,6 +176,11 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
     event.preventDefault();
     event.stopPropagation();
+    if ( key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey ) {
+      acceptSearch();
+
+      return;
+    }
     moveToMatch( event.shiftKey ? 'previous' : 'next' );
   }
 
@@ -272,7 +299,9 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   }
 
   return {
+    acceptSearch,
     closeSearch,
+    handleEditorClick,
     handleEditorSearchKeydown,
     handleSearchInputKeydown,
     isOpen,

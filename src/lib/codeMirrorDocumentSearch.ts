@@ -1,4 +1,4 @@
-import { StateEffect, StateField } from '@codemirror/state';
+import { Prec, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, EditorView } from '@codemirror/view';
 import type { ChangeDesc, EditorState, Extension } from '@codemirror/state';
 import type { DecorationSet } from '@codemirror/view';
@@ -51,10 +51,12 @@ const documentSearchState = StateField.define<DocumentSearchState>({
       ? value
       : createDocumentSearchState( matches, activeIndex );
   },
-  provide: ( field ) => EditorView.decorations.from(
+  // Nest matches inside formatted spans so they neither split inline-code
+  // padding nor disappear behind the code background.
+  provide: ( field ) => Prec.highest( EditorView.decorations.from(
     field,
     ( value ) => value.decorations
-  )
+  ) )
 });
 
 export const codeMirrorDocumentSearchExtension: Extension = documentSearchState;
