@@ -201,7 +201,9 @@ watch([ suggestions, suggestionIndex ], async () => {
 });
 
 const {
+  acceptSearch: acceptDocumentSearch,
   closeSearch: closeDocumentSearch,
+  handleEditorClick: handleDocumentSearchClick,
   handleEditorSearchKeydown: handleDocumentSearchKeydown,
   handleSearchInputKeydown: handleDocumentSearchInputKeydown,
   isOpen: documentSearchOpen,
@@ -802,7 +804,11 @@ function handleSourceEditorKeydown( event: KeyboardEvent ): void {
     @drop.capture="blockUnavailableEditorDrag"
     @drop="handleSourceEditorDrop"
   >
-    <div ref="editorHost" class="code-mirror-host" />
+    <div
+      ref="editorHost"
+      class="code-mirror-host"
+      @click.capture="handleDocumentSearchClick"
+    />
 
     <Transition name="popover-fade">
       <form
@@ -811,7 +817,7 @@ function handleSourceEditorKeydown( event: KeyboardEvent ): void {
         data-ui-region="document-search"
         role="search"
         aria-label="Find in note"
-        @submit.prevent="moveToDocumentSearchMatch( 'next' )"
+        @submit.prevent="acceptDocumentSearch"
       >
         <label class="document-search-field">
           <AppIcon name="search" :size="14" />
@@ -865,7 +871,7 @@ function handleSourceEditorKeydown( event: KeyboardEvent ): void {
           aria-label="Close find in note"
           title="Close (Escape)"
           @mousedown.prevent
-          @click="closeDocumentSearch"
+          @click="closeDocumentSearch()"
         >
           <AppIcon name="x" :size="13" />
         </button>
