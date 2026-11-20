@@ -1123,12 +1123,12 @@ watch( tagInput, () => {
         <p>{{ activeImage.relativePath }}</p>
       </header>
       <div class="image-preview-stage">
-        <div v-if="previewLoading || previewError" class="image-preview-message">
+        <div v-if="previewError" class="image-preview-message">
           <p role="status">
-            {{ previewError || 'Loading image…' }}
+            {{ previewError }}
           </p>
           <button
-            v-if="previewError && nativeAvailable && vaultSession.path"
+            v-if="nativeAvailable && vaultSession.path"
             class="secondary-button"
             type="button"
             :disabled="vaultSession.busy || previewRetrying"
