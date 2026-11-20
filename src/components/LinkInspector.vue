@@ -3,11 +3,14 @@ import { computed } from 'vue';
 import type { MarkdownNoteTarget } from '../lib/markdownLinks';
 import type { WikiLinkTarget } from '../lib/wikiLinks';
 import {
+  activeImage,
+  activeImageAvailable,
   activeNote,
   backlinks,
   canEditVault,
   createLinkedNote,
   folderPath,
+  imageReferences,
   noteLinkPaths,
   outgoingLinks,
   uiState
@@ -71,13 +74,13 @@ function formatDate( timestamp?: number ): string {
   >
     <header class="inspector-header">
       <div>
-        <span class="eyebrow">Note context</span>
+        <span class="eyebrow">{{ activeImage ? 'Image context' : 'Note context' }}</span>
         <h2>{{ uiState.inspectorTab === 'links' ? 'Connections' : 'Details' }}</h2>
       </div>
       <button
         type="button"
         class="icon-button subtle"
-        title="Hide note context"
+        :title="activeImage ? 'Hide image context' : 'Hide note context'"
         @click="uiState.contextOpen = false"
       >
         <AppIcon name="x" :size="15" />
@@ -101,7 +104,47 @@ function formatDate( timestamp?: number ): string {
       </button>
     </div>
 
-    <div v-if="activeNote" class="inspector-scroll">
+    <div v-if="activeImage" class="inspector-scroll">
+      <section v-if="uiState.inspectorTab === 'links'" class="connection-section backlink-section">
+        <div class="connection-heading">
+          <span><AppIcon name="backlinks" :size="15" /> Embedded in</span>
+          <small>{{ imageReferences.length }}</small>
+        </div>
+        <div v-if="imageReferences.length" class="connection-list">
+          <button
+            v-for="note in imageReferences"
+            :key="note.id"
+            type="button"
+            class="connection-card"
+            :title="note.relativePath"
+            @click="openBacklink( note.id )"
+          >
+            <span class="connection-node"><AppIcon name="file-text" :size="14" /></span>
+            <span>
+              <strong>{{ note.title || 'Untitled note' }}</strong>
+              <small>{{ note.folderId ? folderPath( note.folderId ) : 'Vault root' }}</small>
+            </span>
+            <AppIcon name="chevron" :size="13" />
+          </button>
+        </div>
+        <div v-else class="empty-connection quiet">
+          <span>No notes embed this image.</span>
+        </div>
+      </section>
+      <section v-else class="note-info-card">
+        <div class="info-row">
+          <span>File</span><strong :title="activeImage.relativePath.split( '/' ).at( -1 )">{{ activeImage.relativePath.split( '/' ).at( -1 ) }}</strong>
+        </div>
+        <div class="info-row">
+          <span>Path</span><strong :title="activeImage.relativePath">{{ activeImage.relativePath }}</strong>
+        </div>
+        <div v-if="!activeImageAvailable" class="info-row">
+          <span>Status</span><strong>Missing from vault</strong>
+        </div>
+      </section>
+    </div>
+
+    <div v-else-if="activeNote" class="inspector-scroll">
       <template v-if="uiState.inspectorTab === 'links'">
         <section class="connection-section">
           <div class="connection-heading">

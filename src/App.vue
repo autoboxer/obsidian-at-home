@@ -43,6 +43,26 @@ const editorWorkspace = ref<InstanceType<typeof EditorWorkspace>>();
 
 watch(
   [
+    () => uiState.tool === 'notes' && uiState.notesView === 'editor' ? activeNoteTab.value.image : null,
+    () => activeNoteTab.value.id
+  ],
+  ([ image, tabId ], [ previousImage, previousTabId ]) => {
+    if ( !image ) {
+      return;
+    }
+    const sameImage = previousImage && ( image.assetId && previousImage.assetId
+      ? image.assetId === previousImage.assetId
+      : image.relativePath === previousImage.relativePath );
+    // Open on navigation, while refreshes and inventory updates respect dismissal.
+    if ( tabId !== previousTabId || !sameImage ) {
+      uiState.contextOpen = true;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  [
     () => editorPositionVaultId( vaultSession.backend, vaultSession.path ),
     () => noteTabsState.tabs.map( ( tab ) => tab.id ),
     () => vaultState.notes.map( ( note ) => note.id ),
@@ -524,7 +544,7 @@ onBeforeUnmount( () => {
             <EditorWorkspace ref="editorWorkspace" />
             <Transition name="panel-right">
               <LinkInspector
-                v-if="uiState.contextOpen && !activeImage"
+                v-if="uiState.contextOpen"
                 @open-note-link="editorWorkspace?.openNoteLink( $event )"
               />
             </Transition>

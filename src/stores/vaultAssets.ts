@@ -12,6 +12,7 @@ import {
 } from '../lib/markdownAttachments';
 import type {
   Folder,
+  Note,
   RecentlyDeletedNote,
   VaultAttachmentFile,
   VaultData,
@@ -23,6 +24,47 @@ type MarkdownReplacement = { from: number; to: number; value: string };
 
 export type VaultAssetKind = 'image' | 'attachment';
 export type VaultAssetIdentity = { assetId?: string; relativePath: string };
+
+/** Find live notes embedding this image, using tracked IDs before portable paths. */
+export function findVaultImageReferences( vault: VaultData, image: VaultAssetIdentity ): Note[] {
+  // Keep references inspectable even when the previewed file has gone missing.
+  const paths = new Set([ image.relativePath ]);
+  const trackedPaths = new Map<string, string>();
+  const trackedIdsByPath = new Map<string, string>();
+  for ( const file of vault.imageFiles ) {
+    paths.add( file.relativePath );
+    if ( file.assetId ) {
+      trackedPaths.set( file.assetId, file.relativePath );
+      trackedIdsByPath.set( file.relativePath, file.assetId );
+    }
+  }
+  for ( const file of vault.embeddedImages ) {
+    trackedPaths.set( file.id, file.relativePath );
+  }
+  const portablePaths = new Map<string, string | undefined>();
+  for ( const path of paths ) {
+    const key = path.toLocaleLowerCase();
+    portablePaths.set( key, portablePaths.has( key ) ? undefined : path );
+  }
+
+  return vault.notes.filter( ( note ) => parseMarkdownImages( note.content ).some( ( reference ) => {
+    const trackedPath = reference.assetId ? trackedPaths.get( reference.assetId ) : undefined;
+    if ( image.assetId && trackedPath !== undefined ) {
+      return reference.assetId === image.assetId;
+    }
+    const path = trackedPath ?? resolveMarkdownImagePath( note.relativePath, reference.destination );
+    if ( !path ) {
+      return false;
+    }
+    const resolved = paths.has( path ) ? path : portablePaths.get( path.toLocaleLowerCase() );
+    const resolvedAssetId = resolved ? trackedIdsByPath.get( resolved ) : undefined;
+
+    // A replacement file at the same path does not belong to a missing tracked preview.
+    return image.assetId && resolvedAssetId
+      ? resolvedAssetId === image.assetId
+      : resolved === image.relativePath;
+  }) );
+}
 
 export interface VaultAssetDeletionPlan {
   referenceCount: number;

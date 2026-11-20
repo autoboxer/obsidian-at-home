@@ -853,64 +853,66 @@ watch( tagInput, () => {
         </template>
       </div>
 
-      <div v-if="activeNote" class="editor-toolbar-actions">
-        <button
-          class="icon-button"
-          type="button"
-          data-note-action="embed-attachment"
-          :disabled="!canEditVault || !nativeAvailable || attachmentEmbedBusy || imageEmbedBusy || vaultSession.busy"
-          aria-label="Embed file"
-          :title="`Embed file · ${embedAttachmentShortcut}`"
-          @click="requestAttachmentFromToolbar"
-        >
-          <AppIcon name="paperclip" :size="16" />
-        </button>
-        <button
-          class="icon-button"
-          type="button"
-          data-note-action="embed-image"
-          :disabled="!canEditVault || !nativeAvailable || imageEmbedBusy || attachmentEmbedBusy || vaultSession.busy"
-          aria-label="Embed image"
-          :title="`Embed image · ${embedImageShortcut}`"
-          @click="requestImageFromToolbar"
-        >
-          <AppIcon name="image" :size="16" />
-        </button>
-        <button
-          :disabled="!canEditVault"
-          class="icon-button"
-          type="button"
-          :class="{ active: activeNote.pinned }"
-          :aria-label="activeNote.pinned ? 'Remove from favorites' : 'Favorite'"
-          :title="activeNote.pinned ? 'Remove from favorites' : 'Favorite'"
-          @click="togglePinned( activeNote.id )"
-        >
-          <AppIcon name="star" :size="16" />
-        </button>
-        <button
-          v-if="hasFrontmatter || uiState.frontmatterVisible"
-          class="icon-button frontmatter-toggle"
-          type="button"
-          data-note-action="toggle-frontmatter"
-          :class="{ active: uiState.frontmatterVisible }"
-          :aria-label="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
-          :title="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
-          :aria-pressed="uiState.frontmatterVisible"
-          @click="toggleFrontmatter"
-        >
-          <AppIcon name="code" :size="16" />
-        </button>
+      <div v-if="activeNote || activeImage" class="editor-toolbar-actions">
+        <template v-if="activeNote">
+          <button
+            class="icon-button"
+            type="button"
+            data-note-action="embed-attachment"
+            :disabled="!canEditVault || !nativeAvailable || attachmentEmbedBusy || imageEmbedBusy || vaultSession.busy"
+            aria-label="Embed file"
+            :title="`Embed file · ${embedAttachmentShortcut}`"
+            @click="requestAttachmentFromToolbar"
+          >
+            <AppIcon name="paperclip" :size="16" />
+          </button>
+          <button
+            class="icon-button"
+            type="button"
+            data-note-action="embed-image"
+            :disabled="!canEditVault || !nativeAvailable || imageEmbedBusy || attachmentEmbedBusy || vaultSession.busy"
+            aria-label="Embed image"
+            :title="`Embed image · ${embedImageShortcut}`"
+            @click="requestImageFromToolbar"
+          >
+            <AppIcon name="image" :size="16" />
+          </button>
+          <button
+            :disabled="!canEditVault"
+            class="icon-button"
+            type="button"
+            :class="{ active: activeNote.pinned }"
+            :aria-label="activeNote.pinned ? 'Remove from favorites' : 'Favorite'"
+            :title="activeNote.pinned ? 'Remove from favorites' : 'Favorite'"
+            @click="togglePinned( activeNote.id )"
+          >
+            <AppIcon name="star" :size="16" />
+          </button>
+          <button
+            v-if="hasFrontmatter || uiState.frontmatterVisible"
+            class="icon-button frontmatter-toggle"
+            type="button"
+            data-note-action="toggle-frontmatter"
+            :class="{ active: uiState.frontmatterVisible }"
+            :aria-label="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
+            :title="uiState.frontmatterVisible ? 'Hide frontmatter' : 'Show frontmatter'"
+            :aria-pressed="uiState.frontmatterVisible"
+            @click="toggleFrontmatter"
+          >
+            <AppIcon name="code" :size="16" />
+          </button>
+        </template>
         <button
           class="icon-button context-toggle"
           type="button"
           :class="{ active: uiState.contextOpen }"
-          :aria-label="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
-          :title="uiState.contextOpen ? 'Hide note context' : 'Show note context'"
+          :aria-label="`${uiState.contextOpen ? 'Hide' : 'Show'} ${activeImage ? 'image' : 'note'} context`"
+          :title="`${uiState.contextOpen ? 'Hide' : 'Show'} ${activeImage ? 'image' : 'note'} context`"
           @click="uiState.contextOpen = !uiState.contextOpen"
         >
           <AppIcon name="panel-right" :size="17" />
         </button>
-        <div class="menu-anchor">
+        <div v-if="activeNote" class="menu-anchor">
           <button
             class="icon-button"
             type="button"
