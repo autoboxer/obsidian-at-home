@@ -21,6 +21,7 @@ import {
 import { pruneNoteEditorHistories } from './editorHistories';
 import {
   applyMarkdownReplacements,
+  findVaultImageReferences,
   folderContainsVaultAssets,
   rewriteVaultAssetDestinationsForNotePath
 } from './vaultAssets';
@@ -670,6 +671,10 @@ export const outgoingLinks = computed( () => {
 
 export const backlinks = computed( () =>
   activeNote.value ? findBacklinks( activeNote.value, vaultState.notes, noteLinkPaths.value ) : []
+);
+
+export const imageReferences = computed( () =>
+  activeImage.value ? findVaultImageReferences( vaultState, activeImage.value ) : []
 );
 
 export function setZoom( zoom: number ): void {

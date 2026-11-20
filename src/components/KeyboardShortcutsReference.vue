@@ -31,6 +31,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: 'Quick search', keys: [ commandKey, 'O' ] },
       { label: 'Search all notes', keys: [ commandKey, 'Shift', 'F' ] },
       { label: 'Create a note', keys: [ commandKey, 'N' ] },
+      { label: 'Focus the note body', detail: 'From the title; moves to the start', keys: [ 'Enter' ] },
       { label: 'New tab', detail: 'Opens an empty tab without creating a note', keys: [ commandKey, 'T' ] },
       { label: 'Close the current tab', detail: 'While viewing notes', keys: [ commandKey, 'W' ] },
       { label: 'Next tab', detail: 'While viewing notes; wraps to the first tab', keys: [ 'Ctrl', 'Tab' ] },
