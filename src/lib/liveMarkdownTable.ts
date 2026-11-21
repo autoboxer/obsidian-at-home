@@ -4,8 +4,8 @@ import type { LiveMarkdownBlock } from './liveMarkdown';
 export type LiveMarkdownTableAlignment = 'center' | 'left' | 'right';
 
 export interface LiveMarkdownTableCell {
-  // Editable bounds keep trailing padding available for ordinary typing. The
-  // semantic bounds below continue to exclude Markdown cell padding.
+  // editable bounds keep trailing padding available for ordinary typing. The
+  // semantic bounds below continue to exclude Markdown cell padding
   editableFrom: number;
   editableTo: number;
   from: number;
@@ -41,12 +41,14 @@ export function parseLiveMarkdownTables(
   for ( let index = 0; index < lines.length - 1; index += 1 ) {
     const headerLine = lines[ index ]!;
     const delimiterLine = lines[ index + 1 ]!;
+
     if ( !lineCanStartTable( headerLine ) || !lineCanStartTable( delimiterLine ) ) {
       continue;
     }
 
     const header = parseTableRow( headerLine );
     const delimiter = parseTableRow( delimiterLine );
+
     if (
       !header ||
       header.cells.length < 2 ||
@@ -60,8 +62,10 @@ export function parseLiveMarkdownTables(
 
     const rows: LiveMarkdownTableRow[] = [];
     let cursor = index + 2;
+
     while ( cursor < lines.length && lineCanBelongToTable( lines[ cursor ]! ) ) {
       const row = parseTableRow( lines[ cursor ]! );
+
       if ( !row || row.cells.length < 2 ) {
         break;
       }
@@ -71,6 +75,7 @@ export function parseLiveMarkdownTables(
     }
 
     const tableRows = [ header, delimiter, ...rows ];
+
     tables.push({
       from: header.from,
       to: tableRows.at( -1 )!.end,
@@ -97,20 +102,24 @@ export function isLiveMarkdownTableDelimiterCandidate(
   if ( from < 0 || to <= from || to > value.length ) {
     return false;
   }
+
   if ( !/^-{2,}$/.test( value.slice( from, to ) ) ) {
     return false;
   }
 
   const documentLines = lines ?? parseLiveMarkdownBlocks( value );
+
   const delimiterIndex = documentLines.findIndex( ( line ) =>
     from >= line.from && to <= line.to
   );
+
   if ( delimiterIndex <= 0 ) {
     return false;
   }
 
   const delimiterLine = documentLines[ delimiterIndex ]!;
   const headerLine = documentLines[ delimiterIndex - 1 ]!;
+
   if (
     !lineCanStartTable( headerLine ) ||
     !lineCanBeTableDelimiterCandidate( delimiterLine ) ||
@@ -140,14 +149,17 @@ function parseTableRow(
   line: LiveMarkdownBlock
 ): LiveMarkdownTableRow | undefined {
   const bounds = trimmedBounds( line.source );
+
   if ( !bounds || !line.source.includes( '|' ) ) {
     return undefined;
   }
 
   let { from, to } = bounds;
+
   if ( line.source[ from ] === '|' ) {
     from += 1;
   }
+
   if ( to > from && line.source[ to - 1 ] === '|' && line.source[ to - 2 ] !== '\\' ) {
     to -= 1;
   }
@@ -158,30 +170,37 @@ function parseTableRow(
 
   for ( let index = from; index < to; index += 1 ) {
     const character = line.source[ index ]!;
+
     if ( character === '\\' && line.source[ index + 1 ] === '|' ) {
       index += 1;
 
       continue;
     }
+
     if ( character === '`' ) {
       let runLength = 1;
+
       while ( line.source[ index + runLength ] === '`' ) {
         runLength += 1;
       }
+
       if ( !codeDelimiterLength ) {
         codeDelimiterLength = runLength;
       } else if ( codeDelimiterLength === runLength ) {
         codeDelimiterLength = 0;
       }
+
       index += runLength - 1;
 
       continue;
     }
+
     if ( character === '|' && !codeDelimiterLength ) {
       cellRanges.push({ from: cellFrom, to: index });
       cellFrom = index + 1;
     }
   }
+
   cellRanges.push({ from: cellFrom, to });
 
   const cells = cellRanges.map( ( range ) => {
@@ -212,11 +231,13 @@ function trimmedBounds(
   source: string
 ): { from: number; to: number } | undefined {
   const from = source.search( /\S/ );
+
   if ( from < 0 ) {
     return undefined;
   }
 
   let to = source.length;
+
   while ( to > from && /\s/.test( source[ to - 1 ]! ) ) {
     to -= 1;
   }
@@ -230,9 +251,11 @@ function trimCellRange(
 ): { from: number; to: number } {
   const originalFrom = range.from;
   let { from, to } = range;
+
   while ( from < to && /\s/.test( source[ from ]! ) ) {
     from += 1;
   }
+
   while ( to > from && /\s/.test( source[ to - 1 ]! ) ) {
     to -= 1;
   }
@@ -252,6 +275,7 @@ function trimCellLeadingPadding(
 ): { from: number; to: number } {
   let { from } = range;
   const { to } = range;
+
   if ( from < to && /\s/.test( source[ from ]! ) ) {
     from += 1;
   }
@@ -265,9 +289,11 @@ function tableAlignment(
   if ( source.startsWith( ':' ) && source.endsWith( ':' ) ) {
     return 'center';
   }
+
   if ( source.endsWith( ':' ) ) {
     return 'right';
   }
+
   if ( source.startsWith( ':' ) ) {
     return 'left';
   }

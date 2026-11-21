@@ -15,14 +15,17 @@ export function minimalDocumentChange(
   current: string,
   next: string
 ): { from: number; to: number; insert: string } {
+  // trim matching ends so external updates preserve unaffected selections and history
   let from = 0;
   const sharedLength = Math.min( current.length, next.length );
+
   while ( from < sharedLength && current[ from ] === next[ from ]) {
     from += 1;
   }
 
   let currentTo = current.length;
   let nextTo = next.length;
+
   while (
     currentTo > from &&
     nextTo > from &&
@@ -75,14 +78,19 @@ export function restorableEditorHistory(
   if ( !snapshot ) {
     return undefined;
   }
+
   if ( snapshot.doc === editableDocument.body ) {
     return snapshot;
   }
+
   const savedMarkdown = joinLeadingFrontmatter( snapshot.prefix, snapshot.doc );
+
   if ( savedMarkdown !== normalizedMarkdown ) {
     return undefined;
   }
+
   const savedBodyStart = markdownBodyStart( snapshot.prefix, snapshot.doc );
+
   const hidingEditedFrontmatter = savedBodyStart === 0
     && editableDocument.bodyStart > 0
     && snapshot.frontmatterHistoryChanged;
@@ -109,6 +117,7 @@ export function changeTouchesLeadingFrontmatter( update: ViewUpdate ): boolean {
   const previousEnd = leadingFrontmatterEnd( update.startState.doc.toString() ) ?? 0;
   const nextEnd = leadingFrontmatterEnd( update.state.doc.toString() ) ?? 0;
   let touchesFrontmatter = previousEnd !== nextEnd;
+
   update.changes.iterChangedRanges( ( fromA, _toA, fromB ) => {
     if ( fromA < previousEnd || fromB < nextEnd ) {
       touchesFrontmatter = true;

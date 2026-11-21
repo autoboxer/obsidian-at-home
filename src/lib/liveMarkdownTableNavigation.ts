@@ -1,9 +1,6 @@
 import type { LiveMarkdownTextEdit } from './liveMarkdown';
 import { parseLiveMarkdownTables } from './liveMarkdownTable';
-import type {
-  LiveMarkdownTable,
-  LiveMarkdownTableRow
-} from './liveMarkdownTable';
+import type { LiveMarkdownTable, LiveMarkdownTableRow } from './liveMarkdownTable';
 
 export type LiveMarkdownTableNavigation =
   | 'down-row'
@@ -12,7 +9,7 @@ export type LiveMarkdownTableNavigation =
   | 'up-row';
 
 export interface LiveMarkdownTableEdit {
-  // Preserve the source location when batching edits to identical rows.
+  // preserve the source location when batching edits to identical rows
   change?: LiveMarkdownTextEdit;
   value: string;
   selectionStart: number;
@@ -43,11 +40,13 @@ export function navigateLiveMarkdownTable(
   navigation: LiveMarkdownTableNavigation
 ): LiveMarkdownTableEdit | undefined {
   const table = tableContainingPosition( tables, position );
+
   if ( !table ) {
     return undefined;
   }
 
   const location = locateTableCell( table, position );
+
   if ( !location ) {
     return undefined;
   }
@@ -77,11 +76,13 @@ export function insertLiveMarkdownTableRow(
   position: number
 ): LiveMarkdownTableEdit | undefined {
   const table = tableContainingPosition( tables, position );
+
   if ( !table ) {
     return undefined;
   }
 
   const location = locateTableCell( table, position );
+
   if ( !location ) {
     return undefined;
   }
@@ -89,10 +90,12 @@ export function insertLiveMarkdownTableRow(
   const rowIndex = location.role === 'delimiter' || location.rowIndex === 0
     ? 0
     : location.rowIndex;
+
   const change = insertEmptyTableRow( value, table, rowIndex );
   const nextValue = applyTableChange( value, change );
   const nextTable = reparsedTable( nextValue, table );
   const targetCell = nextTable?.rows[ rowIndex ]?.cells[ 0 ];
+
   if ( !targetCell ) {
     return undefined;
   }
@@ -111,11 +114,13 @@ export function deleteEmptyLiveMarkdownTableRow(
   position: number
 ): LiveMarkdownTableEdit | undefined {
   const table = tableContainingPosition( tables, position );
+
   if ( !table ) {
     return undefined;
   }
 
   const location = locateTableCell( table, position );
+
   if (
     !location ||
     location.role !== 'editable' ||
@@ -127,6 +132,7 @@ export function deleteEmptyLiveMarkdownTableRow(
 
   const row = table.rows[ location.rowIndex - 1 ];
   const firstCell = row?.cells[ 0 ];
+
   if (
     !row ||
     !firstCell ||
@@ -140,10 +146,13 @@ export function deleteEmptyLiveMarkdownTableRow(
   const previousRow = location.rowIndex === 1
     ? table.header
     : table.rows[ location.rowIndex - 2 ];
+
   const previousCell = previousRow?.cells[ table.columnCount - 1 ];
+
   const precedingSourceRow = location.rowIndex === 1
     ? table.delimiter
     : table.rows[ location.rowIndex - 2 ];
+
   if ( !previousCell || !precedingSourceRow ) {
     return undefined;
   }
@@ -166,34 +175,43 @@ export function insertLiveMarkdownTableLineBreak(
   head: number
 ): LiveMarkdownTableEdit | undefined {
   const table = tableContainingPosition( tables, head );
+
   if ( !table ) {
     return undefined;
   }
 
   const location = locateTableCell( table, head );
+
   if ( !location || location.role !== 'editable' ) {
     return undefined;
   }
 
   const rows = [ table.header, ...table.rows ];
   const cell = rows[ location.rowIndex ]?.cells[ location.columnIndex ];
+
   if ( !cell ) {
     return undefined;
   }
 
   const anchorLocation = locateTableCell( table, anchor );
+
   const selectionStaysInCell = anchorLocation
     && sameCellLocation( anchorLocation, location );
+
   const selectionStart = selectionStaysInCell
     ? clampToCell( Math.min( anchor, head ), cell )
     : clampToCell( head, cell );
+
   const selectionEnd = selectionStaysInCell
     ? clampToCell( Math.max( anchor, head ), cell )
     : selectionStart;
+
   const lineBreak = '<br>';
+
   const nextValue = `${ value.slice( 0, selectionStart ) }${ lineBreak }${
     value.slice( selectionEnd )
   }`;
+
   const cursor = selectionStart + lineBreak.length;
 
   return {
@@ -227,23 +245,27 @@ export function moveAcrossLiveMarkdownTableCellBoundary(
   direction: LiveMarkdownTableHorizontalDirection
 ): LiveMarkdownTableCursorTarget | undefined {
   const table = tableContainingPosition( tables, position );
+
   if ( !table ) {
     return undefined;
   }
 
   const location = locateTableCell( table, position );
+
   if ( !location || location.role !== 'editable' ) {
     return undefined;
   }
 
   const row = [ table.header, ...table.rows ][ location.rowIndex ];
   const cell = row?.cells[ location.columnIndex ];
+
   if ( !row || !cell ) {
     return undefined;
   }
 
   if ( direction === 'right' ) {
     const paddingFrom = trailingTableCellPaddingFrom( value, cell );
+
     if (
       position !== cell.editableTo &&
       ( paddingFrom === undefined || position !== paddingFrom )
@@ -266,6 +288,7 @@ export function moveAcrossLiveMarkdownTableCellBoundary(
   }
 
   const previousCell = row.cells[ location.columnIndex - 1 ];
+
   if ( !previousCell ) {
     return { assoc: 1, position: cell.from };
   }
@@ -282,11 +305,13 @@ export function liveMarkdownTableCellTextBounds(
   position: number
 ): LiveMarkdownTableCellTextBounds | undefined {
   const table = tableContainingPosition( tables, position );
+
   if ( !table ) {
     return undefined;
   }
 
   const location = locateTableCell( table, position );
+
   if ( !location || location.role !== 'editable' ) {
     return undefined;
   }
@@ -327,11 +352,13 @@ function moveVertically(
   if ( !down && location.rowIndex === 0 ) {
     return undefined;
   }
+
   if ( down && location.rowIndex === table.rows.length ) {
     return moveBelowTable( value, table );
   }
 
   const currentCell = tableCellAtLocation( table, location );
+
   if ( !currentCell ) {
     return undefined;
   }
@@ -376,9 +403,11 @@ function locateTableCell(
   }
 
   const editableRows = [ table.header, ...table.rows ];
+
   const rowIndex = editableRows.findIndex( ( row ) =>
     position >= row.from && position <= row.to
   );
+
   if ( rowIndex < 0 ) {
     return undefined;
   }
@@ -432,6 +461,7 @@ function adjacentCellTarget(
   const flatIndex = location.rowIndex * table.columnCount +
     location.columnIndex +
     ( previous ? -1 : 1 );
+
   const targetIndex = Math.max( 0, flatIndex );
 
   return {
@@ -456,29 +486,36 @@ function moveToTableCell(
     change = appendEmptyTableRow( nextValue, nextTable );
     nextValue = applyTableChange( nextValue, change );
     const reparsed = reparsedTable( nextValue, table );
+
     if ( !reparsed ) {
       return undefined;
     }
+
     nextTable = reparsed;
     editableRows = [ nextTable.header, ...nextTable.rows ];
   }
 
   let targetRow = editableRows[ rowIndex ];
+
   if ( !targetRow ) {
     return undefined;
   }
+
   if ( !targetRow.cells[ columnIndex ]) {
     change = expandTableRow( nextValue, nextTable, targetRow );
     nextValue = applyTableChange( nextValue, change );
     const reparsed = reparsedTable( nextValue, table );
+
     if ( !reparsed ) {
       return undefined;
     }
+
     nextTable = reparsed;
     targetRow = [ nextTable.header, ...nextTable.rows ][ rowIndex ];
   }
 
   const targetCell = targetRow?.cells[ columnIndex ];
+
   if ( !targetCell ) {
     return undefined;
   }
@@ -489,6 +526,7 @@ function moveToTableCell(
       targetCell.editableFrom + selectionOffset,
       targetCell.editableTo
     );
+
   const selectionEnd = selectionOffset === undefined
     ? targetCell.to
     : selectionStart;
@@ -506,6 +544,7 @@ function moveBelowTable(
   table: LiveMarkdownTable
 ): LiveMarkdownTableEdit {
   const lastRow = table.rows.at( -1 ) ?? table.delimiter;
+
   if ( lastRow.end > lastRow.to ) {
     return {
       value,
@@ -530,6 +569,7 @@ function insertEmptyTableRow(
   rowIndex: number
 ): LiveMarkdownTextEdit {
   const nextRow = table.rows[ rowIndex ];
+
   if ( !nextRow ) {
     return appendEmptyTableRow( value, table );
   }
@@ -547,6 +587,7 @@ function appendEmptyTableRow(
   const lastRow = table.rows.at( -1 ) ?? table.delimiter;
   const row = emptyTableRow( value, table );
   const existingLineEnding = value.slice( lastRow.to, lastRow.end );
+
   if ( existingLineEnding ) {
     return { from: lastRow.end, to: lastRow.end, insert: `${ row }${ existingLineEnding }` };
   }
@@ -573,6 +614,7 @@ function expandTableRow(
     { length: table.columnCount },
     ( _, index ) => row.cells[ index ]?.source ?? ''
   );
+
   const source = value.slice( row.from, row.to );
   const replacement = formatTableRow( cells, source );
 
@@ -583,9 +625,11 @@ function formatTableRow( cells: readonly string[], example: string ): string {
   const indentation = example.match( /^\s*/ )?.[ 0 ] ?? '';
   const trimmed = example.trim();
   const leadingPipe = trimmed.startsWith( '|' ) || !cells[ 0 ];
+
   const trailingPipe = (
     trimmed.endsWith( '|' ) && trimmed.at( -2 ) !== '\\'
   ) || !cells.at( -1 );
+
   const content = cells.join( ' | ' );
 
   return `${ indentation }${ leadingPipe ? '| ' : '' }${ content }${
@@ -599,6 +643,7 @@ function preferredLineEnding(
 ): string {
   for ( const row of [ table.header, table.delimiter, ...table.rows ]) {
     const lineEnding = value.slice( row.to, row.end );
+
     if ( lineEnding ) {
       return lineEnding;
     }
@@ -607,6 +652,7 @@ function preferredLineEnding(
   if ( value.includes( '\r\n' ) ) {
     return '\r\n';
   }
+
   if ( value.includes( '\r' ) ) {
     return '\r';
   }

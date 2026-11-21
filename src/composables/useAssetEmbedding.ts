@@ -1,18 +1,6 @@
-import {
-  onBeforeUnmount,
-  ref,
-  watch,
-  type Ref
-} from 'vue';
-import {
-  imageAltFromPath,
-  isSupportedImageFileName,
-  pastedImageFileName
-} from '../lib/imageEmbeds';
-import {
-  formatMarkdownImage,
-  relativeImageDestination
-} from '../lib/markdownImages';
+import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
+import { imageAltFromPath, isSupportedImageFileName, pastedImageFileName } from '../lib/imageEmbeds';
+import { formatMarkdownImage, relativeImageDestination } from '../lib/markdownImages';
 import {
   attachmentLabelFromPath,
   formatMarkdownAttachment,
@@ -120,11 +108,13 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( signal.aborted ) {
       throw new DOMException( 'The dropped-file transfer was cancelled.', 'AbortError' );
     }
+
     if ( !( await flushVault() ) ) {
       throw new Error(
         vaultSession.error || 'Save the note before finishing the file drop.'
       );
     }
+
     if (
       !assetEmbedContextIsCurrent( context )
       || signal.aborted
@@ -140,6 +130,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( typeof error === 'string' && error.trim() ) {
       return error;
     }
+
     if ( error instanceof Error && error.message.trim() ) {
       return error.message;
     }
@@ -153,7 +144,11 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     const note = vaultState.notes.find( ( candidate ) => candidate.id === capture.noteId );
     const vaultPath = vaultSession.backend === 'native' ? vaultSession.path : null;
     const editor = sourceEditor.value;
-    if ( !canEditVault.value || !nativeAvailable || !note || !vaultPath || !editor || activeNote.value?.id !== note.id ) {
+
+    if (
+      !canEditVault.value || !nativeAvailable || !note || !vaultPath ||
+      !editor || activeNote.value?.id !== note.id
+    ) {
       return undefined;
     }
 
@@ -183,18 +178,23 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     options: StoreAndInsertOptions = {}
   ): Promise<boolean> {
     const context = assetEmbedContext( capture );
+
     if ( !context ) {
       throw new Error( 'Images can be embedded into an open note in a desktop vault.' );
     }
+
     if ( !( await flushVault() ) ) {
       throw new Error(
         vaultSession.error || 'Save the current note before embedding an image.'
       );
     }
+
     if ( !assetEmbedContextIsCurrent( context ) ) {
       throw new Error( 'The note or vault changed before the image could be embedded.' );
     }
+
     context.noteRelativePath = context.note.relativePath;
+
     if ( !context.noteRelativePath ) {
       throw new Error(
         'The note does not have a saved file path for the embedded image.'
@@ -202,16 +202,20 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     }
 
     const result = await embed( context, vaultSession.revision );
+
     if ( !assetEmbedContextIsCurrent( context ) ) {
       await retainOrDiscardFailedImage( context, result, options );
       throw new Error( 'The note or vault changed before the image could be inserted.' );
     }
+
     const selectedAlt = capture.selectedText.trim();
+
     const alt = selectedAlt
       && !/[\r\n]/.test( selectedAlt )
       && selectedAlt.length <= 240
       ? selectedAlt
       : imageAltFromPath( result.image.relativePath );
+
     const markdownImage = `${ options.markdownPrefix ?? '' }${ formatMarkdownImage({
       alt,
       assetId: result.image.id,
@@ -221,12 +225,15 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       ),
       inTable: capture.inTable
     }) }`;
+
     const inserted = context.editor.insertEmbeddedImage(
       capture,
       markdownImage
     );
+
     if ( !inserted ) {
       const discarded = await retainOrDiscardFailedImage( context, result, options );
+
       notify(
         discarded
           ? 'The image reference could not be inserted, so its unused stored copy was removed.'
@@ -236,6 +243,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
       return false;
     }
+
     applyEmbeddedImageResult( result );
 
     if ( result.warnings.length ) {
@@ -259,6 +267,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
       return false;
     }
+
     try {
       const cleanup = await options.cleanupFailedInsertion(
         context,
@@ -266,6 +275,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
         result.image.relativePath,
         result.revision
       );
+
       if ( vaultSession.path === context.vaultPath ) {
         if ( cleanup.discarded ) {
           applyExternalAssetDiscardResult( cleanup );
@@ -293,31 +303,40 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     if ( imageEmbedBusy.value || attachmentEmbedBusy.value ) {
       sourceEditor.value?.cancelImageInsertion( capture );
+
       notify( 'Wait for the current image to finish embedding.', 'warning' );
 
       return;
     }
 
     imageEmbedBusy.value = true;
+
     try {
       const context = assetEmbedContext( capture );
+
       if ( !context ) {
         throw new Error( 'Images can be embedded into an open note in a desktop vault.' );
       }
+
       if ( !( await flushVault() ) ) {
         throw new Error(
           vaultSession.error || 'Save the current note before embedding an image.'
         );
       }
+
       const sourcePath = await pickImageFile();
+
       if ( !sourcePath ) {
         return;
       }
+
       if ( !assetEmbedContextIsCurrent( context ) ) {
         throw new Error( 'The note or vault changed before the image could be embedded.' );
       }
+
       await storeAndInsertImage( capture, ( current, expectedRevision ) =>
         embedWorkspaceImageFile(
           current.vaultPath,
@@ -342,26 +361,34 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     if ( imageEmbedBusy.value || attachmentEmbedBusy.value ) {
       sourceEditor.value?.cancelImageInsertion( capture );
+
       notify( 'Wait for the current image to finish embedding.', 'warning' );
 
       return;
     }
 
     imageEmbedBusy.value = true;
+
     try {
       const context = assetEmbedContext( capture );
+
       if ( !context ) {
         return;
       }
+
       const bytes = file
         ? new Uint8Array( await file.arrayBuffer() )
         : await readClipboardImagePng();
+
       if ( !assetEmbedContextIsCurrent( context ) ) {
         throw new Error( 'The note or vault changed before the image could be embedded.' );
       }
+
       const fileName = file?.name?.trim() || pastedImageFileName();
+
       await storeAndInsertImage( capture, ( context, expectedRevision ) =>
         embedWorkspaceImageBytes(
           context.vaultPath,
@@ -387,14 +414,17 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     if ( imageEmbedBusy.value || attachmentEmbedBusy.value ) {
       sourceEditor.value?.cancelImageInsertion( capture );
+
       notify( 'Wait for the current image to finish embedding.', 'warning' );
 
       return;
     }
 
     imageEmbedBusy.value = true;
+
     try {
       await storeAndInsertImage( capture, ( context, expectedRevision ) =>
         embedWorkspaceVaultImage(
@@ -417,7 +447,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     const capture = sourceEditor.value?.captureImageInsertion();
+
     if ( capture ) {
       void embedImageFromFile( capture );
     }
@@ -432,33 +464,42 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     options: StoreAndInsertOptions = {}
   ): Promise<boolean> {
     const context = assetEmbedContext( capture );
+
     if ( !context ) {
       throw new Error( 'Files can be embedded into an open note in a desktop vault.' );
     }
+
     if ( !( await flushVault() ) ) {
       throw new Error(
         vaultSession.error || 'Save the current note before embedding a file.'
       );
     }
+
     if ( !assetEmbedContextIsCurrent( context ) ) {
       throw new Error( 'The note or vault changed before the file could be embedded.' );
     }
+
     context.noteRelativePath = context.note.relativePath;
+
     if ( !context.noteRelativePath ) {
       throw new Error( 'The note does not have a saved file path for the embedded file.' );
     }
 
     const result = await embed( context, vaultSession.revision );
+
     if ( !assetEmbedContextIsCurrent( context ) ) {
       await retainOrDiscardFailedAttachment( context, result, options );
       throw new Error( 'The note or vault changed before the file could be inserted.' );
     }
+
     const selectedLabel = capture.selectedText.trim();
+
     const label = selectedLabel
       && !/[\r\n]/.test( selectedLabel )
       && selectedLabel.length <= 240
       ? selectedLabel
       : attachmentLabelFromPath( result.attachment.relativePath );
+
     const markdownAttachment = `${ options.markdownPrefix ?? '' }${ formatMarkdownAttachment({
       label,
       assetId: result.attachment.id,
@@ -468,16 +509,19 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       ),
       inTable: capture.inTable
     }) }`;
+
     const inserted = context.editor.insertEmbeddedAttachment(
       capture,
       markdownAttachment
     );
+
     if ( !inserted ) {
       const discarded = await retainOrDiscardFailedAttachment(
         context,
         result,
         options
       );
+
       notify(
         discarded
           ? 'The file reference could not be inserted, so its unused stored copy was removed.'
@@ -487,6 +531,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
       return false;
     }
+
     applyEmbeddedAttachmentResult( result );
 
     if ( result.warnings.length ) {
@@ -513,6 +558,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
       return false;
     }
+
     try {
       const cleanup = await options.cleanupFailedInsertion(
         context,
@@ -520,6 +566,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
         result.attachment.relativePath,
         result.revision
       );
+
       if ( vaultSession.path === context.vaultPath ) {
         if ( cleanup.discarded ) {
           applyExternalAssetDiscardResult( cleanup );
@@ -549,26 +596,34 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     if ( attachmentEmbedBusy.value || imageEmbedBusy.value ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
+
       notify( 'Wait for the current file to finish embedding.', 'warning' );
 
       return;
     }
 
     attachmentEmbedBusy.value = true;
+
     try {
       const context = assetEmbedContext( capture );
+
       if ( !context ) {
         throw new Error( 'Files can be embedded into an open note in a desktop vault.' );
       }
+
       const sourcePath = await pickAttachmentFile();
+
       if ( !sourcePath ) {
         return;
       }
+
       if ( !assetEmbedContextIsCurrent( context ) ) {
         throw new Error( 'The note or vault changed before the file could be embedded.' );
       }
+
       await storeAndInsertAttachment( capture, ( current, expectedRevision ) =>
         embedWorkspaceAttachmentFile(
           current.vaultPath,
@@ -593,14 +648,17 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     if ( attachmentEmbedBusy.value || imageEmbedBusy.value ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
+
       notify( 'Wait for the current file to finish embedding.', 'warning' );
 
       return;
     }
 
     attachmentEmbedBusy.value = true;
+
     try {
       await storeAndInsertAttachment( capture, ( context, expectedRevision ) =>
         embedWorkspaceVaultAttachment(
@@ -627,14 +685,18 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     if ( attachmentEmbedBusy.value || imageEmbedBusy.value ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
+
       notify( 'Wait for the current file to finish embedding.', 'warning' );
 
       return;
     }
+
     if ( !files.length ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
+
       notify(
         rejectedCount
           ? 'Folders and unavailable items cannot be embedded.'
@@ -644,15 +706,19 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
 
       return;
     }
+
     const initialContext = assetEmbedContext( capture );
+
     if ( !initialContext ) {
       sourceEditor.value?.cancelAttachmentInsertion( capture );
+
       notify( 'Drop files into an open note in a desktop vault.', 'warning' );
 
       return;
     }
 
     const controller = new AbortController();
+
     externalFileDropAbort?.abort();
     externalFileDropAbort = controller;
     attachmentEmbedBusy.value = true;
@@ -662,6 +728,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     let currentCapture: AssetInsertionCapture | undefined = capture;
     let embeddedCount = 0;
     let failedCount = rejectedCount;
+
     const errors: string[] = rejectedCount
       ? [ `${ rejectedCount } folder${ rejectedCount === 1 ? ' or item was' : 's or items were' } skipped.` ]
       : [];
@@ -669,11 +736,13 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     try {
       for ( let index = 0; index < files.length && currentCapture; index += 1 ) {
         const file = files[ index ]!;
+
         const options: StoreAndInsertOptions = {
           announce: false,
           cleanupFailedInsertion: cleanupFailedExternalInsertion,
           ...( embeddedCount ? { markdownPrefix: ' ' } : {})
         };
+
         try {
           const inserted = isSupportedImageFileName( file.name )
             ? await storeAndInsertImage(
@@ -702,16 +771,19 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
               ),
               options
             );
+
           if ( !inserted ) {
             failedCount += 1;
             errors.push( 'A stored file could not be inserted into the note.' );
             currentCapture = undefined;
             break;
           }
+
           embeddedCount += 1;
           currentCapture = index + 1 < files.length
             ? sourceEditor.value?.captureAttachmentInsertion()
             : undefined;
+
           if ( index + 1 < files.length && !currentCapture ) {
             failedCount += files.length - index - 1;
             errors.push( 'The remaining files could not retain their drop position.' );
@@ -722,6 +794,7 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
             error,
             'The file could not be embedded.'
           ) }` );
+
           if (
             controller.signal.aborted
             || !currentCapture
@@ -735,9 +808,11 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
       if ( currentCapture ) {
         sourceEditor.value?.cancelAttachmentInsertion( currentCapture );
       }
+
       if ( externalFileDropAbort === controller ) {
         externalFileDropAbort = undefined;
       }
+
       attachmentEmbedBusy.value = false;
       imageEmbedBusy.value = false;
     }
@@ -768,7 +843,9 @@ export function useAssetEmbedding<T extends AssetEmbeddingEditor>(
     if ( !canEditVault.value ) {
       return;
     }
+
     const capture = sourceEditor.value?.captureAttachmentInsertion();
+
     if ( capture ) {
       void embedAttachmentFromFile( capture );
     }

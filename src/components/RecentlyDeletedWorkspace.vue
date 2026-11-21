@@ -18,8 +18,10 @@ const dateTimeFormatter = new Intl.DateTimeFormat( undefined, {
   dateStyle: 'medium',
   timeStyle: 'short'
 });
+
 const visibleCount = ref( PAGE_SIZE );
 const workspaceRoot = ref<HTMLElement>();
+
 const pendingAction = ref<{
   id: string | null;
   type: 'restore' | 'delete' | 'empty';
@@ -33,7 +35,9 @@ async function restore( entry: RecentlyDeletedNote ): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   pendingAction.value = { id: entry.id, type: 'restore' };
+
   try {
     await restoreRecentlyDeletedNote( entry.id );
   } finally {
@@ -45,24 +49,31 @@ async function permanentlyDelete( entry: RecentlyDeletedNote ): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   const title = displayTitle( entry );
+
   const confirmed = window.confirm(
     `Permanently delete “${ title }”? This cannot be undone.`
   );
+
   if ( !confirmed ) {
     return;
   }
 
   const deletedIndex = visibleEntries.value.findIndex( ( candidate ) => candidate.id === entry.id );
+
   pendingAction.value = { id: entry.id, type: 'delete' };
+
   try {
     const deleted = await permanentlyDeleteRecentlyDeletedNote( entry.id );
+
     if ( !deleted ) {
       return;
     }
 
     await nextTick();
     const nextEntry = visibleEntries.value[ Math.min( deletedIndex, visibleEntries.value.length - 1 ) ];
+
     if ( nextEntry ) {
       workspaceRoot.value
         ?.querySelector<HTMLButtonElement>( `[data-recovery-id="${ nextEntry.id }"] [data-recovery-action="restore"]` )
@@ -77,16 +88,20 @@ async function emptyRecentlyDeleted(): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   const count = recentlyDeletedNotes.value.length;
   const noun = count === 1 ? 'note' : 'notes';
+
   const confirmed = window.confirm(
     `Permanently delete ${ count } ${ noun } from Recently Deleted? This cannot be undone.`
   );
+
   if ( !confirmed ) {
     return;
   }
 
   pendingAction.value = { id: null, type: 'empty' };
+
   try {
     await emptyRecentlyDeletedNotes();
   } finally {

@@ -1,18 +1,13 @@
 import { addCursorAbove, addCursorBelow } from '@codemirror/commands';
 import { EditorSelection, EditorState } from '@codemirror/state';
-import {
-  EditorView,
-  keymap,
-  rectangularSelection,
-  ViewPlugin
-} from '@codemirror/view';
+import { EditorView, keymap, rectangularSelection, ViewPlugin } from '@codemirror/view';
 import type { ChangeSet, Extension, SelectionRange } from '@codemirror/state';
 import type { Command } from '@codemirror/view';
 import type { LiveMarkdownTextEdit } from './liveMarkdown';
 
 export interface MultiCursorEdit {
   changes: readonly LiveMarkdownTextEdit[];
-  // Like changeByRange, this range is relative to this edit's own result.
+  // like changeByRange, this range is relative to this edit's own result
   range: SelectionRange;
 }
 
@@ -21,18 +16,24 @@ export function multiCursorChanges(
   edits: readonly MultiCursorEdit[]
 ): { changes: ChangeSet; selection: EditorSelection } | undefined {
   const key = ( change: LiveMarkdownTextEdit ): string => JSON.stringify([ change.from, change.to, change.insert ]);
+
   const unique = new Map( edits.flatMap( ( edit ) => edit.changes )
     .filter( ( change ) => change.from !== change.to || change.insert )
     .map( ( change ) => [ key( change ), change ]) );
+
   const ordered = [ ...unique.values() ].sort( ( a, b ) => a.from - b.from || a.to - b.to );
+  // overlapping deletions share one edit; conflicting insertions need a single owner
   const merged: { change: LiveMarkdownTextEdit; keys: string[] }[] = [];
+
   for ( const change of ordered ) {
     const previous = merged.at( -1 );
+
     if ( previous && ( previous.change.to > change.from || previous.change.from === change.from ) ) {
       if ( previous.change.insert || change.insert ) {
-        // Conflicting structural edits cannot be applied independently.
+        // conflicting structural edits cannot be applied independently
         return undefined;
       }
+
       previous.change.to = Math.max( previous.change.to, change.to );
       previous.keys.push( key( change ) );
     } else {
@@ -43,30 +44,41 @@ export function multiCursorChanges(
   const changes = state.changes( merged.map( ( item ) => item.change ) );
   const starts = new Map<string, number>();
   let offset = 0;
+
   for ( const { change, keys } of merged ) {
     for ( const id of keys ) {
       starts.set( id, change.from + offset );
     }
+
     offset += change.insert.length - ( change.to - change.from );
   }
+
   const ranges = edits.map( ( edit ) => {
     const ownChanges = [ ...edit.changes ].sort( ( a, b ) => a.from - b.from || a.to - b.to );
+
+    // remove this cursor's local offsets before mapping through the combined edit
     const mapPosition = ( position: number, assoc: number ): number => {
       let ownOffset = 0;
+
       for ( const change of ownChanges ) {
         const start = change.from + ownOffset;
+
         if ( position < start ) {
           break;
         }
+
         const mappedStart = starts.get( key( change ) );
+
         if ( mappedStart !== undefined && position <= start + change.insert.length ) {
           return mappedStart + position - start;
         }
+
         ownOffset += change.insert.length - ( change.to - change.from );
       }
 
       return changes.mapPos( position - ownOffset, assoc );
     };
+
     const { range } = edit;
     const head = mapPosition( range.head, range.assoc || 1 );
 
@@ -91,15 +103,19 @@ function selectNextMatch( view: EditorView, matchCase: boolean ): boolean {
   if ( view.composing ) {
     return false;
   }
+
   const { state } = view;
   const selection = state.selection;
+
   if ( selection.ranges.some( ( range ) => range.empty ) ) {
     const ranges = selection.ranges.map( ( range ) =>
       range.empty ? state.wordAt( range.head ) ?? range : range
     );
+
     if ( ranges.some( ( range, index ) => range !== selection.ranges[ index ]) ) {
       return selectRanges( view, ranges, selection.mainIndex );
     }
+
     if ( selection.main.empty ) {
       return true;
     }
@@ -107,18 +123,23 @@ function selectNextMatch( view: EditorView, matchCase: boolean ): boolean {
 
   const text = state.sliceDoc( selection.main.from, selection.main.to );
   const document = state.doc.toString();
-  // Search past the main range first, then wrap. Skip overlaps so adding a
-  // match never merges or changes an existing selection.
+
+  // search past the main range first, then wrap. Skip overlaps so adding a
+  // match never merges or changes an existing selection
   for ( const [ start, end ] of [[ selection.main.to, document.length ], [ 0, selection.main.from ]]) {
     let index = 0;
+
     for ( const match of matchingOccurrences( document, text, matchCase, start, end, true ) ) {
       while ( index < selection.ranges.length && selection.ranges[ index ]!.to <= match.from ) {
         index += 1;
       }
+
       const next = selection.ranges[ index ];
+
       if ( next && next.from < match.to ) {
         continue;
       }
+
       view.dispatch({
         selection: selection.addRange( match ),
         scrollIntoView: true,
@@ -139,9 +160,11 @@ function selectAllMatches( view: EditorView, matchCase: boolean ): boolean {
   if ( view.composing ) {
     return false;
   }
+
   const { state } = view;
   const main = state.selection.main;
   const target = main.empty ? state.wordAt( main.head ) : main;
+
   if ( !target || target.empty ) {
     return true;
   }
@@ -149,13 +172,17 @@ function selectAllMatches( view: EditorView, matchCase: boolean ): boolean {
   const text = state.sliceDoc( target.from, target.to );
   const document = state.doc.toString();
   const ranges: SelectionRange[] = [];
-  // Keep the original occurrence and direction, even when possible matches
-  // overlap it (for example, selecting the middle "aa" in "aaaa").
+
+  // keep the original occurrence and direction, even when possible matches
+  // overlap it (for example, selecting the middle "aa" in "aaaa")
   for ( const match of matchingOccurrences( document, text, matchCase, 0, target.from ) ) {
     ranges.push( match );
   }
+
   const mainIndex = ranges.length;
+
   ranges.push( target );
+
   for ( const match of matchingOccurrences( document, text, matchCase, target.to ) ) {
     ranges.push( match );
   }
@@ -172,16 +199,20 @@ function* matchingOccurrences(
   overlapping = false
 ): Generator<SelectionRange> {
   const literal = text.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' );
-  // Match original source offsets: lowercasing can change Unicode string lengths.
-  // Next-occurrence needs overlapping candidates when skipping occupied ranges.
-  // matchAll advances zero-width lookaheads by code point, including astral text.
+  // match original source offsets: lowercasing can change Unicode string lengths
+  // next-occurrence needs overlapping candidates when skipping occupied ranges
+  // matchAll advances zero-width lookaheads by code point, including astral text
   const expression = new RegExp( overlapping ? `(?=(${ literal }))` : literal, matchCase ? 'gu' : 'giu' );
+
   expression.lastIndex = from;
+
   for ( const match of document.matchAll( expression ) ) {
     if ( match.index >= to ) {
       break;
     }
+
     const end = match.index + match[ overlapping ? 1 : 0 ]!.length;
+
     if ( match.index >= from && end <= to ) {
       yield EditorSelection.range( match.index, end );
     }
@@ -200,6 +231,7 @@ const rectangularSelectionCursor = ViewPlugin.fromClass( class {
 
   set( event?: KeyboardEvent | MouseEvent ): void {
     const active = Boolean( event?.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey );
+
     if ( active !== this.active ) {
       this.active = active;
       this.view.update([]);
@@ -233,7 +265,7 @@ export const codeMirrorMultiCursorExtension: Extension = [
   EditorView.contentAttributes.of( ( view ) => view.plugin( rectangularSelectionCursor )?.active
     ? { style: 'cursor: crosshair' } : null ),
   keymap.of([
-    // Linux desktops commonly reserve Ctrl+Alt+arrows for workspace switching.
+    // linux desktops commonly reserve Ctrl+Alt+arrows for workspace switching
     { linux: 'Ctrl-Shift-ArrowUp', run: addCursorAbove, preventDefault: true },
     { linux: 'Ctrl-Shift-ArrowDown', run: addCursorBelow, preventDefault: true },
     { key: 'Mod-d', run: selectNextOccurrence, preventDefault: true },

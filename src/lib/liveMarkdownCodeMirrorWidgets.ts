@@ -20,23 +20,29 @@ const wikiLabelRanges = new WeakMap<HTMLElement, { from: number; to: number }>()
 export function wikiLinkPointerPosition( view: EditorView, event: MouseEvent ): number | undefined {
   const link = event.target instanceof Element
     ? event.target.closest<HTMLElement>( 'a[data-wiki-target]' ) : null;
+
   const source = link && view.dom.contains( link ) && wikiLabelRanges.get( link );
   const text = link?.firstChild;
+
   if ( !link || !source || !( text instanceof Text ) ) {
     return undefined;
   }
-  // A source edit can reuse the widget when its label and range stay the same.
+
+  // a source edit can reuse the widget when its label and range stay the same
   const offsets = wikiLinkDisplayOffsets( view.state.sliceDoc( source.from, source.to ) );
   const range = link.ownerDocument.createRange();
   let distance = Infinity;
   let position: number | undefined;
+
   for ( let index = 0; index < text.length; index += 1 ) {
     range.setStart( text, index );
     range.setEnd( text, index + 1 );
     const bounds = range.getBoundingClientRect();
     const y = Math.max( bounds.top - event.clientY, 0, event.clientY - bounds.bottom );
+
     for ( const [ offset, x ] of [[ index, bounds.left ], [ index + 1, bounds.right ]] as const ) {
       const score = ( x - event.clientX ) ** 2 + y ** 2;
+
       if ( score < distance ) {
         distance = score;
         position = source.from + offsets[ offset ]!;
@@ -47,7 +53,7 @@ export function wikiLinkPointerPosition( view: EditorView, event: MouseEvent ): 
   return position;
 }
 
-// Selection gestures and drop feedback belong to CodeMirror over widgets too.
+// selection gestures and drop feedback belong to CodeMirror over widgets too
 export abstract class LiveMarkdownWidget extends WidgetType {
   ignoreEvent( event: Event ): boolean {
     if ([ 'dragover', 'dragleave', 'dragend', 'drop' ].includes( event.type ) ) {
@@ -84,6 +90,7 @@ export class ListMarkerWidget extends LiveMarkdownWidget {
     const control = document.createElement( 'span' );
     const prefix = document.createElement( 'span' );
     const marker = document.createElement( 'span' );
+
     control.className = 'live-list-control';
     control.setAttribute( 'aria-hidden', 'true' );
     prefix.className = 'live-list-prefix';
@@ -127,6 +134,7 @@ export class TaskWidget extends LiveMarkdownWidget {
     const control = document.createElement( 'span' );
     const marker = document.createElement( 'span' );
     const checkbox = document.createElement( 'button' );
+
     control.className = 'live-task-control';
     marker.className = 'live-task-marker';
     marker.setAttribute( 'aria-hidden', 'true' );
@@ -140,9 +148,11 @@ export class TaskWidget extends LiveMarkdownWidget {
       this.checked ? 'Mark task incomplete' : 'Mark task complete'
     );
     checkbox.setAttribute( 'aria-pressed', String( this.checked ) );
+
     if ( this.checked ) {
       checkbox.append( createCheckIcon( document ) );
     }
+
     control.addEventListener( 'mousedown', ( event ) =>
       revealWidgetSource( view, control, event, this.from, this.to )
     );
@@ -157,9 +167,11 @@ export class TaskWidget extends LiveMarkdownWidget {
     checkbox.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+
       if ( isMultiCursorGesture( event ) ) {
         return;
       }
+
       view.dispatch({
         changes: {
           from: this.checkFrom,
@@ -195,6 +207,7 @@ export class QuoteMarkerWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const element = view.dom.ownerDocument.createElement( 'span' );
+
     element.className = 'live-quote-control';
     element.dataset.depth = String( Math.min( this.depth, 3 ) );
     element.setAttribute( 'aria-hidden', 'true' );
@@ -221,6 +234,7 @@ export class HorizontalRuleWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const element = view.dom.ownerDocument.createElement( 'span' );
+
     element.className = 'live-horizontal-rule';
     element.setAttribute( 'aria-hidden', 'true' );
     element.addEventListener( 'mousedown', ( event ) =>
@@ -272,6 +286,7 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const link = view.dom.ownerDocument.createElement( 'a' );
+
     link.className = [
       'live-inline-segment',
       'is-wiki-link',
@@ -283,12 +298,15 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
     link.textContent = this.display;
     wikiLabelRanges.set( link, { from: this.from, to: this.to });
     link.dataset.wikiTarget = this.target;
+
     if ( this.heading ) {
       link.dataset.wikiHeading = this.heading;
     }
+
     if ( this.embedded ) {
       link.dataset.embedded = 'true';
     }
+
     link.addEventListener( 'mousedown', ( event ) => {
       if (
         event.shiftKey || isMultiCursorGesture( event ) ||
@@ -302,16 +320,20 @@ export class WikiLinkWidget extends LiveMarkdownWidget {
       event.stopPropagation();
     });
     link.addEventListener( 'click', ( event ) => {
-      // Table-link activation is coordinated with selection by the editor.
+      // table-link activation is coordinated with selection by the editor
       if ( link.closest( '.live-table-cell' ) ) {
         return;
       }
+
       event.preventDefault();
       event.stopPropagation();
+
       if ( event.shiftKey || isMultiCursorGesture( event ) ) {
         return;
       }
+
       const target = this.target.trim();
+
       if ( target || this.heading ) {
         this.openWiki( target, this.heading );
       }
@@ -374,20 +396,24 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const document = view.dom.ownerDocument;
+
     const presentation = markdownAttachmentPresentation(
       this.attachment,
       this.metadata ?? undefined
     );
+
     const card = document.createElement( 'span' );
     const icon = document.createElement( 'span' );
     const copy = document.createElement( 'span' );
     const name = document.createElement( 'span' );
     const details = document.createElement( 'span' );
     const actions = document.createElement( 'span' );
+
     const archive = markdownAttachmentIsArchive(
       this.metadata?.relativePath ?? this.attachment.destination,
       this.metadata?.mediaType
     );
+
     const executable = markdownAttachmentIsExecutable(
       this.metadata?.relativePath ?? this.attachment.destination,
       this.metadata?.openingDisabled
@@ -412,8 +438,10 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
     details.textContent = `${ presentation.typeLabel } · ${ presentation.sizeLabel }`;
     copy.append( name, details );
     actions.className = 'attachment-card__actions';
+
     if ( !executable ) {
       const action = document.createElement( 'button' );
+
       action.className = 'attachment-card__action attachment-card__action--activate';
       action.type = 'button';
       action.textContent = archive ? 'Save archive as…' : 'Open';
@@ -431,13 +459,16 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
       action.addEventListener( 'click', ( event ) => {
         event.preventDefault();
         event.stopPropagation();
+
         if ( isMultiCursorGesture( event ) ) {
           return;
         }
+
         this.activateAttachment?.( this.attachment, this.metadata );
       });
       actions.append( action );
     }
+
     if ( this.revealAttachmentInTree ) {
       actions.append( createAttachmentLocationAction(
         document,
@@ -447,6 +478,7 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
         () => this.revealAttachmentInTree?.( this.attachment, this.metadata )
       ) );
     }
+
     if ( this.showAttachmentInFolder ) {
       actions.append( createAttachmentLocationAction(
         document,
@@ -456,11 +488,15 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
         () => this.showAttachmentInFolder?.( this.attachment, this.metadata )
       ) );
     }
+
     const renameTarget = this.metadata?.renameTarget;
+
     if ( !view.state.readOnly && renameTarget && this.renameAttachment ) {
       const rename = document.createElement( 'button' );
+
       const fileName = renameTarget.relativePath.split( '/' ).at( -1 )
         || presentation.name;
+
       rename.className = 'attachment-card__action attachment-card__action--rename';
       rename.type = 'button';
       rename.textContent = 'Rename';
@@ -476,24 +512,29 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
       rename.addEventListener( 'click', ( event ) => {
         event.preventDefault();
         event.stopPropagation();
+
         if ( isMultiCursorGesture( event ) ) {
           return;
         }
+
         const form = document.createElement( 'span' );
         const input = document.createElement( 'input' );
         const save = document.createElement( 'button' );
         const cancel = document.createElement( 'button' );
         let submitting = false;
+
         const restoreCard = () => {
           card.classList.remove( 'is-renaming' );
           card.removeAttribute( 'aria-busy' );
           card.replaceChildren( icon, copy, actions );
           rename.focus();
         };
+
         const resetFailedSubmission = () => {
           if ( !card.isConnected ) {
             return;
           }
+
           submitting = false;
           card.removeAttribute( 'aria-busy' );
           input.readOnly = false;
@@ -502,18 +543,23 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
           save.textContent = 'Save';
           input.focus();
         };
+
         const submitRename = () => {
           if ( submitting ) {
             return;
           }
+
           const requestedFileName = input.value;
+
           const normalizedNoOp = fileName === fileName.trim()
             && requestedFileName.trim() === fileName;
+
           if ( requestedFileName === fileName || normalizedNoOp ) {
             restoreCard();
 
             return;
           }
+
           submitting = true;
           card.setAttribute( 'aria-busy', 'true' );
           input.readOnly = true;
@@ -549,9 +595,11 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
         save.addEventListener( 'click', ( saveEvent ) => {
           saveEvent.preventDefault();
           saveEvent.stopPropagation();
+
           if ( isMultiCursorGesture( saveEvent ) ) {
             return;
           }
+
           submitRename();
         });
         cancel.className = 'attachment-card__action';
@@ -560,9 +608,11 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
         cancel.addEventListener( 'click', ( cancelEvent ) => {
           cancelEvent.preventDefault();
           cancelEvent.stopPropagation();
+
           if ( isMultiCursorGesture( cancelEvent ) ) {
             return;
           }
+
           if ( !submitting ) {
             restoreCard();
           }
@@ -578,6 +628,7 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
           if ( isMultiCursorGesture( formEvent ) ) {
             formEvent.preventDefault();
             formEvent.stopPropagation();
+
             return;
           }
 
@@ -587,6 +638,7 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
           if ( keyEvent.key === 'Escape' ) {
             keyEvent.preventDefault();
             keyEvent.stopPropagation();
+
             if ( !submitting ) {
               restoreCard();
             }
@@ -605,6 +657,7 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
         card.replaceChildren( icon, form );
         input.focus();
         const extensionStart = fileName.lastIndexOf( '.' );
+
         input.setSelectionRange(
           0,
           extensionStart > 0 ? extensionStart : fileName.length
@@ -612,10 +665,13 @@ export class MarkdownAttachmentWidget extends LiveMarkdownWidget {
       });
       actions.append( rename );
     }
+
     card.append( icon, copy );
+
     if ( actions.childElementCount ) {
       card.append( actions );
     }
+
     card.addEventListener( 'mousedown', ( event ) => {
       if ( isMultiCursorGesture( event ) ) {
         return;
@@ -642,6 +698,7 @@ function createAttachmentLocationAction(
   activate: () => void
 ): HTMLButtonElement {
   const button = document.createElement( 'button' );
+
   button.className = 'attachment-card__action attachment-card__action--icon';
   button.type = 'button';
   button.dataset.attachmentAction = actionName;
@@ -659,9 +716,11 @@ function createAttachmentLocationAction(
   button.addEventListener( 'click', ( event ) => {
     event.preventDefault();
     event.stopPropagation();
+
     if ( isMultiCursorGesture( event ) ) {
       return;
     }
+
     activate();
   });
 
@@ -674,6 +733,7 @@ function createAttachmentLocationIcon(
 ): SVGSVGElement {
   const namespace = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS( namespace, 'svg' );
+
   svg.classList.add( 'attachment-card__action-icon' );
   svg.setAttribute( 'width', '14' );
   svg.setAttribute( 'height', '14' );
@@ -684,23 +744,28 @@ function createAttachmentLocationIcon(
   svg.setAttribute( 'stroke-linecap', 'round' );
   svg.setAttribute( 'stroke-linejoin', 'round' );
   svg.setAttribute( 'aria-hidden', 'true' );
+
   if ( icon === 'vault' ) {
     const frame = document.createElementNS( namespace, 'rect' );
+
     frame.setAttribute( 'x', '3.5' );
     frame.setAttribute( 'y', '4' );
     frame.setAttribute( 'width', '17' );
     frame.setAttribute( 'height', '16' );
     frame.setAttribute( 'rx', '2' );
     const divider = document.createElementNS( namespace, 'path' );
+
     divider.setAttribute( 'd', 'M9 4v16' );
     svg.append( frame, divider );
   } else {
     const folder = document.createElementNS( namespace, 'path' );
+
     folder.setAttribute(
       'd',
       'M3.5 8V6.5A2.5 2.5 0 0 1 6 4h4l2 2h6a2.5 2.5 0 0 1 2.5 2.5V10'
     );
     const opening = document.createElementNS( namespace, 'path' );
+
     opening.setAttribute(
       'd',
       'M4.5 9.5h16l-2 8a2 2 0 0 1-2 1.5H6a2 2 0 0 1-2-1.5l-1-5.5a2 2 0 0 1 1.5-2.5Z'
@@ -730,6 +795,7 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
     const document = view.dom.ownerDocument;
     const frame = document.createElement( 'span' );
     const image = document.createElement( 'img' );
+
     frame.className = 'live-embedded-image is-loading';
     frame.dataset.imageAssetId = this.image.assetId ?? '';
     frame.dataset.imageDestination = this.image.destination;
@@ -740,15 +806,19 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
     image.decoding = 'async';
     image.draggable = false;
     image.loading = 'lazy';
+
     if ( this.image.title ) {
       image.title = this.image.title;
     }
+
     if ( this.image.width ) {
       image.style.width = `${ this.image.width }px`;
     }
+
     if ( this.image.height ) {
       image.style.height = `${ this.image.height }px`;
     }
+
     image.addEventListener( 'load', () => {
       frame.classList.remove( 'is-loading', 'is-error' );
     }, { once: true });
@@ -766,15 +836,16 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
       }
 
       if ( event.button === 0 ) {
-        // Keep CodeMirror from replacing the widget before the browser can
-        // decide whether this pointer gesture is a click or a native drag.
+        // keep CodeMirror from replacing the widget before the browser can
+        // decide whether this pointer gesture is a click or a native drag
         event.stopPropagation();
         view.focus();
       }
     });
     frame.addEventListener( 'click', ( event ) => {
-      // Unchanged images survive edits before them; resolve their current range.
+      // unchanged images survive edits before them; resolve their current range
       const from = view.posAtDOM( frame );
+
       revealWidgetSource( view, frame, event, from, from + this.image.raw.length );
     });
     frame.addEventListener( 'dragstart', ( event ) => {
@@ -783,12 +854,15 @@ export class MarkdownImageWidget extends LiveMarkdownWidget {
 
         return;
       }
+
       if ( !event.dataTransfer ) {
         return;
       }
+
       event.dataTransfer.clearData();
       event.dataTransfer.effectAllowed = 'move';
       const from = view.posAtDOM( frame );
+
       event.dataTransfer.setData( NOTE_IMAGE_DRAG_MIME, JSON.stringify({
         from,
         to: from + this.image.raw.length
@@ -818,6 +892,7 @@ export function renderedListMarker( block: LiveMarkdownBlock ): string {
   if ( !block.list ) {
     return '';
   }
+
   if ( !block.list.ordered ) {
     return UNORDERED_LIST_MARKERS[ block.list.depth % 3 ]!;
   }
@@ -835,11 +910,13 @@ function revealWidgetSource(
   if ( isMultiCursorGesture( event ) ) {
     return;
   }
+
   event.preventDefault();
   event.stopPropagation();
   const bounds = element.getBoundingClientRect();
   const approachFromLeft = event.clientX < bounds.left + bounds.width / 2;
   const position = approachFromLeft ? from : to;
+
   view.focus();
   view.dispatch({
     selection: { anchor: position },
@@ -858,23 +935,28 @@ function listControlCoordinates(
   }
 
   const line = dom.closest<HTMLElement>( '.cm-line' );
+
   if ( !line ) {
     return null;
   }
 
   const lineBounds = line.getBoundingClientRect();
   const strongSide = Math.abs( side ) > 1;
+
   const horizontalBounds = strongSide
     ? dom.closest( '.cm-content' )?.getBoundingClientRect() ?? lineBounds
     : lineBounds;
+
   const lineHeight = Number.parseFloat(
     dom.ownerDocument.defaultView?.getComputedStyle( line ).lineHeight ?? ''
   );
+
   const lineBottom = Number.isFinite( lineHeight )
     ? Math.min( lineBounds.bottom, lineBounds.top + lineHeight )
     : lineBounds.bottom;
-  // Drawn selections otherwise fill the leading gap above this widget line,
-  // leaving a thin strip beside the selected list item.
+
+  // drawn selections otherwise fill the leading gap above this widget line,
+  // leaving a thin strip beside the selected list item
   const lineTop = strongSide
     ? previousLineTextBottom( line, lineBounds.top )
     : lineBounds.top;
@@ -892,12 +974,15 @@ function previousLineTextBottom(
   fallback: number
 ): number {
   const previousLine = line.previousElementSibling;
+
   if ( !( previousLine instanceof HTMLElement ) ) {
     return fallback;
   }
 
   const range = line.ownerDocument.createRange();
+
   range.selectNodeContents( previousLine );
+
   const bottoms = [ ...range.getClientRects() ]
     .filter( ( bounds ) => bounds.width > 0 && bounds.height > 0 )
     .map( ( bounds ) => bounds.bottom )
@@ -910,6 +995,7 @@ function createCheckIcon( document: Document ): SVGSVGElement {
   const namespace = 'http://www.w3.org/2000/svg';
   const icon = document.createElementNS( namespace, 'svg' );
   const path = document.createElementNS( namespace, 'path' );
+
   icon.classList.add( 'app-icon' );
   icon.setAttribute( 'width', '9' );
   icon.setAttribute( 'height', '9' );

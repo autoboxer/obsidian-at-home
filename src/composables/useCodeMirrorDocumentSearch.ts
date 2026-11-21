@@ -1,17 +1,7 @@
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  ref,
-  shallowRef,
-  watch
-} from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import {
-  codeMirrorDocumentSearchExtension,
-  setDocumentSearchMatches
-} from '../lib/codeMirrorDocumentSearch';
+import { codeMirrorDocumentSearchExtension, setDocumentSearchMatches } from '../lib/codeMirrorDocumentSearch';
 import {
   DOCUMENT_SEARCH_MIN_LENGTH,
   findDocumentTextMatches,
@@ -21,6 +11,7 @@ import {
 import type { Ref } from 'vue';
 import type { DocumentSearchDirection, DocumentTextMatch } from '../lib/documentSearch';
 
+// coalesce typing before rebuilding match decorations across the document
 const SEARCH_DEBOUNCE_MS = 140;
 
 export { codeMirrorDocumentSearchExtension };
@@ -36,19 +27,24 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
   const normalizedQuery = computed( () => normalizeDocumentSearchQuery( query.value ) );
   const matchCount = computed( () => matches.value.length );
+
   const activeMatchNumber = computed( () =>
     activeMatchIndex.value < 0 ? 0 : activeMatchIndex.value + 1
   );
+
   const statusText = computed( () => {
     if ( !query.value.trim() ) {
       return `${ DOCUMENT_SEARCH_MIN_LENGTH }+ characters`;
     }
+
     if ( !normalizedQuery.value ) {
       return `${ DOCUMENT_SEARCH_MIN_LENGTH } characters minimum`;
     }
+
     if ( isPending.value ) {
       return 'Searching…';
     }
+
     if ( !matchCount.value ) {
       return '0 matches';
     }
@@ -73,12 +69,14 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   async function openSearch(): Promise<void> {
     isOpen.value = true;
     const view = editorView.value;
+
     if ( view && view.state.selection.ranges.length > 1 ) {
       view.dispatch({
         selection: EditorSelection.create([ view.state.selection.main ]),
         userEvent: 'select.search'
       });
     }
+
     await nextTick();
     editorView.value?.requestMeasure();
     searchInput.value?.focus();
@@ -88,10 +86,12 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
   async function closeSearch( focusEditor = true ): Promise<void> {
     const view = editorView.value;
+
     isOpen.value = false;
     cancelScheduledSearch();
     resetResults();
     await nextTick();
+
     if ( !view || view !== editorView.value || isOpen.value ) {
       return;
     }
@@ -103,6 +103,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
         matches: matches.value
       })
     });
+
     if ( focusEditor ) {
       view.focus();
     }
@@ -112,18 +113,20 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     if ( !isOpen.value ) {
       return;
     }
+
     if ( isPending.value ) {
       cancelScheduledSearch();
       performSearch( false );
     }
+
     selectActiveMatch();
     void closeSearch();
   }
 
   function handleEditorClick(): void {
     if ( isOpen.value ) {
-      // Let the completed pointer gesture keep its selection and focus,
-      // including clicks on controls embedded in the document.
+      // let the completed pointer gesture keep its selection and focus,
+      // including clicks on controls embedded in the document
       void closeSearch( false );
     }
   }
@@ -134,6 +137,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     }
 
     const commandModifier = ( event.metaKey || event.ctrlKey ) && !event.altKey;
+
     if ( commandModifier && !event.shiftKey && event.key.toLocaleLowerCase() === 'f' ) {
       event.preventDefault();
       event.stopPropagation();
@@ -141,9 +145,11 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
       return;
     }
+
     if ( !isOpen.value ) {
       return;
     }
+
     if ( event.key === 'Escape' ) {
       event.preventDefault();
       event.stopPropagation();
@@ -151,6 +157,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
       return;
     }
+
     if ( event.key === 'F3' ) {
       event.preventDefault();
       event.stopPropagation();
@@ -159,13 +166,15 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   }
 
   function handleSearchInputKeydown( event: KeyboardEvent ): void {
-    // WebKit can report Shift+Tab as an unidentified key on Linux.
+    // account for WebKit reporting Shift+Tab as an unidentified key on Linux
     const key = event.key === 'Unidentified' && event.code === 'Tab'
       ? 'Tab'
       : event.key;
+
     const modifiedTab = key === 'Tab' && (
       event.altKey || event.ctrlKey || event.metaKey
     );
+
     if (
       event.isComposing ||
       modifiedTab ||
@@ -176,21 +185,25 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
     event.preventDefault();
     event.stopPropagation();
+
     if ( key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey ) {
       acceptSearch();
 
       return;
     }
+
     moveToMatch( event.shiftKey ? 'previous' : 'next' );
   }
 
   function moveToMatch( direction: DocumentSearchDirection ): void {
-    // Step from the prior index, before refreshing initializes a pending query.
+    // step from the prior index, before refreshing initializes a pending query
     const currentIndex = activeMatchIndex.value;
+
     if ( isPending.value ) {
       cancelScheduledSearch();
       performSearch( false );
     }
+
     activeMatchIndex.value = stepDocumentSearchIndex(
       currentIndex,
       matchCount.value,
@@ -208,6 +221,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
 
   function scheduleSearch( resetActiveMatch: boolean, delay = SEARCH_DEBOUNCE_MS ): void {
     cancelScheduledSearch();
+
     if ( !normalizedQuery.value ) {
       clearResults();
 
@@ -215,11 +229,13 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     }
 
     isPending.value = true;
+
     if ( resetActiveMatch ) {
       matches.value = [];
       activeMatchIndex.value = -1;
       updateDecorations();
     }
+
     searchTimer = window.setTimeout( () => {
       searchTimer = undefined;
       performSearch( resetActiveMatch );
@@ -229,6 +245,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   function performSearch( resetActiveMatch: boolean ): void {
     const view = editorView.value;
     const searchQuery = normalizedQuery.value;
+
     if ( !isOpen.value || !view || !searchQuery ) {
       clearResults();
 
@@ -239,6 +256,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
       view.state.doc.toString(),
       searchQuery
     );
+
     if (
       resetActiveMatch ||
       activeMatchIndex.value < 0 ||
@@ -246,10 +264,12 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
     ) {
       activeMatchIndex.value = matchCount.value ? 0 : -1;
     }
+
     isPending.value = false;
     updateDecorations();
-    // Refreshing highlights after an edit must not move the user's caret or
-    // viewport. A query change may navigate only while its input still has focus.
+
+    // refreshing highlights after an edit must not move the user's caret or
+    // viewport. A query change may navigate only while its input still has focus
     if ( resetActiveMatch && searchInput.value === document.activeElement ) {
       selectActiveMatch();
     }
@@ -258,6 +278,7 @@ export function useCodeMirrorDocumentSearch( editorView: Ref<EditorView | undefi
   function selectActiveMatch(): void {
     const view = editorView.value;
     const match = matches.value[ activeMatchIndex.value ];
+
     if ( !view || !match ) {
       return;
     }

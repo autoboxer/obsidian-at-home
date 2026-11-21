@@ -52,6 +52,7 @@ function create(): void {
     css: `.source-editor {\n  /* Add your styles here */\n}\n`,
     enabled: true
   });
+
   if ( snippet ) {
     selectSnippet( snippet.id );
   }
@@ -65,13 +66,17 @@ function remove(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   const snippet = activeSnippet.value;
+
   if ( !snippet || snippet.builtIn ) {
     return;
   }
+
   const message = dirty.value
     ? `Delete the CSS snippet “${ snippet.name }” and discard its unsaved changes?`
     : `Delete the CSS snippet “${ snippet.name }”?`;
+
   if ( window.confirm( message ) ) {
     deleteSnippet( snippet.id );
     discardSnippetDraft( snippet.id );
@@ -123,7 +128,11 @@ async function closeReference(): Promise<void> {
             <span class="snippet-status" :class="{ enabled: snippet.enabled }"><span /></span>
             <span>
               <strong>{{ snippet.name }}</strong>
-              <small>{{ snippet.builtIn ? "Built in" : "Custom" }}<template v-if="snippetDraftIsDirty( snippet.id )"> · Unsaved</template></small>
+              <small>
+                {{ snippet.builtIn ? "Built in" : "Custom" }}<template
+                  v-if="snippetDraftIsDirty( snippet.id )"
+                > · Unsaved</template>
+              </small>
             </span>
             <AppIcon name="chevron" :size="13" />
           </button>
@@ -186,7 +195,13 @@ async function closeReference(): Promise<void> {
           class="snippet-draft-notice"
           role="status"
         >
-          <p>{{ conflict === 'deleted' ? 'This snippet was deleted elsewhere. Your draft is still available.' : 'This snippet changed elsewhere. Your draft is still available.' }}</p>
+          <p>
+            {{
+              conflict === 'deleted'
+                ? 'This snippet was deleted elsewhere. Your draft is still available.'
+                : 'This snippet changed elsewhere. Your draft is still available.'
+            }}
+          </p>
           <p>Save your draft as a new, disabled snippet to keep your changes separately.</p>
           <details v-if="activeSnippet">
             <summary>View saved version</summary>
@@ -239,7 +254,9 @@ async function closeReference(): Promise<void> {
             <span><span class="code-dot violet" /> CSS</span><span>{{ draft.css.split( '\n' ).length }} lines</span>
           </div>
           <div class="css-editor-body">
-            <pre class="css-line-numbers" aria-hidden="true">{{ draft.css.split( '\n' ).map( ( _, index ) => index + 1 ).join( '\n' ) }}</pre>
+            <pre class="css-line-numbers" aria-hidden="true">{{
+              draft.css.split( '\n' ).map( ( _, index ) => index + 1 ).join( '\n' )
+            }}</pre>
             <textarea
               :value="draft.css"
               :readonly="!canEditVault"
@@ -251,7 +268,9 @@ async function closeReference(): Promise<void> {
         </div>
 
         <footer class="snippet-help">
-          <span><AppIcon name="info" :size="15" /> Target the unified note editor with <code>.source-editor</code> and its editable content with <code>.source-textarea</code>.</span>
+          <span>
+            <AppIcon name="info" :size="15" /> Target the unified note editor with <code>.source-editor</code>
+            and its editable content with <code>.source-textarea</code>.</span>
           <button
             ref="referenceButton"
             type="button"

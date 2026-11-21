@@ -1,12 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { validateAssetFolderPath } from '../lib/imageEmbeds';
-import type {
-  AttachmentEmbedLocation,
-  ExportResult,
-  ImageEmbedLocation,
-  ImportResult
-} from '../types';
+import type { AttachmentEmbedLocation, ExportResult, ImageEmbedLocation, ImportResult } from '../types';
 import {
   appearanceState,
   fontOptions,
@@ -34,15 +29,11 @@ import {
   vaultSession,
   vaultState
 } from '../stores/vault';
-import {
-  exportObsidianVault,
-  importObsidianVault,
-  isTauri,
-  pickFolder
-} from '../services/native';
+import { exportObsidianVault, importObsidianVault, isTauri, pickFolder } from '../services/native';
 import AppIcon from './AppIcon.vue';
 
 type ActiveTask = 'import' | 'export' | 'show' | 'clear' | 'forget' | null;
+
 type FeedbackTone = 'info' | 'success' | 'warning' | 'error';
 
 interface Feedback {
@@ -61,9 +52,11 @@ const feedback = ref<Feedback | null>( null );
 const replaceConfirming = ref( false );
 const clearConfirming = ref( false );
 const forgetConfirming = ref( false );
+
 const attachmentFolderDraft = ref(
   vaultState.attachmentEmbedSettings.folderPath || 'Attachments'
 );
+
 const attachmentFolderError = ref( '' );
 const imageFolderDraft = ref( vaultState.imageEmbedSettings.folderPath || 'Attachments' );
 const imageFolderError = ref( '' );
@@ -100,6 +93,7 @@ const importFolderCount = computed( () => {
 });
 
 const importPreviewNotes = computed( () => importReview.value?.notes.slice( 0, 5 ) ?? []);
+
 const importPreviewOverflow = computed( () =>
   Math.max( 0, ( importReview.value?.notes.length ?? 0 ) - importPreviewNotes.value.length )
 );
@@ -116,6 +110,7 @@ const themeGroups = computed( () => [
   { id: 'dark', label: 'Dark', themes: themes.filter( ( theme ) => theme.mode === 'dark' ) },
   { id: 'light', label: 'Light', themes: themes.filter( ( theme ) => theme.mode === 'light' ) }
 ]);
+
 const selectedInstalledFontIsMissing = computed(
   () => appearanceState.fontId.startsWith( 'system:' )
     && !installedFontOptions.value.some( ( font ) => font.id === appearanceState.fontId )
@@ -150,11 +145,13 @@ watch(
 
 function updateAppearanceFont( event: Event ): void {
   const select = event.currentTarget as HTMLSelectElement;
+
   setAppearanceFont( select.value );
 }
 
 function updateNoteFontSize( event: Event ): void {
   const input = event.currentTarget as HTMLInputElement;
+
   setAppearanceFontSize( input.valueAsNumber );
 }
 
@@ -162,10 +159,14 @@ function updateImageEmbedLocation( event: Event ): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   const location = ( event.currentTarget as HTMLSelectElement ).value as ImageEmbedLocation;
+
   imageFolderError.value = '';
+
   if ( location === 'specified-folder' ) {
     const validated = validateAssetFolderPath( imageFolderDraft.value || 'Attachments' );
+
     imageFolderDraft.value = validated.error ? 'Attachments' : validated.value;
     vaultState.imageEmbedSettings = {
       folderPath: imageFolderDraft.value,
@@ -182,7 +183,9 @@ function saveImageFolderPath(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   const validated = validateAssetFolderPath( imageFolderDraft.value );
+
   if ( validated.error ) {
     imageFolderError.value = validated.error;
 
@@ -201,12 +204,16 @@ function updateAttachmentEmbedLocation( event: Event ): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   const location = ( event.currentTarget as HTMLSelectElement ).value as AttachmentEmbedLocation;
+
   attachmentFolderError.value = '';
+
   if ( location === 'specified-folder' ) {
     const validated = validateAssetFolderPath(
       attachmentFolderDraft.value || 'Attachments'
     );
+
     attachmentFolderDraft.value = validated.error ? 'Attachments' : validated.value;
     vaultState.attachmentEmbedSettings = {
       folderPath: attachmentFolderDraft.value,
@@ -223,7 +230,9 @@ function saveAttachmentFolderPath(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   const validated = validateAssetFolderPath( attachmentFolderDraft.value );
+
   if ( validated.error ) {
     attachmentFolderError.value = validated.error;
 
@@ -246,6 +255,7 @@ function feedbackIcon( tone: FeedbackTone ): string {
   if ( tone === 'success' ) {
     return 'check';
   }
+
   if ( tone === 'error' ) {
     return 'x';
   }
@@ -257,6 +267,7 @@ function errorMessage( error: unknown, fallback: string ): string {
   if ( typeof error === 'string' && error.trim() ) {
     return error;
   }
+
   if ( error instanceof Error && error.message.trim() ) {
     return error.message;
   }
@@ -268,6 +279,7 @@ async function chooseVaultToImport(): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   if ( !nativeAvailable || activeTask.value ) {
     return;
   }
@@ -280,6 +292,7 @@ async function chooseVaultToImport(): Promise<void> {
 
   try {
     const selectedPath = await pickFolder();
+
     if ( !selectedPath ) {
       feedback.value = {
         tone: 'info',
@@ -293,6 +306,7 @@ async function chooseVaultToImport(): Promise<void> {
     importReview.value = null;
     importSourcePath.value = selectedPath;
     const result = await importObsidianVault( selectedPath );
+
     importReview.value = result;
     feedback.value = {
       tone: result.warnings.length ? 'warning' : 'info',
@@ -331,15 +345,19 @@ async function applyImport( replace: boolean ): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   if ( activeTask.value ) {
     return;
   }
+
   const result = importReview.value;
+
   if ( !result ) {
     return;
   }
 
   activeTask.value = 'import';
+
   try {
     const {
       attachmentCount,
@@ -348,7 +366,9 @@ async function applyImport( replace: boolean ): Promise<void> {
       saved,
       warnings: transferWarnings
     } = await mergeImportedVault( result, importSourcePath.value, replace );
+
     const warnings = [ ...result.warnings, ...transferWarnings ];
+
     if ( saved ) {
       importReview.value = null;
       importSourcePath.value = '';
@@ -356,6 +376,7 @@ async function applyImport( replace: boolean ): Promise<void> {
       clearConfirming.value = false;
       forgetConfirming.value = false;
     }
+
     feedback.value = {
       tone: !saved || warnings.length ? 'warning' : 'success',
       title: saved
@@ -400,6 +421,7 @@ async function exportVault(): Promise<void> {
 
   try {
     const parentPath = await pickFolder();
+
     if ( !parentPath ) {
       feedback.value = {
         tone: 'info',
@@ -416,6 +438,7 @@ async function exportVault(): Promise<void> {
       vaultState.name,
       buildExportPayload()
     );
+
     exportResult.value = result;
     feedback.value = {
       tone: result.warnings.length ? 'warning' : 'success',
@@ -451,7 +474,9 @@ async function revealCurrentVault(): Promise<void> {
   if ( !nativeAvailable || !vaultSession.path || activeTask.value ) {
     return;
   }
+
   activeTask.value = 'show';
+
   try {
     await showCurrentVaultInFolder();
   } catch ( error ) {
@@ -475,12 +500,16 @@ async function clearCurrentVault(): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   if ( activeTask.value ) {
     return;
   }
+
   activeTask.value = 'clear';
+
   try {
     const saved = await clearVault();
+
     resetTransferState();
     clearConfirming.value = false;
     forgetConfirming.value = false;
@@ -506,10 +535,13 @@ async function forgetVault(): Promise<void> {
   if ( activeTask.value ) {
     return;
   }
+
   activeTask.value = 'forget';
   const forgottenName = vaultState.name;
+
   try {
     const forgotten = await forgetCurrentVault();
+
     resetTransferState();
     clearConfirming.value = false;
     forgetConfirming.value = false;
@@ -1143,7 +1175,10 @@ async function forgetVault(): Promise<void> {
             and CSS snippets.
           </div>
 
-          <details v-if="importReview.warnings.length" class="settings-warning-details settings-warning-details--review">
+          <details
+            v-if="importReview.warnings.length"
+            class="settings-warning-details settings-warning-details--review"
+          >
             <summary>
               Review {{ importReview.warnings.length }}
               {{ importReview.warnings.length === 1 ? "warning" : "warnings" }}
@@ -1196,7 +1231,8 @@ async function forgetVault(): Promise<void> {
               </span>
               <div class="settings-confirmation__copy">
                 <strong>Replace the current vault notes?</strong>
-                <p>This permanently deletes {{ formatCount( vaultState.notes.length ) }} managed Markdown note files before copying the import.</p>
+                <p>This permanently deletes {{ formatCount( vaultState.notes.length ) }}
+                  managed Markdown note files before copying the import.</p>
               </div>
               <div class="settings-confirmation__actions">
                 <button
@@ -1259,10 +1295,13 @@ async function forgetVault(): Promise<void> {
             <AppIcon name="info" :size="18" />
           </span>
           <div class="settings-confirmation__copy">
-            <strong v-if="vaultSession.path">Permanently delete {{ formatCount( vaultState.notes.length ) }} managed Markdown note files?</strong>
-            <strong v-else>Permanently remove {{ formatCount( vaultState.notes.length ) }} notes from browser preview storage?</strong>
+            <strong v-if="vaultSession.path">Permanently delete {{ formatCount( vaultState.notes.length ) }}
+              managed Markdown note files?</strong>
+            <strong v-else>Permanently remove {{ formatCount( vaultState.notes.length ) }}
+              notes from browser preview storage?</strong>
             <p v-if="vaultSession.path">
-              This cannot be undone. Templates and CSS snippets will stay. Export or copy the vault folder first if you need a backup.
+              This cannot be undone. Templates and CSS snippets will stay.
+              Export or copy the vault folder first if you need a backup.
             </p>
             <p v-else>
               This cannot be undone. Templates and CSS snippets will stay.
@@ -1326,7 +1365,8 @@ async function forgetVault(): Promise<void> {
             </span>
             <div class="settings-confirmation__copy">
               <strong>Forget “{{ vaultState.name }}”?</strong>
-              <p>All Markdown files and <code>.obsidian-at-home</code> metadata will remain on disk. You will need to create or open another vault to continue.</p>
+              <p>All Markdown files and <code>.obsidian-at-home</code> metadata will remain on disk.
+                You will need to create or open another vault to continue.</p>
             </div>
             <div class="settings-confirmation__actions">
               <button

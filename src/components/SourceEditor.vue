@@ -5,10 +5,7 @@ import { syntaxTree } from '@codemirror/language';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { Annotation, ChangeSet, Compartment, EditorSelection, EditorState, Prec, Transaction } from '@codemirror/state';
 import { drawSelection, dropCursor, EditorView, highlightSpecialChars, keymap } from '@codemirror/view';
-import {
-  useCodeMirrorAssets,
-  type CodeMirrorAssetEvents
-} from '../composables/useCodeMirrorAssets';
+import { useCodeMirrorAssets, type CodeMirrorAssetEvents } from '../composables/useCodeMirrorAssets';
 import {
   codeMirrorDocumentSearchExtension,
   useCodeMirrorDocumentSearch
@@ -73,7 +70,11 @@ import {
 import { joinLeadingFrontmatter, leadingFrontmatterEnd, markdownBodyStart } from '../lib/frontmatter';
 import { normalizeWikiTarget, wikiLinkCompletionAt, type WikiLinkCompletion } from '../lib/wikiLinks';
 import { openNoteEditorHistory } from '../stores/editorHistories';
-import { getNoteTabEditorPosition, mapNoteTabEditorPositions, type NoteEditorViewPosition } from '../stores/editorPositions';
+import {
+  getNoteTabEditorPosition,
+  mapNoteTabEditorPositions,
+  type NoteEditorViewPosition
+} from '../stores/editorPositions';
 import type { Extension } from '@codemirror/state';
 import type { Command } from '@codemirror/view';
 import type { MarkdownAttachmentRenameTarget } from '../lib/markdownAttachments';
@@ -169,19 +170,22 @@ const {
   showLiveMarkdownAttachmentInFolder
 } = useCodeMirrorAssets( props, emit, editorView, editorRenderReady, blockPendingEditorInteraction );
 
-// Keep heading parsing independent of the typed filter; re-evaluate only when
-// the destination or its reactive content changes.
+// keep heading parsing independent of the typed filter; re-evaluate only when
+// the destination or its reactive content changes
 const suggestionTarget = computed( () => suggestionQuery.value?.target );
+
 const availableSuggestions = computed( () => suggestionTarget.value === undefined
   ? props.noteLinkTargets.map( ( value ) => ({ label: normalizeWikiTarget( value ), value }) )
   : props.noteLinkHeadings( suggestionTarget.value ).map( ( label ) => ({
     label,
     value: label.replace( /[\\|#[\]]/g, '\\$&' )
   }) ) );
+
 const suggestions = computed( () => {
   if ( !suggestionQuery.value ) {
     return [];
   }
+
   const query = suggestionQuery.value.query.trim().toLocaleLowerCase();
 
   return availableSuggestions.value
@@ -196,11 +200,14 @@ const suggestions = computed( () => {
 
 watch([ suggestions, suggestionIndex ], async () => {
   suggestionIndex.value = Math.min( suggestionIndex.value, Math.max( 0, suggestions.value.length - 1 ) );
+
   if ( !suggestions.value.length ) {
     suggestionPosition.value = null;
   }
+
   editorView.value?.dispatch({});
   await nextTick();
+
   if ( editorView.value ) {
     scheduleSuggestionPosition( editorView.value );
   }
@@ -216,6 +223,7 @@ function scheduleSuggestionPosition( view: EditorView ): void {
     read: ( measuredView ): CSSProperties | null => {
       const list = suggestionList.value;
       const panel = list?.offsetParent;
+
       if ( !list || !( panel instanceof HTMLElement ) || !measuredView.hasFocus ) {
         return null;
       }
@@ -227,26 +235,31 @@ function scheduleSuggestionPosition( view: EditorView ): void {
       const right = Math.min( bounds.right, scroller.left + measuredView.scrollDOM.clientWidth, window.innerWidth );
       const top = Math.max( bounds.top, scroller.top, 0 );
       const bottom = Math.min( bounds.bottom, scroller.top + measuredView.scrollDOM.clientHeight, window.innerHeight );
-      // A scrolled-away caret must not leave a detached menu over other text.
+
+      // a scrolled-away caret must not leave a detached menu over other text
       if ( !caret || caret.top < top || caret.bottom > bottom || caret.left < left || caret.left > right ) {
         return null;
       }
 
       const margin = 8;
       const gap = 4;
+      // match the menu's CSS bounds, then shrink it to the available caret-side space
       const width = Math.min( 310, right - left - margin * 2 );
       const desiredHeight = Math.min( 292, list.scrollHeight + list.offsetHeight - list.clientHeight );
       const below = Math.max( 0, bottom - margin - caret.bottom - gap );
       const above = Math.max( 0, caret.top - gap - top - margin );
       const openAbove = below < desiredHeight && above > below;
       const maxHeight = Math.min( 292, openAbove ? above : below );
+
       if ( width <= 0 || maxHeight <= 0 ) {
         return null;
       }
 
       return {
         left: `${ Math.max( left + margin, Math.min( caret.left, right - margin - width ) ) - bounds.left }px`,
-        top: `${ ( openAbove ? caret.top - gap - Math.min( desiredHeight, maxHeight ) : caret.bottom + gap ) - bounds.top }px`,
+        top: `${
+          ( openAbove ? caret.top - gap - Math.min( desiredHeight, maxHeight ) : caret.bottom + gap ) - bounds.top
+        }px`,
         width: `${ width }px`,
         maxHeight: `${ maxHeight }px`
       };
@@ -255,16 +268,20 @@ function scheduleSuggestionPosition( view: EditorView ): void {
       if ( editorView.value !== measuredView || !suggestions.value.length ) {
         return;
       }
+
       suggestionPosition.value = position;
       void nextTick( () => {
         const list = suggestionList.value;
         const active = list?.querySelector<HTMLElement>( '.wiki-suggestion.active' );
+
         if ( !suggestionPosition.value || !list || !active ) {
           return;
         }
-        // Scroll only the options; scrollIntoView can also move the note/page.
+
+        // scroll only the options; scrollIntoView can also move the note/page
         const top = active.offsetTop;
         const bottom = top + active.offsetHeight;
+
         list.scrollTop = Math.max( bottom - list.clientHeight, Math.min( list.scrollTop, top ) );
       });
     }
@@ -291,7 +308,9 @@ const suggestionDown: Command = ( view ) => {
   if ( view.composing || !suggestions.value.length ) {
     return false;
   }
+
   suggestionIndex.value = ( suggestionIndex.value + 1 ) % suggestions.value.length;
+
   if ( !suggestionPosition.value ) {
     view.dispatch({ scrollIntoView: true });
   }
@@ -303,9 +322,11 @@ const suggestionUp: Command = ( view ) => {
   if ( view.composing || !suggestions.value.length ) {
     return false;
   }
+
   suggestionIndex.value = (
     suggestionIndex.value - 1 + suggestions.value.length
   ) % suggestions.value.length;
+
   if ( !suggestionPosition.value ) {
     view.dispatch({ scrollIntoView: true });
   }
@@ -327,6 +348,7 @@ const closeSuggestions: Command = ( view ) => {
   if ( view.composing || suggestionQuery.value === null ) {
     return false;
   }
+
   suggestionQuery.value = null;
 
   return true;
@@ -335,6 +357,7 @@ const closeSuggestions: Command = ( view ) => {
 onMounted( () => {
   const focusOnMount = props.focusOnMount !== false;
   const host = editorHost.value;
+
   if ( !host ) {
     return;
   }
@@ -343,46 +366,56 @@ onMounted( () => {
     normalizeDocumentText( props.modelValue ),
     props.showFrontmatter
   );
+
   frontmatterLineOffset = editableDocument.lineNumberOffset;
   frontmatterPrefix = editableDocument.prefix;
+
   const viewPosition: NoteEditorViewPosition | undefined = getNoteTabEditorPosition(
     props.vaultId, props.tabId, props.noteId, props.modelValue
   );
+
   const initialPosition = normalizeInitialPosition(
     viewPosition,
     editableDocument.body.length,
     editableDocument.bodyStart
   );
+
   const historySession = openNoteEditorHistory(
     props.vaultId,
     props.noteId,
     () => {
       frontmatterHistoryChanged = false;
       const view = editorView.value;
+
       if ( view ) {
         view.dispatch({ effects: historyCompartment.reconfigure([]) });
         view.dispatch({ effects: historyCompartment.reconfigure( history() ) });
       }
     }
   );
+
   closeEditorHistory = historySession.close;
+
   const savedState = restorableEditorHistory(
     historySession.snapshot,
     normalizeDocumentText( props.modelValue ),
     editableDocument
   );
+
   if ( historySession.snapshot && !savedState ) {
     historySession.discard();
   }
-  // Keep the restored field inside the compartment so it can actually be reset.
-  // fromJSON with the full editor extensions would install another copy outside it.
+
+  // keep the restored field inside the compartment so it can actually be reset
+  // fromJSON with the full editor extensions would install another copy outside it
   const restoredState = savedState
     ? EditorState.fromJSON( savedState, {}, { history: historyField })
     : undefined;
+
   const extensions: Extension[] = [
     EditorState.readOnly.of( props.readOnly ),
     EditorView.editable.of( !props.readOnly ),
-    // Hydration and frontmatter visibility may replace the projected document.
+    // hydration and frontmatter visibility may replace the projected document
     EditorState.transactionFilter.of( ( transaction ) => (
       props.readOnly && transaction.docChanged && !transaction.annotation( externalUpdate )
         ? []
@@ -398,7 +431,7 @@ onMounted( () => {
     ]),
     drawSelection(),
     dropCursor(),
-    // Let the drop-cursor observers run before a custom drop consumes the event.
+    // let the drop-cursor observers run before a custom drop consumes the event
     EditorView.domEventHandlers({
       scroll: ( _event, view ) => {
         scheduleSuggestionPosition( view );
@@ -530,9 +563,11 @@ onMounted( () => {
       if ( update.docChanged ) {
         mapPendingImageInsertions( update );
       }
+
       const localDocumentChange = update.docChanged && update.transactions.some(
         ( transaction ) => transaction.docChanged && !transaction.annotation( externalUpdate )
       );
+
       if ( localDocumentChange ) {
         const previousBody = update.startState.doc.toString();
         const nextBody = update.state.doc.toString();
@@ -540,6 +575,7 @@ onMounted( () => {
         const nextContent = joinLeadingFrontmatter( frontmatterPrefix, nextBody );
         const bodyStart = markdownBodyStart( frontmatterPrefix, previousBody );
         const changes: Array<{ from: number; to: number; insert: string }> = [];
+
         update.changes.iterChanges( ( from, to, _fromB, _toB, inserted ) => {
           changes.push({ from: from + bodyStart, to: to + bodyStart, insert: inserted.toString() });
         });
@@ -549,12 +585,14 @@ onMounted( () => {
             ? changes
             : minimalDocumentChange( previousContent, nextContent ), previousContent.length )
         );
+
         if (
           props.showFrontmatter
           && changeTouchesLeadingFrontmatter( update )
         ) {
           frontmatterHistoryChanged = true;
         }
+
         emit(
           'update:modelValue',
           restoreLineEndings(
@@ -567,21 +605,27 @@ onMounted( () => {
         );
         refreshDocumentSearch();
       }
+
       if ( update.docChanged || update.selectionSet ) {
         updateSuggestions( update.view );
         schedulePositionCapture( update.view );
       }
+
       if ( update.geometryChanged || update.viewportChanged || update.selectionSet || update.focusChanged ) {
         scheduleSuggestionPosition( update.view );
       }
+
       scheduleEditorRenderReady( update.view );
     })
   ];
+
   const initialBodyStart = savedState
     ? markdownBodyStart( savedState.prefix, savedState.doc )
     : editableDocument.bodyStart;
+
   const initialDocumentLength = restoredState?.doc.length ?? editableDocument.body.length;
   const initialRanges = viewPosition?.ranges ?? ( viewPosition ? [ viewPosition.selection ] : undefined );
+
   const initialSelection = ( bodyStart: number, documentLength: number ) => {
     const clamp = ( offset: number ) => Math.max( 0, Math.min( documentLength, offset - bodyStart ) );
 
@@ -591,12 +635,14 @@ onMounted( () => {
       ) ), viewPosition?.mainIndex ?? 0 )
       : undefined;
   };
+
   let state = EditorState.create({
     doc: restoredState?.doc ?? editableDocument.body,
-    // Undo history is shared by the note, but a fresh tab owns a fresh caret.
+    // undo history is shared by the note, but a fresh tab owns a fresh caret
     selection: initialSelection( initialBodyStart, initialDocumentLength ) ?? EditorSelection.cursor( 0 ),
     extensions
   });
+
   if ( savedState && savedState.doc !== editableDocument.body ) {
     state = state.update({
       annotations: [
@@ -604,12 +650,15 @@ onMounted( () => {
         Transaction.addToHistory.of( false )
       ],
       changes: minimalDocumentChange( savedState.doc, editableDocument.body ),
-      // The shared undo snapshot may hide metadata selected in this tab.
-      // Restore from full-document offsets instead of the clamped old projection.
-      selection: initialSelection( editableDocument.bodyStart, editableDocument.body.length ) ?? EditorSelection.cursor( 0 )
+      // the shared undo snapshot may hide metadata selected in this tab
+      // restore from full-document offsets instead of the clamped old projection
+      selection: initialSelection( editableDocument.bodyStart, editableDocument.body.length ) ??
+        EditorSelection.cursor( 0 )
     }).state;
   }
+
   frontmatterHistoryChanged = savedState?.frontmatterHistoryChanged ?? false;
+
   const view = new EditorView({
     parent: host,
     state,
@@ -617,9 +666,11 @@ onMounted( () => {
       ? EditorView.scrollIntoView( initialPosition.viewport.anchor, { x: 'start', y: 'start' })
       : undefined
   });
+
   editorView.value = view;
   registerEditorPosition( view );
   updateSuggestions( view );
+
   if ( focusOnMount ) {
     view.focus();
   }
@@ -632,6 +683,7 @@ onMounted( () => {
 
     const scrollLeft = view.scrollDOM.scrollLeft;
     const scrollTop = view.scrollDOM.scrollTop;
+
     view.focus();
     view.scrollDOM.scrollLeft = scrollLeft;
     view.scrollDOM.scrollTop = scrollTop;
@@ -641,9 +693,12 @@ onMounted( () => {
 onBeforeUnmount( () => {
   disposeAssets();
   const view = editorView.value;
+
   disposeEditorPosition();
+
   if ( view ) {
     const serializedState = view.state.toJSON({ history: historyField });
+
     closeEditorHistory?.({
       doc: serializedState.doc,
       frontmatterHistoryChanged,
@@ -654,6 +709,7 @@ onBeforeUnmount( () => {
     closeEditorHistory = undefined;
     view.destroy();
   }
+
   editorView.value = undefined;
 });
 
@@ -661,8 +717,10 @@ watch(
   [ () => props.modelValue, () => props.showFrontmatter ],
   ([ value, showFrontmatter ], [ , previouslyShowingFrontmatter ]) => {
     const view = editorView.value;
+
     outputLineEnding = preferredLineEnding( value );
     const visibilityChanged = showFrontmatter !== previouslyShowingFrontmatter;
+
     const normalizedValue = visibilityChanged && view
       ? joinLeadingFrontmatter(
         frontmatterPrefix,
@@ -674,10 +732,13 @@ watch(
       normalizedValue,
       showFrontmatter
     );
+
     const prefixChanged = editableDocument.prefix !== frontmatterPrefix;
+
     const lineOffsetChanged = (
       editableDocument.lineNumberOffset !== frontmatterLineOffset
     );
+
     if ( !view ) {
       frontmatterPrefix = editableDocument.prefix;
       frontmatterLineOffset = editableDocument.lineNumberOffset;
@@ -688,12 +749,15 @@ watch(
     const currentBody = view.state.doc.toString();
     const currentBodyStart = markdownBodyStart( frontmatterPrefix, currentBody );
     const bodyChanged = editableDocument.body !== currentBody;
+
     const coordinateSpaceChanged = bodyChanged
       && editableDocument.bodyStart !== currentBodyStart;
+
     const resetHistory = coordinateSpaceChanged && (
       !visibilityChanged
       || ( previouslyShowingFrontmatter && frontmatterHistoryChanged )
     );
+
     const selection = visibilityChanged
       ? frontmatterVisibilitySelection(
         view.state.selection,
@@ -701,14 +765,17 @@ watch(
         editableDocument
       )
       : undefined;
+
     frontmatterPrefix = editableDocument.prefix;
     frontmatterLineOffset = editableDocument.lineNumberOffset;
+
     if ( resetHistory ) {
-      // Projection changes invalidate history entries that target the hidden prefix
+      // projection changes invalidate history entries that target the hidden prefix
       view.dispatch({
         effects: historyCompartment.reconfigure([])
       });
     }
+
     if ( bodyChanged || lineOffsetChanged ) {
       view.dispatch({
         ...( bodyChanged
@@ -731,17 +798,21 @@ watch(
         scrollIntoView: visibilityChanged
       });
     }
+
     if ( bodyChanged ) {
       refreshDocumentSearch();
     }
+
     if ( prefixChanged ) {
       schedulePositionCapture( view );
     }
+
     if ( resetHistory ) {
       view.dispatch({
         effects: historyCompartment.reconfigure( history() )
       });
     }
+
     if ( visibilityChanged ) {
       frontmatterHistoryChanged = false;
       view.focus();
@@ -798,6 +869,7 @@ defineExpose({
 
 function updateSuggestions( view: EditorView ): void {
   const selection = view.state.selection.main;
+
   if ( props.readOnly || view.state.selection.ranges.length !== 1 || !selection.empty ) {
     suggestionQuery.value = null;
 
@@ -806,30 +878,40 @@ function updateSuggestions( view: EditorView ): void {
 
   const line = view.state.doc.lineAt( selection.head );
   const completion = wikiLinkCompletionAt( line.text, selection.head - line.from );
+
   suggestionQuery.value = null;
+
   if ( completion ) {
-    // Wiki destinations inside code or visible metadata are literal text.
+    // wiki destinations inside code or visible metadata are literal text
     if ( props.showFrontmatter && selection.head < ( leadingFrontmatterEnd( view.state.doc.toString() ) ?? 0 ) ) {
       return;
     }
+
     for ( let node = syntaxTree( view.state ).resolveInner( selection.head, -1 ); node; node = node.parent! ) {
       if ([ 'FencedCode', 'CodeBlock', 'InlineCode' ].includes( node.name ) ) {
         return;
       }
     }
+
     suggestionQuery.value = { ...completion, from: completion.from + line.from, to: completion.to + line.from };
   }
+
   suggestionIndex.value = 0;
 }
 
 function insertSuggestion( value: string ): void {
   const view = editorView.value;
-  if ( props.readOnly || !view || view.composing || view.state.selection.ranges.length !== 1 || !view.state.selection.main.empty || !suggestionQuery.value ) {
+
+  if (
+    props.readOnly || !view || view.composing || view.state.selection.ranges.length !== 1 ||
+    !view.state.selection.main.empty || !suggestionQuery.value
+  ) {
     return;
   }
 
   const { from, to, suffix } = suggestionQuery.value;
   const replacement = value + suffix;
+
   suggestionQuery.value = null;
   view.dispatch({
     changes: { from, to, insert: replacement },
@@ -842,6 +924,7 @@ function insertSuggestion( value: string ): void {
 
 function blockPendingEditorInteraction( event: Event ): void {
   const isSearchInput = event.target === documentSearchInput.value;
+
   if (
     !editorRenderReady.value
     || ( props.readOnly && event.type !== 'keydown' && !isSearchInput )

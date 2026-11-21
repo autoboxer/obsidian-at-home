@@ -11,11 +11,12 @@ import {
   type SmartFolderSelection
 } from './vaultState';
 
+// bound Back/Forward history independently of the shorter recent-notes menu
 const NOTE_NAVIGATION_LIMIT = 100;
 const RECENT_NOTE_LIMIT = 10;
 
-// Note IDs remain the persisted document identity. Image targets and mixed
-// navigation histories belong only to the current tab session.
+// note IDs remain the persisted document identity. Image targets and mixed
+// navigation histories belong only to the current tab session
 type TabNavigationTarget = string | VaultImageFile;
 
 export interface NoteTab {
@@ -42,18 +43,21 @@ export function createVaultNavigation(
   dependencies: VaultNavigationDependencies
 ) {
   const initialTab = newTab( vaultState.activeNoteId );
+
   const noteTabsState = reactive<NoteNavigationState>({
     tabs: [ initialTab ],
     activeTabId: initialTab.id
   });
+
   const activeNoteTab = computed( () => noteTabsState.tabs.find(
     ( tab ) => tab.id === noteTabsState.activeTabId
   )! );
 
-  // Existing load/recovery paths still own the persisted active note. Reflect
-  // their changes in the active session tab without creating navigation entries.
+  // existing load/recovery paths still own the persisted active note. Reflect
+  // their changes in the active session tab without creating navigation entries
   watch( () => vaultState.activeNoteId, ( id ) => {
     activeNoteTab.value.noteId = id;
+
     if ( id ) {
       activeNoteTab.value.image = null;
     }
@@ -61,8 +65,8 @@ export function createVaultNavigation(
   watch( () => uiState.frontmatterVisible, ( visible ) => {
     activeNoteTab.value.frontmatterVisible = visible;
   }, { flush: 'sync' });
-  // Reconcile after complete inventory mutations, including reload and rollback.
-  // Remember promoted IDs and the latest path even while a tab is inactive.
+  // reconcile after complete inventory mutations, including reload and rollback
+  // remember promoted IDs and the latest path even while a tab is inactive
   watch( () => vaultState.imageFiles, () => {
     updateImageTargets( ( target ) => findImage( target ) );
     pruneNoteNavigation();
@@ -76,7 +80,9 @@ export function createVaultNavigation(
     if ( noteId !== null && !noteExists( noteId ) ) {
       return undefined;
     }
+
     const tab = newTab( noteId );
+
     noteTabsState.tabs.push( tab );
     activateNoteTab( tab.id );
 
@@ -85,16 +91,20 @@ export function createVaultNavigation(
 
   function activateNoteTab( id: string ): boolean {
     const tab = noteTabsState.tabs.find( ( candidate ) => candidate.id === id );
+
     if ( !tab ) {
       return false;
     }
+
     noteTabsState.activeTabId = id;
     uiState.frontmatterVisible = tab.frontmatterVisible;
+
     if ( tab.image ) {
       activateImage( tab.image );
     } else if ( !tab.noteId || !activateNote( tab.noteId ) ) {
       vaultState.activeNoteId = null;
     }
+
     uiState.tool = 'notes';
     uiState.notesView = 'editor';
 
@@ -103,25 +113,31 @@ export function createVaultNavigation(
 
   function closeNoteTab( id: string ): void {
     const index = noteTabsState.tabs.findIndex( ( tab ) => tab.id === id );
+
     if ( index < 0 ) {
       return;
     }
+
     const wasActive = noteTabsState.activeTabId === id;
-    // Switch before removing the active tab so synchronous observers always
-    // have a current owner for the active note and its view preferences.
+
+    // switch before removing the active tab so synchronous observers always
+    // have a current owner for the active note and its view preferences
     if ( wasActive ) {
       const neighbor = noteTabsState.tabs[ index - 1 ] ?? noteTabsState.tabs[ index + 1 ];
+
       if ( neighbor ) {
         activateNoteTab( neighbor.id );
       } else {
         createNoteTab();
       }
     }
+
     noteTabsState.tabs.splice( index, 1 );
   }
 
   const activeImage = computed( () => activeNoteTab.value.image
     ? resolveImageTarget( activeNoteTab.value.image ) : undefined );
+
   const activeImageAvailable = computed( () => Boolean( activeImage.value && findImage( activeImage.value ) ) );
   const backNavigationTarget = computed( () => findNavigationTarget( activeNoteTab.value.back ) );
   const forwardNavigationTarget = computed( () => findNavigationTarget( activeNoteTab.value.forward ) );
@@ -146,6 +162,7 @@ export function createVaultNavigation(
       for ( const target of [ tab.image, ...tab.back, ...tab.forward ]) {
         if ( target && typeof target !== 'string' ) {
           const image = resolve( target );
+
           if ( image ) {
             Object.assign( target, image );
           }
@@ -155,8 +172,8 @@ export function createVaultNavigation(
   }
 
   function relocateImageNavigation( previousPath: string, image: VaultImageFile ): void {
-    // A first move assigns an ID to an untracked file. The operation's explicit
-    // old path connects that identity to previews and history opened beforehand.
+    // a first move assigns an ID to an untracked file. The operation's explicit
+    // old path connects that identity to previews and history opened beforehand
     updateImageTargets( ( target ) => (
       target.assetId ? target.assetId === image.assetId : target.relativePath === previousPath
     ) ? image : undefined );
@@ -205,16 +222,21 @@ export function createVaultNavigation(
 
   function selectVaultImage( image: VaultImageFile ): void {
     const target = findImage( image );
+
     if ( !target ) {
       return;
     }
+
     const previous = currentTarget();
+
     if ( !sameTarget( previous, target ) ) {
       if ( previous && targetExists( previous ) ) {
         pushNavigationEntry( activeNoteTab.value.back, previous );
       }
+
       activeNoteTab.value.forward.splice( 0 );
     }
+
     activateImage( target );
     uiState.tool = 'notes';
     uiState.notesView = 'editor';
@@ -228,6 +250,7 @@ export function createVaultNavigation(
     if ( id !== vaultState.activeNoteId ) {
       recordDirectNoteNavigation( vaultState.activeNoteId, id );
     }
+
     activateNote( id );
     uiState.tool = 'notes';
     uiState.notesView = 'editor';
@@ -238,6 +261,7 @@ export function createVaultNavigation(
       activeNoteTab.value.back,
       activeNoteTab.value.forward
     );
+
     if ( navigated ) {
       uiState.tool = 'notes';
       uiState.notesView = 'editor';
@@ -251,6 +275,7 @@ export function createVaultNavigation(
       activeNoteTab.value.forward,
       activeNoteTab.value.back
     );
+
     if ( navigated ) {
       uiState.tool = 'notes';
       uiState.notesView = 'editor';
@@ -286,15 +311,19 @@ export function createVaultNavigation(
     const replacesSearch = options.query !== undefined
       || options.scope !== undefined
       || options.exactTag !== undefined;
+
     if ( options.query !== undefined ) {
       searchState.query = options.query;
     }
+
     if ( options.scope !== undefined ) {
       searchState.scope = options.scope;
     }
+
     if ( replacesSearch ) {
       searchState.exactTag = options.exactTag ?? null;
     }
+
     uiState.commandOpen = false;
     uiState.tool = 'search';
     searchState.focusRequest += 1;
@@ -311,10 +340,12 @@ export function createVaultNavigation(
     }
 
     const wasVisible = dependencies.isNoteVisible( id );
+
     dependencies.batchChanges( () => {
       activeNoteTab.value.image = null;
       vaultState.activeNoteId = id;
       touchRecentNote( id );
+
       if ( !wasVisible ) {
         vaultState.selectedFolderId = 'all';
         uiState.noteFilter = '';
@@ -333,6 +364,7 @@ export function createVaultNavigation(
       id,
       ...vaultState.recentNoteIds.filter( ( noteId ) => noteId !== id )
     ].slice( 0, RECENT_NOTE_LIMIT );
+
     vaultState.recentNoteIds.splice(
       0,
       vaultState.recentNoteIds.length,
@@ -351,12 +383,15 @@ export function createVaultNavigation(
     nextId: string
   ): void {
     const previous = activeNoteTab.value.image ?? previousId;
+
     if ( sameTarget( previous, nextId ) || !noteExists( nextId ) ) {
       return;
     }
+
     if ( previous && targetExists( previous ) ) {
       pushNavigationEntry( activeNoteTab.value.back, previous );
     }
+
     activeNoteTab.value.forward.splice( 0 );
   }
 
@@ -366,15 +401,19 @@ export function createVaultNavigation(
   ): boolean {
     while ( source.length ) {
       const target = source.pop();
+
       if ( !target || sameTarget( target, currentTarget() ) || !targetExists( target ) ) {
         continue;
       }
+
       const previous = currentTarget();
+
       if ( typeof target === 'string' ) {
         activateNote( target );
       } else {
         activateImage( target );
       }
+
       if ( previous && targetExists( previous ) ) {
         pushNavigationEntry( destination, previous );
       }
@@ -389,7 +428,9 @@ export function createVaultNavigation(
     if ( sameTarget( stack[ stack.length - 1 ], target ) ) {
       return;
     }
+
     stack.push( copyTarget( target ) );
+
     if ( stack.length > NOTE_NAVIGATION_LIMIT ) {
       stack.splice( 0, stack.length - NOTE_NAVIGATION_LIMIT );
     }
@@ -398,6 +439,7 @@ export function createVaultNavigation(
   function findNavigationTarget( stack: TabNavigationTarget[]): TabNavigationTarget | undefined {
     for ( let index = stack.length - 1; index >= 0; index -= 1 ) {
       const target = stack[ index ]!;
+
       if ( !sameTarget( target, currentTarget() ) && targetExists( target ) ) {
         return target;
       }
@@ -410,6 +452,7 @@ export function createVaultNavigation(
     for ( const tab of noteTabsState.tabs ) {
       tab.back = tab.back.filter( ( noteId ) => noteId !== id );
       tab.forward = tab.forward.filter( ( noteId ) => noteId !== id );
+
       if ( tab.noteId === id ) {
         tab.noteId = null;
       }
@@ -420,12 +463,14 @@ export function createVaultNavigation(
     const recentId = vaultState.recentNoteIds.find(
       ( noteId ) => noteId !== id && noteExists( noteId )
     );
+
     if ( recentId ) {
       return recentId;
     }
 
     const navigationTarget = forwardNavigationNote.value
       ?? backNavigationNote.value;
+
     if ( navigationTarget ) {
       return navigationTarget.id;
     }
@@ -446,6 +491,7 @@ export function createVaultNavigation(
     ) {
       return true;
     }
+
     if (
       backNavigationNote.value?.id === id
       && traverseNoteNavigation(
@@ -473,9 +519,15 @@ export function createVaultNavigation(
 
   function pruneNoteNavigation(): void {
     const noteIds = new Set( vaultState.notes.map( ( note ) => note.id ) );
+
     for ( const tab of noteTabsState.tabs ) {
-      tab.back = tab.back.filter( ( target ) => typeof target === 'string' ? noteIds.has( target ) : targetExists( target ) );
-      tab.forward = tab.forward.filter( ( target ) => typeof target === 'string' ? noteIds.has( target ) : targetExists( target ) );
+      tab.back = tab.back.filter( ( target ) =>
+        typeof target === 'string' ? noteIds.has( target ) : targetExists( target )
+      );
+      tab.forward = tab.forward.filter( ( target ) =>
+        typeof target === 'string' ? noteIds.has( target ) : targetExists( target )
+      );
+
       if ( tab.noteId && !noteIds.has( tab.noteId ) ) {
         tab.noteId = null;
       }
@@ -484,9 +536,11 @@ export function createVaultNavigation(
 
   function resetNoteNavigation( restoredPositionVaultId?: string ): void {
     const tab = newTab( vaultState.activeNoteId );
+
     noteTabsState.tabs = [ tab ];
     noteTabsState.activeTabId = tab.id;
     uiState.frontmatterVisible = tab.frontmatterVisible;
+
     if ( restoredPositionVaultId ) {
       restoreNoteTabEditorPositions( restoredPositionVaultId, tab.id, vaultState.notes );
     }
@@ -495,12 +549,22 @@ export function createVaultNavigation(
   function snapshotNoteNavigation(): NoteNavigationState {
     return {
       activeTabId: noteTabsState.activeTabId,
-      tabs: noteTabsState.tabs.map( ( tab ) => ({ ...tab, image: tab.image ? { ...tab.image } : null, back: tab.back.map( copyTarget ), forward: tab.forward.map( copyTarget ) }) )
+      tabs: noteTabsState.tabs.map( ( tab ) => ({
+        ...tab,
+        image: tab.image ? { ...tab.image } : null,
+        back: tab.back.map( copyTarget ),
+        forward: tab.forward.map( copyTarget )
+      }) )
     };
   }
 
   function restoreNoteNavigation( snapshot: NoteNavigationState ): void {
-    noteTabsState.tabs = snapshot.tabs.map( ( tab ) => ({ ...tab, image: tab.image ? { ...tab.image } : null, back: tab.back.map( copyTarget ), forward: tab.forward.map( copyTarget ) }) );
+    noteTabsState.tabs = snapshot.tabs.map( ( tab ) => ({
+      ...tab,
+      image: tab.image ? { ...tab.image } : null,
+      back: tab.back.map( copyTarget ),
+      forward: tab.forward.map( copyTarget )
+    }) );
     noteTabsState.activeTabId = snapshot.activeTabId;
     pruneNoteNavigation();
     vaultState.activeNoteId = activeNoteTab.value.noteId;

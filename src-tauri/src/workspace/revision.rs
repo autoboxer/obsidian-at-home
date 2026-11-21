@@ -8,6 +8,7 @@ pub(super) fn revision_for_root(root: &Path) -> Result<u64, String> {
 
 pub(super) fn revision_entries_for_root(root: &Path) -> Result<Vec<RevisionEntry>, String> {
     let mut entries = Vec::new();
+
     for entry in WalkDir::new(root)
         .follow_links(false)
         .max_depth(128)
@@ -50,13 +51,17 @@ pub(super) fn revision_entries_for_root(root: &Path) -> Result<Vec<RevisionEntry
             ));
         }
     }
+
+    // directory iteration order must not affect a vault's revision
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
     Ok(entries)
 }
 
 pub(super) fn revision_for_entries(entries: &[RevisionEntry]) -> u64 {
+    // seed FNV-1a with its standard 64-bit offset basis for deterministic change detection
     let mut hash = 0xcbf29ce484222325_u64;
+
     for (label, metadata) in entries {
         fnv_update(&mut hash, label.as_bytes());
         fnv_update(&mut hash, &[0]);
@@ -73,6 +78,8 @@ pub(super) fn revision_for_entries(entries: &[RevisionEntry]) -> u64 {
         }
         fnv_update(&mut hash, &[0xff]);
     }
+
+    // keep revisions nonzero and within JavaScript's exact integer range
     let revision = hash & MAX_SAFE_JAVASCRIPT_INTEGER;
     if revision == 0 {
         1
@@ -88,6 +95,7 @@ fn revision_file_needs_content_hash(path: &Path, relative_path: &str) -> bool {
 pub(super) fn fnv_update(hash: &mut u64, bytes: &[u8]) {
     for byte in bytes {
         *hash ^= u64::from(*byte);
+        // the FNV-1a prime mixes each byte modulo 2^64; this is not a cryptographic hash
         *hash = hash.wrapping_mul(0x100000001b3);
     }
 }
@@ -153,8 +161,8 @@ pub(super) fn verify_workspace_load_reads(
     state_fingerprint: Option<&FileFingerprint>,
     state_file_was_present: bool,
 ) -> Result<(), String> {
-    // A second filesystem read alone cannot prove that the bytes used by the
-    // loader matched its baseline: a file may have changed and changed back.
+    // a second filesystem read alone cannot prove that the bytes used by the
+    // loader matched its baseline: a file may have changed and changed back
     let state_stamp = revision_entry_stamp(baseline, &format!("F:{STATE_DIRECTORY}/{STATE_FILE}"));
     if state_fingerprint
         .is_some_and(|fingerprint| !stamp_matches_fingerprint(state_stamp, fingerprint))

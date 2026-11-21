@@ -5,6 +5,7 @@ import type { Note, NoteEditorPosition } from '../types';
 
 const BROWSER_STORAGE_KEY = 'obsidian-at-home.editor-positions.v1';
 const STORAGE_VERSION = 1;
+// batch frequent scroll/caret captures separately from document-content saves
 const PERSIST_DELAY = 600;
 
 export interface NoteEditorViewPosition extends NoteEditorPosition {
@@ -12,8 +13,8 @@ export interface NoteEditorViewPosition extends NoteEditorPosition {
   mainIndex?: number;
 }
 
-// Tab views are session-only. Vault opening explicitly seeds the restored tab
-// from per-note positions; newly created tabs never inherit those positions.
+// tab views are session-only. Vault opening explicitly seeds the restored tab
+// from per-note positions; newly created tabs never inherit those positions
 interface TabPosition {
   vaultId: string;
   noteId: string;
@@ -22,8 +23,9 @@ interface TabPosition {
 }
 
 const tabPositions = new Map<string, TabPosition>();
-// Keep unvisited startup positions outside the bounded live-view cache. They
-// belong only to the restored tab and are consumed when that tab opens a note.
+
+// keep unvisited startup positions outside the bounded live-view cache. They
+// belong only to the restored tab and are consumed when that tab opens a note
 const restoredTabPositions = new Map<string, {
   vaultId: string;
   tabId: string;
@@ -36,12 +38,14 @@ export function pruneNoteTabEditorPositions( keepDocument: ( documentId: string 
       tabPositions.delete( key );
     }
   }
+
   for ( const [ key, tab ] of restoredTabPositions ) {
     for ( const noteId of tab.positions.keys() ) {
       if ( !keepDocument( JSON.stringify([ tab.vaultId, tab.tabId, noteId ]) ) ) {
         tab.positions.delete( noteId );
       }
     }
+
     if ( !tab.positions.size ) {
       restoredTabPositions.delete( key );
     }
@@ -55,17 +59,23 @@ export function getNoteTabEditorPosition(
   content: string
 ): NoteEditorViewPosition | undefined {
   const key = JSON.stringify([ vaultId, tabId, noteId ]);
+
   const saved = tabPositions.get( key )
     ?? restoredTabPositions.get( JSON.stringify([ vaultId, tabId ]) )?.positions.get( noteId );
+
   if ( !saved ) {
     return undefined;
   }
+
   const current = normalizeDocumentText( content );
+
   if ( current !== saved.content ) {
     const changes = ChangeSet.of( minimalDocumentChange( saved.content, current ), saved.content.length );
+
     saved.position = mapTabPosition( saved.position, changes );
     saved.content = current;
   }
+
   setNoteTabEditorPosition( vaultId, tabId, noteId, saved.content, saved.position );
 
   return saved.position;
@@ -80,14 +90,19 @@ export function setNoteTabEditorPosition(
 ): void {
   const tabKey = JSON.stringify([ vaultId, tabId ]);
   const restored = restoredTabPositions.get( tabKey );
+
   restored?.positions.delete( noteId );
+
   if ( restored && !restored.positions.size ) {
     restoredTabPositions.delete( tabKey );
   }
+
   const key = JSON.stringify([ vaultId, tabId, noteId ]);
+
   tabPositions.delete( key );
   tabPositions.set( key, { vaultId, noteId, content, position });
-  // Bound retained view snapshots just as the note undo cache is bounded.
+
+  // bound retained view snapshots just as the note undo cache is bounded
   while ( tabPositions.size > 250 ) {
     tabPositions.delete( tabPositions.keys().next().value! );
   }
@@ -99,10 +114,13 @@ export function restoreNoteTabEditorPositions(
   notes: Note[]
 ): void {
   const tabKey = JSON.stringify([ vaultId, tabId ]);
+
   const restored = restoredTabPositions.get( tabKey )
     ?? { vaultId, tabId, positions: new Map<string, TabPosition>() };
+
   for ( const note of notes ) {
     const position = getNoteEditorPosition( vaultId, note.id, note.content );
+
     if ( position ) {
       tabPositions.delete( JSON.stringify([ vaultId, tabId, note.id ]) );
       restored.positions.set( note.id, {
@@ -110,6 +128,7 @@ export function restoreNoteTabEditorPositions(
       });
     }
   }
+
   if ( restored.positions.size ) {
     restoredTabPositions.set( tabKey, restored );
   }
@@ -128,16 +147,20 @@ export function mapNoteTabEditorPositions(
         minimalDocumentChange( saved.content, previous ), saved.content.length
       ) );
     }
+
     saved.position = mapTabPosition( saved.position, changes );
     saved.content = content;
   };
+
   for ( const saved of tabPositions.values() ) {
     if ( saved.vaultId === vaultId && saved.noteId === noteId ) {
       mapSaved( saved );
     }
   }
+
   for ( const tab of restoredTabPositions.values() ) {
     const saved = tab.vaultId === vaultId ? tab.positions.get( noteId ) : undefined;
+
     if ( saved ) {
       mapSaved( saved );
     }
@@ -213,6 +236,7 @@ export function initializeNoteEditorPositions(
   storedPositionsRevision: string | null = null
 ): string {
   const vaultId = editorPositionVaultId( backend, path );
+
   const source = backend === 'browser'
     ? readBrowserPositions()
     : {
@@ -221,6 +245,7 @@ export function initializeNoteEditorPositions(
       needsRewrite: false,
       revision: storedPositionsRevision
     };
+
   const normalized = normalizePositions( source.value, notes );
   const existing = positionVaults.get( vaultId );
 
@@ -236,7 +261,9 @@ export function initializeNoteEditorPositions(
       storageRevision: source.revision,
       writable: source.writable
     };
+
     positionVaults.set( vaultId, vault );
+
     if ( source.needsRewrite || normalized.changed ) {
       markPositionsDirty( vault );
     }
@@ -252,6 +279,7 @@ export function initializeNoteEditorPositions(
   existing.backend = backend;
   existing.path = path;
   existing.writable = source.writable;
+
   if ( !source.writable ) {
     clearTimeout( existing.persistTimer );
     existing.persistTimer = undefined;
@@ -268,9 +296,11 @@ export function initializeNoteEditorPositions(
     existing.dirtyVersion = 0;
     existing.savedVersion = 0;
   }
+
   existing.storageRevision = source.revision;
 
   const pruned = prunePositionMap( existing.positions, new Set( notes.map( ( note ) => note.id ) ) );
+
   if ( source.needsRewrite || normalized.changed || pruned ) {
     markPositionsDirty( existing );
   }
@@ -290,6 +320,7 @@ export function getNoteEditorPosition(
   if ( !vault || !position ) {
     return normalized;
   }
+
   if ( !normalized ) {
     vault.positions.delete( noteId );
     markPositionsDirty( vault );
@@ -312,6 +343,7 @@ export function captureNoteEditorPosition(
     }
 
     const position = capture.read();
+
     if ( position ) {
       setNoteEditorPosition( vaultId, noteId, position );
     }
@@ -326,12 +358,14 @@ export function setNoteEditorPosition(
   position: NoteEditorPosition
 ): void {
   const normalized = normalizeNoteEditorPosition( position, Number.MAX_SAFE_INTEGER );
+
   if ( !normalized ) {
     return;
   }
 
   const vault = positionVaults.get( vaultId ) ?? createTransientVault( vaultId );
   const previous = vault.positions.get( noteId );
+
   if ( previous && editorPositionsMatch( previous, normalized ) ) {
     return;
   }
@@ -346,6 +380,7 @@ export function registerNoteEditorPositionCapture(
   read: () => NoteEditorPosition | undefined
 ): () => boolean {
   const capture = { vaultId, noteId, read };
+
   positionCaptures.add( capture );
 
   return () => positionCaptures.delete( capture );
@@ -357,16 +392,20 @@ export function deleteNoteEditorPosition( vaultId: string, noteId: string ): voi
       tabPositions.delete( key );
     }
   }
+
   for ( const [ key, tab ] of restoredTabPositions ) {
     if ( tab.vaultId === vaultId ) {
       tab.positions.delete( noteId );
+
       if ( !tab.positions.size ) {
         restoredTabPositions.delete( key );
       }
     }
   }
+
   removePositionCaptures( vaultId, new Set([ noteId ]) );
   const vault = positionVaults.get( vaultId );
+
   if ( vault?.positions.delete( noteId ) ) {
     markPositionsDirty( vault );
   }
@@ -374,11 +413,13 @@ export function deleteNoteEditorPosition( vaultId: string, noteId: string ): voi
 
 export function pruneNoteEditorPositions( vaultId: string, notes: Note[]): void {
   const noteIds = new Set( notes.map( ( note ) => note.id ) );
+
   for ( const [ key, saved ] of tabPositions ) {
     if ( saved.vaultId === vaultId && !noteIds.has( saved.noteId ) ) {
       tabPositions.delete( key );
     }
   }
+
   for ( const [ key, tab ] of restoredTabPositions ) {
     if ( tab.vaultId === vaultId ) {
       for ( const noteId of tab.positions.keys() ) {
@@ -386,13 +427,16 @@ export function pruneNoteEditorPositions( vaultId: string, notes: Note[]): void 
           tab.positions.delete( noteId );
         }
       }
+
       if ( !tab.positions.size ) {
         restoredTabPositions.delete( key );
       }
     }
   }
+
   removePositionCaptures( vaultId, noteIds, true );
   const vault = positionVaults.get( vaultId );
+
   if (
     vault
     && prunePositionMap( vault.positions, noteIds )
@@ -409,9 +453,11 @@ export function hasPendingNoteEditorPositions(): boolean {
 
 export async function flushNoteEditorPositions( vaultId?: string ): Promise<boolean> {
   captureOpenEditorPositions( vaultId );
+
   const vaults = vaultId
     ? [ positionVaults.get( vaultId ) ].filter( ( vault ): vault is EditorPositionVault => Boolean( vault ) )
     : [ ...positionVaults.values() ];
+
   const results = await Promise.all( vaults.map( flushPositionVault ) );
 
   return results.every( Boolean );
@@ -424,6 +470,7 @@ function captureOpenEditorPositions( vaultId?: string ): void {
     }
 
     const position = capture.read();
+
     if ( position ) {
       setNoteEditorPosition( capture.vaultId, capture.noteId, position );
     }
@@ -454,11 +501,13 @@ export function normalizeNoteEditorPosition(
   }
 
   const { anchor, head } = value.selection;
+
   const {
     anchor: viewportAnchor,
     offset,
     left
   } = value.viewport;
+
   if (
     !isFiniteNumber( anchor )
     || !isFiniteNumber( head )
@@ -486,17 +535,21 @@ export function normalizeNoteEditorPosition(
 
 function normalizePositions( value: unknown, notes: Note[]): NormalizedPositions {
   const positions = new Map<string, NoteEditorPosition>();
+
   if ( value === undefined || value === null ) {
     return { positions, changed: false };
   }
+
   if ( !isRecord( value ) ) {
     return { positions, changed: true };
   }
 
   const notesById = new Map( notes.map( ( note ) => [ note.id, note ]) );
   let changed = false;
+
   for ( const [ noteId, storedPosition ] of Object.entries( value ) ) {
     const note = notesById.get( noteId );
+
     if ( !note ) {
       changed = true;
       continue;
@@ -506,6 +559,7 @@ function normalizePositions( value: unknown, notes: Note[]): NormalizedPositions
       storedPosition,
       normalizedDocumentLength( note.content )
     );
+
     if ( !normalized ) {
       changed = true;
       continue;
@@ -528,6 +582,7 @@ function clampDocumentOffset( value: number, maximum: number ): number {
 
 function createTransientVault( vaultId: string ): EditorPositionVault {
   const native = vaultId.startsWith( 'native:' );
+
   const vault: EditorPositionVault = {
     backend: native ? 'native' : 'browser',
     path: native ? vaultId.slice( 'native:'.length ) || null : null,
@@ -539,6 +594,7 @@ function createTransientVault( vaultId: string ): EditorPositionVault {
     storageRevision: null,
     writable: true
   };
+
   positionVaults.set( vaultId, vault );
 
   return vault;
@@ -549,6 +605,7 @@ function prunePositionMap(
   noteIds: Set<string>
 ): boolean {
   let changed = false;
+
   for ( const noteId of positions.keys() ) {
     if ( !noteIds.has( noteId ) ) {
       positions.delete( noteId );
@@ -579,6 +636,7 @@ async function flushPositionVault( vault: EditorPositionVault ): Promise<boolean
   if ( !hasUnsavedPositions( vault ) ) {
     return true;
   }
+
   if ( vault.saveInFlight ) {
     const inFlightVersion = vault.saveInFlightVersion;
     const { saved } = await vault.saveInFlight;
@@ -590,18 +648,23 @@ async function flushPositionVault( vault: EditorPositionVault ): Promise<boolean
 
   const targetVersion = vault.dirtyVersion;
   const snapshot = positionSnapshot( vault.positions );
+
   const operation = persistPositionSnapshot(
     vault,
     snapshot,
     vault.storageRevision
   );
+
   vault.saveInFlight = operation;
   vault.saveInFlightVersion = targetVersion;
   const result = await operation;
+
   if ( vault.saveInFlight !== operation ) {
     return flushPositionVault( vault );
   }
+
   vault.saveInFlight = null;
+
   if ( !result.saved ) {
     return vault.dirtyVersion > targetVersion
       ? flushPositionVault( vault )
@@ -636,7 +699,7 @@ async function persistPositionSnapshot(
 
     return { saved: true, revision: expectedRevision };
   } catch ( error ) {
-    // Editor position persistence is best effort and must remain non-fatal.
+    // editor position persistence is best effort and must remain non-fatal
     // eslint-disable-next-line no-console
     console.warn( 'Could not save editor positions', error );
 
@@ -656,24 +719,30 @@ function positionSnapshot(
 
 function readBrowserPositions(): StoredPositionsSource {
   let raw: string | null;
+
   try {
     raw = window.localStorage.getItem( BROWSER_STORAGE_KEY );
   } catch {
     return { value: undefined, writable: false, needsRewrite: false, revision: null };
   }
+
   if ( !raw ) {
     return { value: undefined, writable: true, needsRewrite: false, revision: null };
   }
 
   try {
     const stored = JSON.parse( raw ) as unknown;
+
     if ( !isRecord( stored ) || !Number.isInteger( stored.version ) ) {
       return { value: {}, writable: true, needsRewrite: true, revision: null };
     }
+
     const version = stored.version as number;
+
     if ( version > STORAGE_VERSION ) {
       return { value: undefined, writable: false, needsRewrite: false, revision: null };
     }
+
     if ( version < 1 ) {
       return { value: {}, writable: true, needsRewrite: true, revision: null };
     }
@@ -693,6 +762,7 @@ function persistBrowserPositions( positions: Record<string, NoteEditorPosition> 
   if ( typeof localStorage === 'undefined' ) {
     throw new Error( 'Browser storage is unavailable.' );
   }
+
   if ( !Object.keys( positions ).length ) {
     localStorage.removeItem( BROWSER_STORAGE_KEY );
 

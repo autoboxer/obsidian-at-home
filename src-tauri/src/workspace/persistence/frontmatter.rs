@@ -9,9 +9,9 @@ pub(in crate::workspace) fn content_with_requested_tags(
         return Ok(note.content.clone());
     }
 
-    // Legacy seed/import notes can carry tags outside their Markdown. Only add
+    // legacy seed/import notes can carry tags outside their Markdown. Only add
     // an absent field when creating a note; never resolve conflicting edits by
-    // rewriting existing source, including an explicitly empty tags field.
+    // rewriting existing source, including an explicitly empty tags field
     let has_source_tags = frontmatter_bounds(&note.content).is_some_and(|(start, end, _)| {
         note.content[start..end].lines().any(|line| {
             !line.starts_with([' ', '\t'])

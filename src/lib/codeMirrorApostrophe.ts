@@ -27,12 +27,13 @@ export const literalApostropheExtension: Extension = [
         || view.state.selection.ranges.some( ( range ) =>
           /['"]/.test( view.state.doc.lineAt( range.head ).text )
         );
+
       if ( !touchesQuote ) {
         return false;
       }
 
-      // Native smart punctuation can rewrite earlier text and its DOM caret.
-      // Keep typing on quoted lines in the same editing path as the quote key.
+      // native smart punctuation can rewrite earlier text and its DOM caret
+      // keep typing on quoted lines in the same editing path as the quote key
       event.preventDefault();
       view.dispatch( view.state.replaceSelection( event.data ), {
         scrollIntoView: true,
@@ -57,18 +58,22 @@ function preserveLiteralQuotes(
   }
 
   const correctedInput = correctQuoteSubstitution( view, from, to, text );
+
   if ( correctedInput === text ) {
     return false;
   }
 
   const transaction = insert();
+
   if ( !transaction.isUserEvent( 'input.type' ) || transaction.isUserEvent( 'input.type.compose' ) ) {
     return false;
   }
 
   const edits: ChangeSpec[] = [];
+
   transaction.changes.iterChanges( ( fromA, toA, _fromB, _toB, inserted ) => {
     const corrected = correctQuoteSubstitution( view, fromA, toA, inserted.toString() );
+
     if ( corrected !== view.state.sliceDoc( fromA, toA ) ) {
       edits.push({ from: fromA, to: toA, insert: corrected });
     }
@@ -77,8 +82,8 @@ function preserveLiteralQuotes(
   const addToHistory = transaction.annotation( Transaction.addToHistory );
   const remote = transaction.annotation( Transaction.remote );
 
-  // A delayed substitution alone must not move the caret or create an undo
-  // step. Retain other simultaneous edits, selections, and transaction effects.
+  // a delayed substitution alone must not move the caret or create an undo
+  // step. Retain other simultaneous edits, selections, and transaction effects
   view.dispatch({
     changes,
     selection: changes.empty ? view.state.selection : transaction.newSelection,

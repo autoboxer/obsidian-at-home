@@ -9,18 +9,14 @@ import {
   type MarkdownAttachmentMetadata,
   type ParsedMarkdownAttachment
 } from './markdownAttachments';
-import {
-  markdownImageStyle,
-  parseMarkdownImageAt,
-  type ParsedMarkdownImage
-} from './markdownImages';
+import { markdownImageStyle, parseMarkdownImageAt, type ParsedMarkdownImage } from './markdownImages';
 import { parseWikiLinkAt } from './wikiLinks';
 import { normalizeMarkdownLinkDestination } from './markdownLinks';
 
 export interface MarkdownRenderOptions {
-  /** Recognize an extensionless attachment only when its vault inventory contains the file. */
+  /** recognize an extensionless attachment only when its vault inventory contains the file */
   acceptExtensionlessAttachment?: ( destination: string ) => boolean;
-  /** Used only to decorate resolvable/unresolvable wiki links. */
+  /** used only to decorate resolvable/unresolvable wiki links */
   resolveWikiLink?: (
     target: string,
     heading?: string
@@ -74,10 +70,10 @@ interface ParsedMarkdownLink {
 }
 
 /**
- * Render the Markdown subset used by the app. Raw HTML is escaped except for a
+ * render the Markdown subset used by the app. Raw HTML is escaped except for a
  * strict `<br>` line-break allowlist. Scriptable URLs and event-handler
  * injection are not permitted, so the returned string is suitable for Vue's
- * `v-html`.
+ * `v-html`
  */
 export function renderMarkdown(
   markdown: string,
@@ -101,7 +97,7 @@ function stripLeadingFrontmatterForPreview( markdown: string ): string {
     : markdown.slice( frontmatterEnd );
 }
 
-/** Toggle a rendered task checkbox while preserving the rest of the Markdown. */
+/** toggle a rendered task checkbox while preserving the rest of the Markdown */
 export function toggleMarkdownTask(
   markdown: string,
   taskIndex: number,
@@ -129,8 +125,10 @@ export function toggleMarkdownTask(
     }
 
     const fenceMatch = unquotedLine.match( /^ {0,3}(`{3,}|~{3,})/ );
+
     if ( fenceMatch ) {
       const run = fenceMatch[ 1 ]!;
+
       if ( !fence ) {
         fence = { marker: run[ 0 ]!, size: run.length, quoteDepth };
       } else if ( run[ 0 ] === fence.marker && run.length >= fence.size ) {
@@ -140,6 +138,7 @@ export function toggleMarkdownTask(
       const task = line.match(
         /^(?:(?: {0,3}> ?)+)?[ \t]*(?:[-+*]|\d{1,9}[.)])[\t ]+\[([ xX])\]/
       );
+
       if ( task ) {
         if ( currentTask === taskIndex ) {
           const markerOffset = task[ 0 ].lastIndexOf( '[' ) + 1;
@@ -148,6 +147,7 @@ export function toggleMarkdownTask(
             cursor + markerOffset + 1
           ) }`;
         }
+
         currentTask += 1;
       }
     }
@@ -155,13 +155,14 @@ export function toggleMarkdownTask(
     if ( newline < 0 ) {
       break;
     }
+
     cursor = newline + 1;
   }
 
   return markdown;
 }
 
-/** Escape arbitrary user text for insertion into HTML text or attributes. */
+/** escape arbitrary user text for insertion into HTML text or attributes */
 export function escapeHtml( value: string ): string {
   return value
     .replace( /&/g, '&amp;' )
@@ -171,22 +172,24 @@ export function escapeHtml( value: string ): string {
     .replace( /'/g, '&#39;' );
 }
 
-/** Return a browser-safe Markdown link destination, or `undefined`. */
+/** return a browser-safe Markdown link destination, or `undefined` */
 export function sanitizeLinkUrl( value: string ): string | undefined {
   const url = normalizeMarkdownLinkDestination( value )
     .replace( /[\u0000-\u001f\u007f]/g, '' );
+
   if ( !url ) {
     return undefined;
   }
 
   const compact = url.replace( /[\s\u00a0]+/g, '' ).toLocaleLowerCase();
   const scheme = compact.match( /^([a-z][a-z0-9+.-]*):/i )?.[ 1 ];
+
   if ( scheme && ![ 'http', 'https', 'mailto' ].includes( scheme ) ) {
     return undefined;
   }
 
-  // Backslashes can be interpreted as slashes by URL parsers, so reject them
-  // instead of allowing a disguised scheme-relative destination.
+  // backslashes can be interpreted as slashes by URL parsers, so reject them
+  // instead of allowing a disguised scheme-relative destination
   if ( url.includes( '\\' ) ) {
     return undefined;
   }
@@ -195,7 +198,7 @@ export function sanitizeLinkUrl( value: string ): string | undefined {
 }
 
 function renderBlocks( markdown: string, context: RenderContext ): string {
-  // Prevent pathological recursive blockquotes from consuming the call stack.
+  // prevent pathological recursive blockquotes from consuming the call stack
   if ( context.depth > 16 ) {
     return `<p>${ renderInline( markdown, context ) }</p>`;
   }
@@ -206,23 +209,28 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
 
   while ( index < lines.length ) {
     const line = lines[ index ]!;
+
     if ( !line.trim() ) {
       index += 1;
       continue;
     }
 
     const fence = line.match( /^ {0,3}(`{3,}|~{3,})([^\n]*)$/ );
+
     if ( fence ) {
       const marker = fence[ 1 ]![ 0 ]!;
       const markerLength = fence[ 1 ]!.length;
       const info = fence[ 2 ]!.trim().split( /\s+/, 1 )[ 0 ] ?? '';
+      // keep language labels short and limited to identifier characters
       const language = info.replace( /[^a-zA-Z0-9_+-]/g, '' ).slice( 0, 40 );
       const code: string[] = [];
+
       index += 1;
 
       while ( index < lines.length ) {
         const candidate = lines[ index ]!;
         const closing = candidate.match( /^ {0,3}(`+|~+)\s*$/ );
+
         if (
           closing &&
           closing[ 1 ]![ 0 ] === marker &&
@@ -231,27 +239,35 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
           index += 1;
           break;
         }
+
         code.push( candidate );
         index += 1;
       }
 
       const rawCode = code.join( '\n' );
       const highlighted = language ? highlightCode( rawCode, language ) : undefined;
+
       const classes = [ language ? `language-${ escapeHtml( language ) }` : '', highlighted ? 'hljs' : '' ]
         .filter( Boolean )
         .join( ' ' );
+
       const className = classes ? ` class="${ classes }"` : '';
       const languageLabel = language ? ` data-language="${ escapeHtml( language ) }"` : '';
-      blocks.push( `<pre${ languageLabel }><code${ className }>${ highlighted ?? escapeHtml( rawCode ) }</code></pre>` );
+
+      blocks.push(
+        `<pre${ languageLabel }><code${ className }>${ highlighted ?? escapeHtml( rawCode ) }</code></pre>`
+      );
       continue;
     }
 
     const heading = line.match( /^ {0,3}(#{1,6})[\t ]+(.+?)\s*$/ );
+
     if ( heading ) {
       const level = heading[ 1 ]!.length;
       const text = heading[ 2 ]!.replace( /[\t ]+#+[\t ]*$/, '' );
       const prefix = context.options.headingIdPrefix ?? '';
       const id = `${ prefix }${ markdownHeadingSlug( text ) }`;
+
       blocks.push(
         `<h${ level } id="${ escapeHtml( id ) }">${ renderInline( text, context ) }</h${ level }>`
       );
@@ -268,21 +284,26 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
 
     if ( /^ {0,3}>/.test( line ) ) {
       const quoted: string[] = [];
+
       while ( index < lines.length ) {
         const quoteLine = lines[ index ]!;
         const match = quoteLine.match( /^ {0,3}> ?(.*)$/ );
+
         if ( match ) {
           quoted.push( match[ 1 ]! );
           index += 1;
           continue;
         }
+
         if ( !quoteLine.trim() && /^ {0,3}>/.test( lines[ index + 1 ] ?? '' ) ) {
           quoted.push( '' );
           index += 1;
           continue;
         }
+
         break;
       }
+
       blocks.push(
         `<blockquote>${ renderBlocks( quoted.join( '\n' ), {
           ...context,
@@ -293,8 +314,10 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
     }
 
     const listMatch = matchListItem( line );
+
     if ( listMatch ) {
       const rendered = renderList( lines, index, context, listMatch.indent );
+
       blocks.push( rendered.html );
       index = rendered.nextIndex;
       continue;
@@ -304,8 +327,10 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
       const header = splitTableRow( lines[ index ]! );
       const separators = splitTableRow( lines[ index + 1 ]! );
       const alignments = separators.map( tableAlignment );
+
       index += 2;
       const rows: string[][] = [];
+
       while ( index < lines.length && looksLikeTableRow( lines[ index ]! ) ) {
         rows.push( splitTableRow( lines[ index ]! ) );
         index += 1;
@@ -314,6 +339,7 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
       const headerHtml = header.map( ( cell, cellIndex ) =>
         `<th${ alignmentClass( alignments[ cellIndex ]) }>${ renderInline( cell.trim(), context ) }</th>`
       ).join( '' );
+
       const bodyHtml = rows.map( ( row ) => {
         const cells = header.map( ( _, cellIndex ) =>
           `<td${ alignmentClass( alignments[ cellIndex ]) }>${ renderInline(
@@ -334,7 +360,9 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
     }
 
     const paragraph: string[] = [ line ];
+
     index += 1;
+
     while (
       index < lines.length &&
       lines[ index ]!.trim() &&
@@ -343,6 +371,7 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
       paragraph.push( lines[ index ]! );
       index += 1;
     }
+
     blocks.push( `<p>${ renderInline( paragraph.join( '\n' ), context ) }</p>` );
   }
 
@@ -350,11 +379,13 @@ function renderBlocks( markdown: string, context: RenderContext ): string {
 }
 
 function renderInline( source: string, context: RenderContext, depth = 0 ): string {
+  // deeply nested inline markup falls back to literal text instead of exhausting the stack
   if ( depth > 12 ) {
     return escapeHtml( source );
   }
 
   let html = '';
+
   for ( let index = 0; index < source.length; index += 1 ) {
     const character = source[ index ]!;
 
@@ -365,6 +396,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
     }
 
     const lineBreakTag = source.slice( index ).match( /^<br[ \t]*\/?>/i )?.[ 0 ];
+
     if ( lineBreakTag ) {
       html += '<br>';
       index += lineBreakTag.length - 1;
@@ -373,16 +405,21 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
 
     if ( character === '`' ) {
       let delimiterLength = 1;
+
       while ( source[ index + delimiterLength ] === '`' ) {
         delimiterLength += 1;
       }
+
       const delimiter = '`'.repeat( delimiterLength );
       const close = source.indexOf( delimiter, index + delimiterLength );
+
       if ( close >= 0 ) {
         let code = source.slice( index + delimiterLength, close ).replace( /\n/g, ' ' );
+
         if ( /^\s.*\s$/.test( code ) && code.trim() ) {
           code = code.slice( 1, -1 );
         }
+
         html += `<code>${ escapeHtml( code ) }</code>`;
         index = close + delimiterLength - 1;
         continue;
@@ -391,19 +428,24 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
 
     if ( character === '!' || character === '[' ) {
       const wikiLink = parseWikiLinkAt( source, index );
+
       if ( wikiLink ) {
         const resolution = context.options.resolveWikiLink?.(
           wikiLink.target,
           wikiLink.heading
         );
+
         const resolutionClass = context.options.resolveWikiLink
           ? resolution ? ' is-resolved' : ' is-unresolved'
           : '';
+
         const headingAttribute = wikiLink.heading
           ? ` data-wiki-heading="${ escapeHtml( wikiLink.heading ) }"`
           : '';
+
         const embedAttribute = wikiLink.embedded ? ' data-wiki-embed="true"' : '';
         const label = wikiLink.display || wikiLink.heading || wikiLink.target;
+
         html += `<a href="#" class="wiki-link${ resolutionClass }" data-wiki-target="${ escapeHtml(
           wikiLink.target
         ) }"${ headingAttribute }${ embedAttribute }>${ escapeHtml( label ) }</a>`;
@@ -413,6 +455,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
 
       if ( character === '!' ) {
         const image = parseMarkdownImageAt( source, index );
+
         if ( image ) {
           html += renderMarkdownImage( image, context );
           index = image.end;
@@ -424,6 +467,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
         const attachment = parseMarkdownAttachmentAt( source, index, {
           acceptExtensionless: context.options.acceptExtensionlessAttachment
         });
+
         if ( attachment ) {
           html += renderMarkdownAttachment( attachment, context );
           index = attachment.end;
@@ -431,6 +475,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
         }
 
         const markdownLink = parseMarkdownLink( source, index, context, depth );
+
         if ( markdownLink ) {
           html += markdownLink.html;
           index = markdownLink.end;
@@ -442,6 +487,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
     const strongDelimiter = source.startsWith( '**', index )
       ? '**'
       : source.startsWith( '__', index ) ? '__' : undefined;
+
     if ( strongDelimiter ) {
       const close = findClosingInlineMarkupDelimiter(
         source,
@@ -449,8 +495,10 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
         index,
         index + strongDelimiter.length
       );
+
       if ( close > index + 2 ) {
         const inner = source.slice( index + 2, close );
+
         html += `<strong>${ renderInline( inner, context, depth + 1 ) }</strong>`;
         index = close + 1;
         continue;
@@ -464,6 +512,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
         index,
         index + 2
       );
+
       if ( close > index + 2 ) {
         html += `<del>${ renderInline( source.slice( index + 2, close ), context, depth + 1 ) }</del>`;
         index = close + 1;
@@ -475,6 +524,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
       const isIntrawordUnderscore = character === '_' &&
         /[\p{L}\p{N}]/u.test( source[ index - 1 ] ?? '' ) &&
         /[\p{L}\p{N}]/u.test( source[ index + 1 ] ?? '' );
+
       const close = isIntrawordUnderscore
         ? -1
         : findClosingInlineMarkupDelimiter(
@@ -483,6 +533,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
           index,
           index + 1
         );
+
       if ( close > index + 1 ) {
         html += `<em>${ renderInline( source.slice( index + 1, close ), context, depth + 1 ) }</em>`;
         index = close;
@@ -492,6 +543,7 @@ function renderInline( source: string, context: RenderContext, depth = 0 ): stri
 
     if ( character === '\n' ) {
       const hardBreak = source[ index - 1 ] === '\\' || source.slice( Math.max( 0, index - 2 ), index ) === '  ';
+
       html += hardBreak ? '<br>' : ' ';
       continue;
     }
@@ -508,17 +560,22 @@ function renderMarkdownAttachment(
 ): string {
   const metadata = context.options.resolveAttachment?.( attachment ) ?? undefined;
   const presentation = markdownAttachmentPresentation( attachment, metadata );
+
   const assetAttribute = attachment.assetId
     ? ` data-attachment-asset-id="${ escapeHtml( attachment.assetId ) }"`
     : '';
+
   const titleAttribute = attachment.title
     ? ` title="${ escapeHtml( attachment.title ) }"`
     : '';
+
   const ariaLabel = `${ presentation.name }, ${ presentation.typeLabel }, ${ presentation.sizeLabel }`;
 
   return `<span class="markdown-attachment-card" role="group" aria-label="${ escapeHtml(
     ariaLabel
-  ) }" data-attachment-destination="${ escapeHtml( attachment.destination ) }"${ assetAttribute }${ titleAttribute }><span class="attachment-card__icon" aria-hidden="true">${ escapeHtml(
+  ) }" data-attachment-destination="${
+    escapeHtml( attachment.destination )
+  }"${ assetAttribute }${ titleAttribute }><span class="attachment-card__icon" aria-hidden="true">${ escapeHtml(
     presentation.iconLabel
   ) }</span><span class="attachment-card__copy"><span class="attachment-card__name">${ escapeHtml(
     presentation.name
@@ -534,7 +591,9 @@ function renderMarkdownImage(
   const resolved = context.options.resolveImage
     ? context.options.resolveImage( image )
     : image.destination;
+
   const source = resolved ? sanitizeImageUrl( resolved ) : undefined;
+
   if ( !source ) {
     return `<span class="unresolved-image">${ escapeHtml( image.alt || 'Image' ) }</span>`;
   }
@@ -542,6 +601,7 @@ function renderMarkdownImage(
   const titleAttribute = image.title
     ? ` title="${ escapeHtml( image.title ) }"`
     : '';
+
   const style = markdownImageStyle( image );
   const styleAttribute = style ? ` style="${ style }"` : '';
 
@@ -550,17 +610,19 @@ function renderMarkdownImage(
   ) }"${ titleAttribute }${ styleAttribute } loading="lazy" decoding="async">`;
 }
 
-/** Return a browser-safe image URL, or `undefined`. */
+/** return a browser-safe image URL, or `undefined` */
 export function sanitizeImageUrl( value: string ): string | undefined {
   const url = value
     .trim()
     .replace( /^<|>$/g, '' )
     .replace( /[\u0000-\u001f\u007f]/g, '' );
+
   if ( !url || url.includes( '\\' ) ) {
     return undefined;
   }
 
   const compact = url.replace( /[\s\u00a0]+/g, '' ).toLocaleLowerCase();
+
   if ( /^data:/i.test( compact ) ) {
     return /^data:image\/(?:avif|bmp|gif|jpeg|png|webp);base64,/i.test( compact )
       ? url
@@ -568,6 +630,7 @@ export function sanitizeImageUrl( value: string ): string | undefined {
   }
 
   const scheme = compact.match( /^([a-z][a-z0-9+.-]*):/i )?.[ 1 ];
+
   if ( scheme && ![ 'blob', 'http', 'https' ].includes( scheme ) ) {
     return undefined;
   }
@@ -582,37 +645,45 @@ function parseMarkdownLink(
   depth: number
 ): ParsedMarkdownLink | undefined {
   const labelEnd = findUnescaped( source, ']', start + 1 );
+
   if ( labelEnd < 0 || source[ labelEnd + 1 ] !== '(' ) {
     return undefined;
   }
 
   let parentheses = 1;
   let destinationEnd = -1;
+
   for ( let index = labelEnd + 2; index < source.length; index += 1 ) {
     if ( source[ index ] === '\\' ) {
       index += 1;
       continue;
     }
+
     if ( source[ index ] === '(' ) {
       parentheses += 1;
     }
+
     if ( source[ index ] === ')' ) {
       parentheses -= 1;
+
       if ( parentheses === 0 ) {
         destinationEnd = index;
         break;
       }
     }
   }
+
   if ( destinationEnd < 0 ) {
     return undefined;
   }
 
   const label = source.slice( start + 1, labelEnd );
   const rawDestination = source.slice( labelEnd + 2, destinationEnd ).trim();
+
   const destinationMatch = rawDestination.match(
     /^(<[^>]+>|\S+?)(?:\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?$/
   );
+
   if ( !destinationMatch ) {
     return undefined;
   }
@@ -621,6 +692,7 @@ function parseMarkdownLink(
   const title = destinationMatch[ 2 ] ?? destinationMatch[ 3 ] ?? destinationMatch[ 4 ];
   const safeUrl = sanitizeLinkUrl( destination );
   const labelHtml = renderInline( label, context, depth + 1 );
+
   if ( !safeUrl ) {
     return {
       html: `<span class="unsafe-link">${ labelHtml }</span>`,
@@ -629,9 +701,11 @@ function parseMarkdownLink(
   }
 
   const isExternal = /^https?:/i.test( safeUrl );
+
   const targetAttributes = isExternal && context.options.externalLinksInNewTab !== false
     ? ' target="_blank" rel="noopener noreferrer"'
     : '';
+
   const titleAttribute = title ? ` title="${ escapeHtml( title ) }"` : '';
 
   return {
@@ -646,6 +720,7 @@ function findUnescaped( source: string, needle: string, start: number ): number 
       index += 1;
       continue;
     }
+
     if ( source[ index ] === needle ) {
       return index;
     }
@@ -656,9 +731,11 @@ function findUnescaped( source: string, needle: string, start: number ): number 
 
 function matchListItem( line: string ): MatchedListItem | undefined {
   const match = line.match( /^([ \t]*)(?:(\d{1,9})[.)]|([-+*]))[\t ]+(.*)$/ );
+
   if ( !match ) {
     return undefined;
   }
+
   const ordered = Boolean( match[ 2 ]);
 
   return {
@@ -676,6 +753,7 @@ function renderList(
   baseIndent: number
 ): RenderedList {
   const first = matchListItem( lines[ startIndex ] ?? '' );
+
   if ( !first ) {
     return { html: '', nextIndex: startIndex + 1 };
   }
@@ -687,16 +765,20 @@ function renderList(
 
   while ( index < lines.length ) {
     const item = matchListItem( lines[ index ]! );
+
     if ( !item || item.indent !== baseIndent || item.ordered !== ordered ) {
       break;
     }
+
     index += 1;
 
     const task = item.text.match( /^\[([ xX])\][\t ]+(.*)$/ );
     const taskIndex = task ? context.taskCounter.value : undefined;
+
     if ( task ) {
       context.taskCounter.value += 1;
     }
+
     const parts: Array<ListTextPart | ListHtmlPart> = [{
       type: 'text',
       value: task ? task[ 2 ]! : item.text
@@ -704,11 +786,14 @@ function renderList(
 
     while ( index < lines.length ) {
       const nextLine = lines[ index ]!;
+
       if ( !nextLine.trim() ) {
         let lookahead = index + 1;
+
         while ( lookahead < lines.length && !lines[ lookahead ]!.trim() ) {
           lookahead += 1;
         }
+
         if ( lookahead >= lines.length ) {
           break;
         }
@@ -716,33 +801,40 @@ function renderList(
         const following = lines[ lookahead ]!;
         const followingItem = matchListItem( following );
         const followingIndent = indentationWidth( following.match( /^[ \t]*/ )?.[ 0 ] ?? '' );
+
         if ( !followingItem && followingIndent <= baseIndent ) {
           break;
         }
 
         index = lookahead;
+
         if ( followingItem?.indent === baseIndent ) {
           break;
         }
+
         continue;
       }
 
       const nested = matchListItem( nextLine );
+
       if ( nested ) {
         if ( nested.indent <= baseIndent ) {
           break;
         }
+
         if ( context.listDepth >= 16 ) {
           parts.push({ type: 'text', value: nested.text });
           index += 1;
           continue;
         }
+
         const rendered = renderList(
           lines,
           index,
           { ...context, listDepth: context.listDepth + 1 },
           nested.indent
         );
+
         parts.push({ type: 'html', value: rendered.html });
         index = rendered.nextIndex;
         continue;
@@ -751,12 +843,15 @@ function renderList(
       if ( indentationWidth( nextLine.match( /^[ \t]*/ )?.[ 0 ] ?? '' ) <= baseIndent ) {
         break;
       }
+
       const previous = parts.at( -1 );
+
       if ( previous?.type === 'text' ) {
         previous.value += `\n${ nextLine.trim() }`;
       } else {
         parts.push({ type: 'text', value: nextLine.trim() });
       }
+
       index += 1;
     }
 
@@ -770,9 +865,11 @@ function renderList(
   const hasTasks = items.some( ( item ) => item.checked !== undefined );
   const tag = ordered ? 'ol' : 'ul';
   const startAttribute = ordered && start !== 1 ? ` start="${ start }"` : '';
+
   const classes = [ `list-depth-${ context.listDepth % 3 }`, hasTasks ? 'task-list' : '' ]
     .filter( Boolean )
     .join( ' ' );
+
   const itemHtml = items.map( ( item ) => {
     const renderParts = ( parts: Array<ListTextPart | ListHtmlPart> ) => parts
       .map( ( part ) => part.type === 'html' ? part.value : renderInline( part.value, context ) )
@@ -782,9 +879,12 @@ function renderList(
       return `<li>${ renderParts( item.parts ) }</li>`;
     }
 
-    const checkbox = `<input type="checkbox" data-task-index="${ item.taskIndex }"${ item.checked ? ' checked' : '' } aria-label="${
+    const checkbox = `<input type="checkbox" data-task-index="${ item.taskIndex }"${
+      item.checked ? ' checked' : ''
+    } aria-label="${
       item.checked ? 'Completed task' : 'Incomplete task'
     }">`;
+
     const [ firstPart, ...remainingParts ] = item.parts;
     const firstHtml = firstPart?.type === 'text' ? renderInline( firstPart.value, context ) : '';
 
@@ -801,6 +901,7 @@ function renderList(
 
 function indentationWidth( value: string ): number {
   let width = 0;
+
   for ( const character of value ) {
     width += character === '\t' ? 4 : 1;
   }
@@ -828,9 +929,11 @@ function looksLikeTableRow( line: string ): boolean {
 function isTable( lines: readonly string[], index: number ): boolean {
   const header = lines[ index ] ?? '';
   const delimiter = lines[ index + 1 ] ?? '';
+
   if ( !looksLikeTableRow( header ) || !delimiter.includes( '|' ) ) {
     return false;
   }
+
   const cells = splitTableRow( delimiter );
 
   return cells.length > 0 && cells.every( ( cell ) => /^\s*:?-{3,}:?\s*$/.test( cell ) );
@@ -838,9 +941,11 @@ function isTable( lines: readonly string[], index: number ): boolean {
 
 function splitTableRow( line: string ): string[] {
   let value = line.trim();
+
   if ( value.startsWith( '|' ) ) {
     value = value.slice( 1 );
   }
+
   if ( value.endsWith( '|' ) && value[ value.length - 2 ] !== '\\' ) {
     value = value.slice( 0, -1 );
   }
@@ -848,34 +953,43 @@ function splitTableRow( line: string ): string[] {
   const cells: string[] = [];
   let cell = '';
   let codeDelimiter = 0;
+
   for ( let index = 0; index < value.length; index += 1 ) {
     const character = value[ index ]!;
+
     if ( character === '\\' && value[ index + 1 ] === '|' ) {
       cell += '|';
       index += 1;
       continue;
     }
+
     if ( character === '`' ) {
       let run = 1;
+
       while ( value[ index + run ] === '`' ) {
         run += 1;
       }
+
       if ( codeDelimiter === 0 ) {
         codeDelimiter = run;
       } else if ( codeDelimiter === run ) {
         codeDelimiter = 0;
       }
+
       cell += '`'.repeat( run );
       index += run - 1;
       continue;
     }
+
     if ( character === '|' && codeDelimiter === 0 ) {
       cells.push( cell );
       cell = '';
       continue;
     }
+
     cell += character;
   }
+
   cells.push( cell );
 
   return cells;
@@ -883,12 +997,15 @@ function splitTableRow( line: string ): string[] {
 
 function tableAlignment( value: string ): 'left' | 'center' | 'right' | undefined {
   const trimmed = value.trim();
+
   if ( trimmed.startsWith( ':' ) && trimmed.endsWith( ':' ) ) {
     return 'center';
   }
+
   if ( trimmed.endsWith( ':' ) ) {
     return 'right';
   }
+
   if ( trimmed.startsWith( ':' ) ) {
     return 'left';
   }

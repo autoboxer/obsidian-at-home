@@ -20,6 +20,7 @@ export function findDocumentTextMatches(
   query: string
 ): DocumentTextMatch[] {
   const normalizedQuery = normalizeDocumentSearchQuery( query );
+
   if ( !normalizedQuery || !text ) {
     return [];
   }
@@ -40,6 +41,7 @@ export function stepDocumentSearchIndex(
   if ( matchCount <= 0 ) {
     return -1;
   }
+
   if ( currentIndex < 0 || currentIndex >= matchCount ) {
     return direction === 'next' ? 0 : matchCount - 1;
   }

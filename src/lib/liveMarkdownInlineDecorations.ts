@@ -2,11 +2,7 @@ import { syntaxTree } from '@codemirror/language';
 import { Decoration } from '@codemirror/view';
 import { parseMarkdownHeadingTarget } from './headingLinks';
 import { parsePairedInlineMarkup } from './inlineMarkup';
-import {
-  MarkdownAttachmentWidget,
-  MarkdownImageWidget,
-  WikiLinkWidget
-} from './liveMarkdownCodeMirrorWidgets';
+import { MarkdownAttachmentWidget, MarkdownImageWidget, WikiLinkWidget } from './liveMarkdownCodeMirrorWidgets';
 import {
   addConstruct,
   addMarkDecoration,
@@ -36,6 +32,7 @@ export interface InlineMarkupSpan extends LiveMarkdownRange {
 
 const defaultMarkdownImageSource: MarkdownImageSourceResolver = ( image ) =>
   sanitizeImageUrl( image.destination );
+
 const inlineMarkupSpanCache = new WeakMap<Text, InlineMarkupSpan[]>();
 
 export function inlineMarkupSpans(
@@ -44,11 +41,13 @@ export function inlineMarkupSpans(
   to: number
 ): InlineMarkupSpan[] {
   const cached = inlineMarkupSpanCache.get( state.doc );
+
   if ( cached ) {
     return cached.filter( ( span ) => span.from <= to && span.to >= from );
   }
 
   const value = state.doc.toString();
+
   const blockExclusions = liveMarkdownDocumentModel( state ).blocks.flatMap(
     ( block ) => {
       if (
@@ -62,14 +61,17 @@ export function inlineMarkupSpans(
       return block.syntax;
     }
   );
+
   const wikiExclusions = parseWikiLinks( value ).map( ( link ) => ({
     from: link.index,
     to: link.index + link.raw.length
   }) );
+
   const syntaxSpans = syntaxTreeInlineMarkupSpans( state ).filter( ( span ) =>
     !rangeIsContainedByAny( span, blockExclusions ) &&
     !rangeOverlapsAny( span, wikiExclusions )
   );
+
   const spans: InlineMarkupSpan[] = [];
 
   spans.push(
@@ -94,6 +96,7 @@ function syntaxTreeInlineMarkupSpans(
   syntaxTree( state ).iterate({
     enter( reference ) {
       const span = inlineMarkupSpan( reference, state );
+
       if ( span ) {
         spans.push( span );
       }
@@ -118,6 +121,7 @@ function inlineMarkupSpan(
         : node.name === 'Strikethrough'
           ? { kind: 'strikethrough' as const, markerName: 'StrikethroughMark' }
           : undefined;
+
   if ( !markup ) {
     return undefined;
   }
@@ -125,6 +129,7 @@ function inlineMarkupSpan(
   const markers = node.node.getChildren( markup.markerName );
   const opening = markers[ 0 ];
   const closing = markers.at( -1 );
+
   if ( !opening || !closing || opening === closing || opening.to > closing.from ) {
     return undefined;
   }
@@ -133,13 +138,17 @@ function inlineMarkupSpan(
     { from: opening.from, to: opening.to },
     { from: closing.from, to: closing.to }
   ];
+
   let contentFrom = opening.to;
   let contentTo = closing.from;
+
   if ( node.name === 'InlineCode' ) {
     const rawContent = state.sliceDoc( contentFrom, contentTo );
+
     if ( /\r|\n/.test( rawContent ) ) {
       return undefined;
     }
+
     if ( /^\s.*\s$/.test( rawContent ) && rawContent.trim() ) {
       syntax.push(
         { from: contentFrom, to: contentFrom + 1 },
@@ -206,11 +215,13 @@ function inlineMarkupSyntaxExclusions(
 
         return false;
       }
+
       if ( reference.name !== 'Link' ) {
         return undefined;
       }
 
       const labelClosing = reference.node.getChildren( 'LinkMark' )[ 1 ];
+
       exclusions.push( labelClosing
         ? { from: labelClosing.from, to: reference.to }
         : { from: reference.from, to: reference.to });
@@ -240,9 +251,11 @@ export function supportedMarkdownLinkRanges(
   syntaxTree( state ).iterate({
     enter( reference ) {
       const range = { from: reference.from, to: reference.to };
+
       if ( rangeIsContainedByAny( range, excludedRanges ) ) {
         return false;
       }
+
       if (
         reference.name !== 'Autolink' &&
         reference.name !== 'Image' &&
@@ -253,6 +266,7 @@ export function supportedMarkdownLinkRanges(
 
       const markers = reference.node.getChildren( 'LinkMark' );
       const requiredMarkers = reference.name === 'Autolink' ? 2 : 4;
+
       if (
         markers.length >= requiredMarkers &&
         reference.node.getChild( 'URL' )
@@ -279,6 +293,7 @@ export function addWikiLinkDecorations(
 
   for ( const link of parseWikiLinks( value ) ) {
     const range = { from: link.index, to: link.index + link.raw.length };
+
     if (
       rangeOverlapsAny( range, excludedRanges ) ||
       rangeOverlapsAny( range, markdownLinkRanges )
@@ -322,14 +337,16 @@ export function addInlineDecorations(
     enter( reference ) {
       const node = reference;
       const range = { from: node.from, to: node.to };
+
       if ( rangeIsContainedByAny( range, excludedRanges ) ) {
         return false;
       }
 
       if ( node.name === 'Escape' ) {
-        // Keep literal runs visible, including an odd final backslash before
-        // punctuation. The syntax tree still determines what they escape.
+        // keep literal runs visible, including an odd final backslash before
+        // punctuation. The syntax tree still determines what they escape
         const inBackslashRun = value[ node.from + 1 ] === '\\' || value[ node.from - 1 ] === '\\';
+
         if (
           !inBackslashRun
           && !rangeOverlapsAny( range, wikiRanges )
@@ -343,9 +360,11 @@ export function addInlineDecorations(
 
         return false;
       }
+
       if ( rangeOverlapsAny( range, wikiRanges ) ) {
         return undefined;
       }
+
       if ( node.name === 'Image' ) {
         addMarkdownImageDecoration(
           model,
@@ -357,6 +376,7 @@ export function addInlineDecorations(
 
         return false;
       }
+
       if (
         node.name === 'Link'
         && addMarkdownAttachmentDecoration(
@@ -369,7 +389,9 @@ export function addInlineDecorations(
       ) {
         return false;
       }
+
       const span = inlineMarkupSpan( node, state );
+
       if ( span ) {
         syntaxSpans.push( span );
         addInlineMarkupDecoration( model, span );
@@ -390,6 +412,7 @@ export function addInlineDecorations(
     inlineMarkupExcludedRanges,
     syntaxSpans
   );
+
   inlineMarkupSpanCache.set( state.doc, [ ...syntaxSpans, ...pairedSpans ]);
 
   for ( const span of pairedSpans ) {
@@ -407,12 +430,14 @@ function addMarkdownAttachmentDecoration(
   const attachment = parseMarkdownAttachmentAt( value, node.from, {
     acceptExtensionless: options.acceptExtensionlessAttachment
   });
+
   if ( !attachment || attachment.end + 1 !== node.to ) {
     return false;
   }
 
   const range = { from: node.from, to: node.to };
   const metadata = options.resolveAttachmentMetadata?.( attachment );
+
   addConstruct( model, range.from, range.to, [{
     ...range,
     widget: new MarkdownAttachmentWidget(
@@ -443,12 +468,14 @@ function addMarkdownImageDecoration(
   resolutionVersion: number
 ): void {
   const image = parseMarkdownImageAt( value, node.from );
+
   if ( !image || image.end + 1 !== node.to ) {
     return;
   }
 
   const resolveSource = options.resolveImageSource ?? defaultMarkdownImageSource;
   const range = { from: node.from, to: node.to };
+
   addConstruct( model, range.from, range.to, [{
     ...range,
     widget: new MarkdownImageWidget(
@@ -486,18 +513,21 @@ function addMarkdownLinkDecoration(
   const markers = node.node.getChildren( 'LinkMark' );
   const urlNode = node.node.getChild( 'URL' );
   const autolink = node.name === 'Autolink';
+
   if ( ( autolink ? markers.length < 2 : markers.length < 4 ) || !urlNode ) {
     return;
   }
 
   const labelOpening = markers[ 0 ]!;
   const labelClosing = autolink ? markers.at( -1 )! : markers[ 1 ]!;
+
   if ( labelOpening.to > labelClosing.from ) {
     return;
   }
 
   const rawHref = value.slice( urlNode.from, urlNode.to );
-  // Keep unfinished fields visible and clickable even when the caret leaves.
+
+  // keep unfinished fields visible and clickable even when the caret leaves
   if (
     !value.slice( labelOpening.to, labelClosing.from ).trim() ||
     !normalizeMarkdownLinkDestination( rawHref ).trim()
@@ -510,24 +540,31 @@ function addMarkdownLinkDecoration(
       ? `mailto:${ rawHref }`
       : rawHref
   );
+
   const titleNode = node.node.getChild( 'LinkTitle' );
+
   const title = titleNode
     ? unwrapLinkTitle( value.slice( titleNode.from, titleNode.to ) )
     : undefined;
+
   const attributes: Record<string, string> = {};
+
   if ( href ) {
     attributes.href = href;
     attributes[ 'data-live-href' ] = href;
     attributes.rel = 'noopener noreferrer';
+
     if ( /^(?:https?:)?\/\//i.test( href ) ) {
       attributes.target = '_blank';
     }
+
     if ( title ) {
       attributes.title = title;
     }
   }
 
   const renderedDecorations: StoredDecoration[] = [];
+
   if ( labelOpening.to < labelClosing.from ) {
     const className = href
       ? [
@@ -536,6 +573,7 @@ function addMarkdownLinkDecoration(
         ...( parseMarkdownHeadingTarget( href ) ? [ 'is-heading-link' ] : [])
       ].join( ' ' )
       : 'live-inline-segment is-unsafe-link';
+
     renderedDecorations.push({
       from: labelOpening.to,
       to: labelClosing.from,
@@ -566,6 +604,7 @@ function addMarkdownLinkDecoration(
 function unwrapLinkTitle( value: string ): string {
   const opening = value[ 0 ];
   const closing = value.at( -1 );
+
   if (
     ( opening === '"' && closing === '"' ) ||
     ( opening === "'" && closing === "'" ) ||

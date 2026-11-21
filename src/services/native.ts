@@ -44,6 +44,7 @@ export async function writeClipboardText( value: string ): Promise<void> {
   if ( !navigator.clipboard?.writeText ) {
     throw new Error( 'Clipboard access is unavailable in this browser.' );
   }
+
   await navigator.clipboard.writeText( value );
 }
 
@@ -53,24 +54,30 @@ export async function readClipboardImagePng(): Promise<Uint8Array> {
   }
 
   const image = await readNativeClipboardImage();
+
   try {
     const [{ width, height }, rgba ] = await Promise.all([ image.size(), image.rgba() ]);
+
     if ( !width || !height || rgba.length !== width * height * 4 ) {
       throw new Error( 'The clipboard image could not be decoded.' );
     }
 
     const canvas = document.createElement( 'canvas' );
+
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext( '2d' );
+
     if ( !context ) {
       throw new Error( 'The clipboard image could not be prepared.' );
     }
+
     context.putImageData(
       new ImageData( new Uint8ClampedArray( rgba ), width, height ),
       0,
       0
     );
+
     const blob = await new Promise<Blob>( ( resolve, reject ) => {
       canvas.toBlob(
         ( value ) => value ? resolve( value ) : reject( new Error( 'The clipboard image could not be encoded.' ) ),
@@ -92,7 +99,7 @@ export async function applyAppZoom( scaleFactor: number ): Promise<void> {
 
       return;
     } catch {
-      // CSS zoom keeps browser previews and older webviews functional.
+      // use CSS zoom to keep browser previews and older webviews functional
     }
   }
 
@@ -112,6 +119,7 @@ async function invoke<T>(
   options?: { headers: Record<string, string> }
 ): Promise<T> {
   const tauriInvoke = window.__TAURI__?.core?.invoke;
+
   if ( !tauriInvoke ) {
     throw new Error( 'Native vault access is available in the Obsidian At Home desktop app.' );
   }
@@ -356,6 +364,7 @@ async function appendWorkspaceExternalFileUpload(
   bytes: Uint8Array
 ): Promise<number> {
   const metadata = encodeURIComponent( JSON.stringify({ uploadId, offset }) );
+
   return invoke<number>(
     'workspace_append_external_file_upload',
     bytes,
@@ -384,9 +393,11 @@ async function streamWorkspaceExternalFile<T>(
   prepareFinish?: () => Promise<number>
 ): Promise<T> {
   throwIfExternalFileUploadAborted( signal );
+
   if ( !Number.isSafeInteger( file.size ) || file.size < 0 ) {
     throw new Error( 'The dropped file has an invalid size.' );
   }
+
   const upload = await beginWorkspaceExternalFileUpload(
     path,
     file,
@@ -394,6 +405,7 @@ async function streamWorkspaceExternalFile<T>(
     noteRelativePath,
     expectedRevision
   );
+
   try {
     if (
       !Number.isSafeInteger( upload.chunkBytes )
@@ -402,25 +414,35 @@ async function streamWorkspaceExternalFile<T>(
     ) {
       throw new Error( 'Native dropped-file storage returned an invalid chunk size.' );
     }
+
     let offset = 0;
+
     while ( offset < file.size ) {
       throwIfExternalFileUploadAborted( signal );
       const end = Math.min( offset + upload.chunkBytes, file.size );
       const bytes = new Uint8Array( await file.slice( offset, end ).arrayBuffer() );
+
       throwIfExternalFileUploadAborted( signal );
+
       if ( bytes.byteLength !== end - offset ) {
         throw new Error( 'The dropped file changed while it was being transferred.' );
       }
+
       const received = await appendWorkspaceExternalFileUpload( upload.id, offset, bytes );
+
       if ( received !== end ) {
         throw new Error( 'Native dropped-file storage reported an unexpected transfer offset.' );
       }
+
       offset = end;
     }
+
     throwIfExternalFileUploadAborted( signal );
+
     const finishRevision = prepareFinish
       ? await prepareFinish()
       : expectedRevision;
+
     throwIfExternalFileUploadAborted( signal );
 
     return await finish( upload.id, finishRevision );

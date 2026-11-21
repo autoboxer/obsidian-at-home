@@ -12,10 +12,7 @@ import {
 } from './liveMarkdownBlockDecorations';
 import { parseLiveMarkdownCodeFences } from './liveMarkdownCode';
 import { WikiLinkWidget } from './liveMarkdownCodeMirrorWidgets';
-import {
-  liveMarkdownDocumentModel,
-  liveMarkdownDocumentModelField
-} from './liveMarkdownDocumentModel';
+import { liveMarkdownDocumentModel, liveMarkdownDocumentModelField } from './liveMarkdownDocumentModel';
 import { liveMarkdownHeadingFoldingExtension } from './liveMarkdownHeadingFolding';
 import {
   addInlineDecorations,
@@ -69,16 +66,20 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
       const syntaxTreeChanged = nextTree !== this.parsedTree;
       const nextSearchMatches = documentSearchMatches( update.state );
       const searchMatchesChanged = nextSearchMatches !== this.searchMatches;
+
       const refreshed = update.transactions.some( ( transaction ) =>
         transaction.effects.some( ( effect ) => effect.is( refreshLiveMarkdownEffect ) )
       );
+
       const pointerSelectionFinished = update.transactions.some( ( transaction ) =>
         transaction.effects.some( ( effect ) => effect.is( finishTablePointerSelection ) )
       );
+
       if ( refreshed ) {
         clearTablePointerSelection( update.view );
         this.wikiResolutionVersion += 1;
       }
+
       if ( update.docChanged || syntaxTreeChanged || refreshed ) {
         this.parsedTree = nextTree;
         this.model = parseLiveMarkdownModel(
@@ -87,7 +88,9 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
           this.wikiResolutionVersion
         );
       }
+
       this.searchMatches = nextSearchMatches;
+
       if (
         update.docChanged ||
         update.selectionSet ||
@@ -109,6 +112,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
       const decorations = this.model.decorations.map( ({ decoration, from, to }) =>
         decoration.range( from, to )
       );
+
       const atomicRanges = [];
 
       for ( const construct of this.model.constructs ) {
@@ -142,6 +146,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
               ...( syntax.widget ? { widget: syntax.widget } : {})
             }).range( syntax.from, syntax.to )
           );
+
           if ( !( syntax.widget instanceof WikiLinkWidget && tablePointerSelectionActive( view ) ) ) {
             atomicRanges.push(
               Decoration.replace({ inclusive: false }).range( syntax.from, syntax.to )
@@ -159,9 +164,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
     eventHandlers: {
       click( event, view ) {
         const link = renderedEditorLink( event.target, view );
+
         if ( !link ) {
           return false;
         }
+
         if ( event.shiftKey || isMultiCursorGesture( event ) ) {
           event.preventDefault();
 
@@ -173,9 +180,11 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
         const wikiTarget = link.dataset.wikiTarget;
         const wikiHeading = link.dataset.wikiHeading;
         const noteTarget = parseMarkdownNoteTarget( rawHref );
+
         if ( wikiTarget === undefined && !noteTarget && !window.__TAURI__ ) {
           return false;
         }
+
         const activate = () => {
           if ( wikiTarget !== undefined ) {
             this.options.openWiki( wikiTarget, wikiHeading );
@@ -183,6 +192,7 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
             this.options.openLink( noteTarget ? rawHref : href );
           }
         };
+
         if ( !handleTableLinkClick( view, event, link, activate ) ) {
           activate();
         }
@@ -194,14 +204,17 @@ const liveMarkdownPlugin = ViewPlugin.fromClass(
       },
       mousedown( event, view ) {
         const link = renderedEditorLink( event.target, view );
+
         if ( !link || event.button !== 0 || event.shiftKey || isMultiCursorGesture( event ) ) {
           return false;
         }
+
         if ( !event.ctrlKey && !event.metaKey && link.closest( '.live-table-cell' ) ) {
           return false;
         }
 
         const rawHref = link.dataset.liveHref ?? '';
+
         if ( window.__TAURI__ || parseMarkdownNoteTarget( rawHref ) ) {
           return true;
         }
@@ -238,14 +251,18 @@ function parseLiveMarkdownModel(
   const { blocks, tables } = liveMarkdownDocumentModel( state );
   const listIndentations = renderedListIndentations( blocks );
   const codeFences = parseLiveMarkdownCodeFences( value );
+
   const codeLines = new Set(
     codeFences.flatMap( ( fence ) => fence.lineNumbers )
   );
+
   const tableLines = new Set( tables.flatMap( ( table ) => table.lineNumbers ) );
+
   const model: LiveMarkdownModel = {
     constructs: [],
     decorations: []
   };
+
   const excludedRanges: LiveMarkdownRange[] = [];
   let renderedQuotePrefix: { depth: number; source: string } | undefined;
 
@@ -256,24 +273,27 @@ function parseLiveMarkdownModel(
     ) {
       continue;
     }
+
     if ( block.type === 'frontmatter' ) {
       excludedRanges.push({ from: block.from, to: block.end });
 
       continue;
     }
 
-    // The line model only sees literal `>` prefixes. The Markdown tree owns
-    // container semantics, including unmarked lazy paragraph continuations.
+    // the line model only sees literal `>` prefixes. The Markdown tree owns
+    // container semantics, including unmarked lazy paragraph continuations
     const literalQuoteDepth = block.quote?.depth ?? 0;
+
     const quoteDepth = Math.max(
       literalQuoteDepth,
       blockquoteDepthAt( tree, block.from )
     );
+
     if ( !quoteDepth ) {
       renderedQuotePrefix = undefined;
     } else if ( literalQuoteDepth === quoteDepth ) {
-      // Keep partially marked lines from replacing the full-width prefix that
-      // deeper lazy continuations reuse.
+      // keep partially marked lines from replacing the full-width prefix that
+      // deeper lazy continuations reuse
       renderedQuotePrefix = {
         depth: quoteDepth,
         source: value.slice( block.from, block.content.from )
@@ -297,6 +317,7 @@ function parseLiveMarkdownModel(
     excludedRanges.push({ from: fence.from, to: fence.to });
     addCodeFenceDecorations( model, state, fence );
   }
+
   for ( const table of tables ) {
     excludedRanges.push({
       from: table.delimiter.from,
@@ -309,6 +330,7 @@ function parseLiveMarkdownModel(
     state,
     excludedRanges
   );
+
   const wikiRanges = addWikiLinkDecorations(
     model,
     value,
@@ -317,11 +339,13 @@ function parseLiveMarkdownModel(
     options,
     wikiResolutionVersion
   );
+
   const inlineMarkupExcludedRanges = [
     ...excludedRanges,
     ...wikiRanges,
     ...blocks.flatMap( ( block ) => block.syntax )
   ];
+
   addInlineDecorations(
     model,
     state,

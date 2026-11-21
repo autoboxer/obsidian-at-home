@@ -34,6 +34,7 @@ const documentSearchState = StateField.define<DocumentSearchState>({
         value.activeIndex,
         transaction.changes
       );
+
       activeIndex = mappedState.activeIndex;
       matches = mappedState.matches;
     }
@@ -51,8 +52,8 @@ const documentSearchState = StateField.define<DocumentSearchState>({
       ? value
       : createDocumentSearchState( matches, activeIndex );
   },
-  // Nest matches inside formatted spans so they neither split inline-code
-  // padding nor disappear behind the code background.
+  // nest matches inside formatted spans so they neither split inline-code
+  // padding nor disappear behind the code background
   provide: ( field ) => Prec.highest( EditorView.decorations.from(
     field,
     ( value ) => value.decorations
@@ -104,6 +105,7 @@ function mapDocumentSearchState(
   matches.forEach( ( match, index ) => {
     const from = changes.mapPos( match.from, 1 );
     const to = changes.mapPos( match.to, -1 );
+
     if ( from >= to ) {
       return;
     }
@@ -111,6 +113,7 @@ function mapDocumentSearchState(
     if ( index === activeIndex ) {
       mappedActiveIndex = mappedMatches.length;
     }
+
     mappedMatches.push({ from, to });
   });
 

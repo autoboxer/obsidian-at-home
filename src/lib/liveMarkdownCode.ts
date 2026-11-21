@@ -41,6 +41,7 @@ export function parseLiveMarkdownCodeFences(
 
     const openingLine = lines[ index ]!;
     const opening = openingLine.source.match( /^ {0,3}(`{3,}|~{3,})([^\r\n]*)$/ );
+
     if ( !opening ) {
       continue;
     }
@@ -53,23 +54,30 @@ export function parseLiveMarkdownCodeFences(
 
     for ( ; cursor < lines.length; cursor += 1 ) {
       const candidate = lines[ cursor ]!;
+
       if ( closesFence( candidate.source, marker ) ) {
         closingLine = candidate;
 
         break;
       }
+
       contentLines.push( candidate );
     }
 
     const finalLine = closingLine ?? contentLines.at( -1 ) ?? openingLine;
+
     const lineNumbers = lines
       .slice( index, ( closingLine ? cursor : lines.length - 1 ) + 1 )
       .map( ( line ) => line.lineNumber );
+
     const infoSource = openingLine.source.slice( markerEnd - openingLine.from );
     const languageToken = infoSource.match( /\S+/ );
+
+    // mirror the renderer's short, identifier-only language labels
     const language = ( languageToken?.[ 0 ] ?? '' )
       .replace( /[^a-zA-Z0-9_+-]/g, '' )
       .slice( 0, 40 );
+
     const languageRange = languageToken?.index === undefined
       ? undefined
       : {
@@ -99,12 +107,14 @@ export function parseLiveMarkdownCodeFences(
 
 function findFrontmatterEnd( lines: readonly SourceLine[]): number | undefined {
   const opening = lines[ 0 ]?.source.replace( /^\u{feff}/u, '' ).trimEnd();
+
   if ( opening !== '---' ) {
     return undefined;
   }
 
   for ( let index = 1; index < lines.length; index += 1 ) {
     const line = lines[ index ]!.source.trimEnd();
+
     if ( line === '---' || line === '...' ) {
       return index;
     }

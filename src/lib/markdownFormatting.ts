@@ -15,6 +15,7 @@ export function toggleInlineFormatting(
 ): MarkdownSelectionEdit {
   const selected = value.slice( start, end );
   const recognizedMarkers = [ marker, ...alternatives ];
+
   const includedMarker = recognizedMarkers.find( ( candidate ) =>
     selectionIncludesFormatting( value, start, end, candidate )
   );
@@ -72,9 +73,11 @@ export function wrapInlineCode(
   const backtickRuns = selected.match( /`+/g ) ?? [];
   const longestRun = Math.max( 0, ...backtickRuns.map( ( run ) => run.length ) );
   const delimiter = '`'.repeat( longestRun + 1 );
+
   const needsPadding = selected.startsWith( '`' )
     || selected.endsWith( '`' )
     || ( /^\s/.test( selected ) && /\s$/.test( selected ) && Boolean( selected.trim() ) );
+
   const padding = needsPadding ? ' ' : '';
 
   return wrapSelection(
@@ -94,6 +97,7 @@ export function wrapMarkdownLink(
   const selected = value.slice( start, end );
   const label = escapeMarkdownLinkLabel( selected );
   const replacement = `[${ label }]()`;
+
   const cursor = selected
     ? start + replacement.length - 1
     : start + 1;
@@ -110,12 +114,14 @@ function escapeMarkdownLinkLabel( value: string ): string {
 
   for ( let index = 0; index < value.length; index += 1 ) {
     const character = value[ index ]!;
+
     if (
       ( character === '[' || character === ']' )
       && !characterIsEscaped( value, index )
     ) {
       escaped += '\\';
     }
+
     escaped += character;
   }
 
@@ -208,12 +214,14 @@ function isFormattingOpening( value: string, start: number, marker: string ): bo
   if ( value[ start - 1 ] === '\\' ) {
     return false;
   }
+
   if ( marker !== '*' && marker !== '_' ) {
     return true;
   }
 
   const before = value[ start - 1 ] ?? '';
   const after = value[ start + 1 ] ?? '';
+
   if ( before === marker || after === marker ) {
     return false;
   }
@@ -235,12 +243,15 @@ function findClosingFormatting( value: string, marker: string, start: number ): 
 
   while ( cursor < value.length ) {
     const index = value.indexOf( marker, cursor );
+
     if ( index < 0 ) {
       return -1;
     }
+
     if ( value[ index - 1 ] !== '\\' ) {
       return index;
     }
+
     cursor = index + marker.length;
   }
 

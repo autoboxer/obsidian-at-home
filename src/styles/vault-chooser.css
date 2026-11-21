@@ -1,4 +1,4 @@
-/* Filesystem vault chooser */
+/* filesystem vault chooser */
 .vault-chooser-backdrop {
   z-index: 1300;
   padding: clamp(18px, 4vw, 42px);

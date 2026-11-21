@@ -23,6 +23,7 @@ const referenceDialog = ref<HTMLElement>();
 const commandKey = shortcutCommandKey();
 const optionKey = commandKey === '⌘' ? 'Option' : 'Alt';
 const verticalCursorModifier = /Linux|X11/.test( globalThis.navigator?.platform ?? '' ) ? 'Shift' : optionKey;
+
 const shortcutGroups: ShortcutGroup[] = [
   {
     id: 'workspace',
@@ -36,7 +37,12 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: 'Close the current tab', detail: 'While viewing notes', keys: [ commandKey, 'W' ] },
       { label: 'Next tab', detail: 'While viewing notes; wraps to the first tab', keys: [ 'Ctrl', 'Tab' ] },
       { label: 'Previous tab', detail: 'While viewing notes; wraps to the last tab', keys: [ 'Ctrl', 'Shift', 'Tab' ] },
-      { label: 'Navigate the tab strip', detail: 'With a tab focused; Home/End go to the first/last', keys: [ '← / →' ], keyLabel: 'Left or right arrow' },
+      {
+        label: 'Navigate the tab strip',
+        detail: 'With a tab focused; Home/End go to the first/last',
+        keys: [ '← / →' ],
+        keyLabel: 'Left or right arrow'
+      },
       { label: 'Close a focused tab', detail: 'Or middle-click any tab', keys: [ 'Delete' ] },
       { label: 'Delete a note', detail: 'With its sidebar row focused; moves to Recently Deleted', keys: [ 'Delete' ] },
       { label: 'Open templates', keys: [ commandKey, 'Shift', 'T' ] },
@@ -58,7 +64,11 @@ const shortcutGroups: ShortcutGroup[] = [
       { label: 'Wrap as inline code', detail: 'With text selected', keys: [ '`' ], keyLabel: 'Backtick' },
       { label: 'Find in the current note', keys: [ commandKey, 'F' ] },
       { label: 'Next find result', detail: 'Find field; F3 also works with Find open', keys: [ 'Tab' ] },
-      { label: 'Previous find result', detail: 'Find field: Shift+Enter also works. Anywhere: Shift+F3', keys: [ 'Shift', 'Tab' ] },
+      {
+        label: 'Previous find result',
+        detail: 'Find field: Shift+Enter also works. Anywhere: Shift+F3',
+        keys: [ 'Shift', 'Tab' ]
+      },
       { label: 'Accept find result', detail: 'Close Find and keep the current match selected', keys: [ 'Enter' ] },
       { label: 'Indent', detail: 'Current list item or selected lines', keys: [ 'Tab' ] },
       { label: 'Outdent', detail: 'Current list item or selected lines', keys: [ 'Shift', 'Tab' ] },
@@ -76,10 +86,26 @@ const shortcutGroups: ShortcutGroup[] = [
     id: 'selection',
     title: 'Multiple cursors',
     shortcuts: [
-      { label: 'Select word or next occurrence', detail: 'Ignores case; first press selects the word, or select a phrase first', keys: [ commandKey, 'D' ] },
-      { label: 'Select next occurrence (match case)', detail: 'Matches capitalization; first press selects the word', keys: [ commandKey, 'Shift', 'D' ] },
-      { label: 'Select all occurrences', detail: 'Ignores case; uses the selection or word at the caret; reveals folded matches', keys: [ commandKey, 'Shift', 'L' ] },
-      { label: 'Select all occurrences (match case)', detail: 'Matches capitalization', keys: [ commandKey, optionKey, 'Shift', 'L' ] },
+      {
+        label: 'Select word or next occurrence',
+        detail: 'Ignores case; first press selects the word, or select a phrase first',
+        keys: [ commandKey, 'D' ]
+      },
+      {
+        label: 'Select next occurrence (match case)',
+        detail: 'Matches capitalization; first press selects the word',
+        keys: [ commandKey, 'Shift', 'D' ]
+      },
+      {
+        label: 'Select all occurrences',
+        detail: 'Ignores case; uses the selection or word at the caret; reveals folded matches',
+        keys: [ commandKey, 'Shift', 'L' ]
+      },
+      {
+        label: 'Select all occurrences (match case)',
+        detail: 'Matches capitalization',
+        keys: [ commandKey, optionKey, 'Shift', 'L' ]
+      },
       { label: 'Add a cursor', keys: [ optionKey, 'Click' ] },
       { label: 'Select a rectangle', keys: [ optionKey, 'Shift', 'Drag' ] },
       { label: 'Add a cursor above', keys: [ commandKey, verticalCursorModifier, '↑' ] },
@@ -121,8 +147,10 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
 
     return;
   }
-  // WebKitGTK can report Shift+Tab as Unidentified while retaining its code.
+
+  // account for WebKitGTK reporting Shift+Tab as Unidentified while retaining its code
   const isTab = event.key === 'Tab' || event.key === 'Unidentified' && event.code === 'Tab';
+
   if ( !isTab || !referenceDialog.value ) {
     return;
   }
@@ -130,6 +158,7 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
   const focusable = Array.from( referenceDialog.value.querySelectorAll<HTMLElement>(
     "button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])"
   ) ).filter( ( element ) => !element.hasAttribute( 'hidden' ) );
+
   const first = focusable[ 0 ];
   const last = focusable[ focusable.length - 1 ];
 

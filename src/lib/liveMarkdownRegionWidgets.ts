@@ -1,10 +1,7 @@
 import { EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { isMultiCursorGesture } from './codeMirrorMultiCursor';
-import {
-  CODE_LANGUAGE_OPTIONS,
-  findCodeLanguageOption
-} from './highlight';
+import { CODE_LANGUAGE_OPTIONS, findCodeLanguageOption } from './highlight';
 import { LiveMarkdownWidget } from './liveMarkdownCodeMirrorWidgets';
 import { writeClipboardText } from '../services/native';
 import type { CodeLanguageOption } from './highlight';
@@ -101,6 +98,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       picker.hidden = true;
       button.setAttribute( 'aria-expanded', 'false' );
       search.value = '';
+
       if ( restoreFocus ) {
         button.focus();
       }
@@ -111,9 +109,11 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
     ): void => {
       const copied = status === 'copied';
       const failed = status === 'failed';
+
       const description = copied
         ? 'Copied code'
         : failed ? 'Copy code failed' : 'Copy code';
+
       copyButton.dataset.status = status;
       copyButton.setAttribute( 'aria-label', description );
       copyButton.title = description;
@@ -128,6 +128,8 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       if ( this.resetCopyStatusTimer !== undefined ) {
         window.clearTimeout( this.resetCopyStatusTimer );
       }
+
+      // leave copy feedback visible briefly before restoring the normal button label
       this.resetCopyStatusTimer = window.setTimeout( () => {
         this.resetCopyStatusTimer = undefined;
         setCopyStatus( 'idle' );
@@ -138,6 +140,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       activeIndex = Math.max( 0, Math.min( index, filteredOptions.length - 1 ) );
       renderLanguageOptions();
       const active = options.children.item( activeIndex );
+
       if ( active instanceof HTMLElement ) {
         active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         search.setAttribute( 'aria-activedescendant', active.id );
@@ -150,9 +153,11 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       const range = option.value
         ? this.fence.languageRange ?? this.fence.info
         : this.fence.info;
+
       const insert = option.value
         ? this.fence.languageRange ? option.value : ` ${ option.value }`
         : '';
+
       closePicker();
       view.dispatch({
         changes: { from: range.from, to: range.to, insert },
@@ -164,6 +169,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
     const renderLanguageOptions = (): void => {
       if ( !filteredOptions.length ) {
         const empty = document.createElement( 'span' );
+
         empty.className = 'live-code-language-empty';
         empty.setAttribute( 'role', 'status' );
         empty.textContent = 'No matching languages';
@@ -175,6 +181,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       options.replaceChildren( ...filteredOptions.map( ( option, index ) => {
         const optionButton = document.createElement( 'button' );
         const optionLabel = document.createElement( 'span' );
+
         optionButton.id = `${ listboxId }-option-${ index }`;
         optionButton.type = 'button';
         optionButton.setAttribute( 'role', 'option' );
@@ -183,15 +190,19 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
         optionButton.classList.toggle( 'active', index === activeIndex );
         optionLabel.textContent = option.label;
         optionButton.append( optionLabel );
+
         if ( findCodeLanguageOption( this.fence.language )?.value === option.value ) {
           optionButton.append( createCheckIcon( document ) );
         }
+
         optionButton.addEventListener( 'mouseenter', () => {
           activeIndex = index;
+
           for ( const [ childIndex, child ] of [ ...options.children ].entries() ) {
             child.classList.toggle( 'active', childIndex === activeIndex );
             child.setAttribute( 'aria-selected', String( childIndex === activeIndex ) );
           }
+
           search.setAttribute( 'aria-activedescendant', optionButton.id );
         });
         optionButton.addEventListener( 'click', ( event ) => {
@@ -206,6 +217,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
 
     const resetOptions = (): void => {
       const query = search.value.trim().toLocaleLowerCase();
+
       filteredOptions = CODE_LANGUAGE_OPTIONS.filter( ( option ) =>
         !query || [ option.label, option.value, ...option.aliases ]
           .join( ' ' )
@@ -213,9 +225,11 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
           .includes( query )
       );
       const selectedValue = findCodeLanguageOption( this.fence.language )?.value;
+
       const selectedIndex = query
         ? -1
         : filteredOptions.findIndex( ( option ) => option.value === selectedValue );
+
       setActiveOption( Math.max( 0, selectedIndex ) );
     };
 
@@ -230,10 +244,13 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
     button.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+
       if ( isMultiCursorGesture( event ) ) {
         return;
       }
+
       const opening = picker.hidden;
+
       if ( !opening ) {
         closePicker();
 
@@ -256,16 +273,20 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
     copyButton.addEventListener( 'click', async ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+
       if ( isMultiCursorGesture( event ) ) {
         return;
       }
+
       closePicker();
+
       try {
         await writeClipboardText( this.fence.code );
         setCopyStatus( 'copied' );
       } catch {
         setCopyStatus( 'failed' );
       }
+
       scheduleCopyStatusReset();
     });
     search.addEventListener( 'input', resetOptions );
@@ -273,15 +294,18 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       if ( event.isComposing ) {
         return;
       }
+
       if ( event.key === 'Escape' ) {
         event.preventDefault();
         closePicker( true );
 
         return;
       }
+
       if ( !filteredOptions.length ) {
         return;
       }
+
       if ( event.key === 'ArrowDown' ) {
         event.preventDefault();
         setActiveOption( ( activeIndex + 1 ) % filteredOptions.length );
@@ -305,6 +329,7 @@ export class CodeFenceHeaderWidget extends LiveMarkdownWidget {
       if ( event.relatedTarget instanceof Node && root.contains( event.relatedTarget ) ) {
         return;
       }
+
       closePicker();
     });
 
@@ -336,6 +361,7 @@ export class CodeFenceFooterWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const footer = view.dom.ownerDocument.createElement( 'span' );
+
     footer.className = 'live-code-footer-widget';
     footer.setAttribute( 'aria-hidden', 'true' );
     footer.addEventListener( 'mousedown', ( event ) =>
@@ -360,6 +386,7 @@ export class TableDelimiterWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const divider = view.dom.ownerDocument.createElement( 'span' );
+
     divider.className = 'live-table-divider';
     divider.setAttribute( 'aria-hidden', 'true' );
     divider.addEventListener( 'mousedown', ( event ) => {
@@ -400,6 +427,7 @@ export class EmptyTableCellWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const cell = view.dom.ownerDocument.createElement( 'span' );
+
     cell.className = [
       this.className,
       'is-empty'
@@ -427,11 +455,13 @@ export class EmptyTableCellWidget extends LiveMarkdownWidget {
 
   coordsAt( dom: HTMLElement ): DOMRect | null {
     const text = dom.firstChild;
+
     if ( !text ) {
       return null;
     }
 
     const range = dom.ownerDocument.createRange();
+
     range.setStart( text, 0 );
     range.collapse( true );
 
@@ -446,6 +476,7 @@ export class TableCellBreakWidget extends LiveMarkdownWidget {
 
   toDOM( view: EditorView ): HTMLElement {
     const lineBreak = view.dom.ownerDocument.createElement( 'br' );
+
     lineBreak.setAttribute( 'aria-hidden', 'true' );
 
     return lineBreak;
@@ -469,15 +500,19 @@ function revealSource(
   if ( isMultiCursorGesture( event ) ) {
     return;
   }
+
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget;
+
   const bounds = element instanceof Element
     ? element.getBoundingClientRect()
     : undefined;
+
   const position = bounds && event.clientX >= bounds.left + bounds.width / 2
     ? to
     : from;
+
   view.dispatch({
     selection: EditorSelection.cursor( position ),
     scrollIntoView: true,
@@ -514,6 +549,7 @@ function createIcon(
   const namespace = 'http://www.w3.org/2000/svg';
   const icon = document.createElementNS( namespace, 'svg' );
   const path = document.createElementNS( namespace, 'path' );
+
   icon.classList.add( 'app-icon' );
   icon.setAttribute( 'width', String( size ) );
   icon.setAttribute( 'height', String( size ) );

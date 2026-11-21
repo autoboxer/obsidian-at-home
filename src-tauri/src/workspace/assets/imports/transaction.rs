@@ -194,6 +194,7 @@ pub(in crate::workspace) fn apply_workspace_image_import(
         }
     }
 
+    // record the recovery phase before installing any staged file
     manifest.phase = TransactionPhase::Applying;
     if let Err(error) = write_transaction_manifest(&transaction_root, &manifest) {
         discard_private_transaction(root, &transaction_root, warnings);

@@ -36,9 +36,11 @@ function startDrag( event: DragEvent ): void {
 
     return;
   }
+
   if ( !event.dataTransfer ) {
     return;
   }
+
   event.dataTransfer.clearData();
   event.dataTransfer.effectAllowed = 'copyMove';
   event.dataTransfer.setData( NOTE_DRAG_MIME, props.note.id );
@@ -52,6 +54,7 @@ function startDrag( event: DragEvent ): void {
 
 function finishDrag(): void {
   dragging.value = false;
+
   if ( treeDragState.noteId === props.note.id ) {
     treeDragState.noteId = null;
   }
@@ -61,8 +64,10 @@ function openContextMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void
   if ( editing.value ) {
     return;
   }
+
   const menuWidth = 174;
   const menuHeight = 124;
+
   menuPosition.value = {
     x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
     y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
@@ -74,6 +79,7 @@ function openContextMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void
 function closeMenu( restoreFocus = false ): void {
   menuOpen.value = false;
   menuPosition.value = undefined;
+
   if ( restoreFocus ) {
     nextTick( () => noteButton.value?.focus() );
   }
@@ -81,9 +87,11 @@ function closeMenu( restoreFocus = false ): void {
 
 function handleFocusOut( event: FocusEvent ): void {
   const row = event.currentTarget as HTMLElement;
+
   if ( event.relatedTarget instanceof Node && row.contains( event.relatedTarget ) ) {
     return;
   }
+
   closeMenu();
 }
 
@@ -95,8 +103,13 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
 
     return;
   }
-  const items = Array.from( menu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []);
+
+  const items = Array.from(
+    menu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []
+  );
+
   const currentIndex = items.indexOf( document.activeElement as HTMLButtonElement );
+
   if (
     ( event.key === 'Tab' || ( event.key === 'Unidentified' && event.code === 'Tab' ) )
     && event.shiftKey
@@ -107,11 +120,14 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( !items.length || ![ 'ArrowDown', 'ArrowUp', 'Home', 'End' ].includes( event.key ) ) {
     return;
   }
+
   event.preventDefault();
   let nextIndex: number;
+
   if ( event.key === 'Home' ) {
     nextIndex = 0;
   } else if ( event.key === 'End' || ( event.key === 'ArrowUp' && currentIndex < 0 ) ) {
@@ -121,6 +137,7 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
   } else {
     nextIndex = ( currentIndex - 1 + items.length ) % items.length;
   }
+
   items[ nextIndex ]?.focus();
 }
 
@@ -128,6 +145,7 @@ function beginRename(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   closeMenu();
   editValue.value = props.note.title;
   editing.value = true;
@@ -141,10 +159,13 @@ function saveRename( restoreFocus = false ): void {
   if ( !editing.value ) {
     return;
   }
+
   editing.value = false;
+
   if ( editValue.value !== props.note.title ) {
     updateNote( props.note.id, { title: editValue.value });
   }
+
   if ( restoreFocus ) {
     nextTick( () => noteButton.value?.focus() );
   }
@@ -160,21 +181,25 @@ function handleRowKeydown( event: KeyboardEvent ): void {
     && !event.shiftKey && !event.isComposing ) {
     event.preventDefault();
     event.stopPropagation();
+
     if ( !event.repeat ) {
       void requestDelete();
     }
 
     return;
   }
+
   if ( event.key === 'F2' && !event.altKey && !event.ctrlKey && !event.metaKey ) {
     event.preventDefault();
     beginRename();
 
     return;
   }
+
   if ( event.key === 'ContextMenu' || ( event.key === 'F10' && event.shiftKey ) ) {
     event.preventDefault();
     const bounds = noteButton.value?.getBoundingClientRect();
+
     if ( bounds ) {
       openContextMenu({ clientX: bounds.left, clientY: bounds.bottom });
     }
@@ -185,12 +210,16 @@ async function requestDelete(): Promise<void> {
   if ( !canEditVault.value || vaultSession.busy || uiState.sidebarNoteDeletionPending ) {
     return;
   }
+
   const button = noteButton.value;
   const tree = button?.closest( '.vault-file-tree' );
+
   const rows = Array.from( tree?.querySelectorAll<HTMLButtonElement>(
     '.vault-tree-root-main, .vault-tree-folder-main, .vault-tree-note-main, .vault-tree-image-main, .vault-tree-attachment-main'
   ) ?? []);
+
   const index = button ? rows.indexOf( button ) : -1;
+
   const focusTargets = [
     button,
     rows[ index + 1 ],
@@ -198,17 +227,23 @@ async function requestDelete(): Promise<void> {
     tree?.querySelector<HTMLButtonElement>( '.vault-tree-root-main' ),
     tree?.closest( '.explorer-sidebar' )?.querySelector<HTMLInputElement>( '.vault-tree-filter input' )
   ];
+
   uiState.sidebarNoteDeletionPending = true;
+
   try {
     closeMenu();
     const title = props.note.title || 'Untitled note';
+
     if ( window.confirm( `Delete “${ title }”? It will remain in Recently Deleted for seven days.` ) ) {
       await deleteNote( props.note.id );
     }
+
     await nextTick();
+
     const target = focusTargets.find( ( element ) => element?.isConnected
       && element.getClientRects().length
       && !element.closest( '[inert], :disabled, .collapse-fade-leave-active' ) );
+
     target?.focus({ preventScroll: true });
   } finally {
     uiState.sidebarNoteDeletionPending = false;

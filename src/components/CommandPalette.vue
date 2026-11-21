@@ -1,24 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createSearchSnippet, searchNotes } from '../lib';
-import {
-  canEditVault,
-  createNote,
-  folderNameMap,
-  searchState,
-  selectNote,
-  uiState,
-  vaultState
-} from '../stores/vault';
+import { canEditVault, createNote, folderNameMap, searchState, selectNote, uiState, vaultState } from '../stores/vault';
 import AppIcon from './AppIcon.vue';
 
 const emit = defineEmits<{ navigate: [ noteId: string ] }>();
+
 const query = computed({
   get: () => searchState.quickQuery,
   set: ( value: string ) => {
     searchState.quickQuery = value;
   }
 });
+
 const selectedIndex = ref( 0 );
 const input = ref<HTMLInputElement>();
 const dialog = ref<HTMLElement>();
@@ -29,7 +23,12 @@ const results = computed( () => query.value.trim()
   : [ ...vaultState.notes ]
     .sort( ( a, b ) => Number( b.pinned ) - Number( a.pinned ) || b.updatedAt - a.updatedAt )
     .slice( 0, 7 )
-    .map( ( note ) => ({ note, score: 0, reason: 'title' as const, snippet: createSearchSnippet( note.content, [], 110 ) }) )
+    .map( ( note ) => ({
+      note,
+      score: 0,
+      reason: 'title' as const,
+      snippet: createSearchSnippet( note.content, [], 110 )
+    }) )
 );
 
 watch( () => uiState.commandOpen, ( open ) => {
@@ -47,6 +46,7 @@ watch([ results, canEditVault ], async ([ matches ]) => {
   selectedIndex.value = Math.max( 0, Math.min( selectedIndex.value, matches.length - 1 ) );
   await nextTick();
   const focused = document.activeElement;
+
   if ( !dialog.value?.contains( focused ) || focused?.matches( ':disabled' ) ) {
     void focusInput();
   }
@@ -61,14 +61,18 @@ onBeforeUnmount( () => {
 
 async function focusInput(): Promise<void> {
   await nextTick();
+
   if ( focusFrame !== undefined ) {
     window.cancelAnimationFrame( focusFrame );
   }
+
   focusFrame = window.requestAnimationFrame( () => {
     focusFrame = undefined;
+
     if ( !uiState.commandOpen || !dialog.value?.closest( '[data-modal-scroll-active]' ) ) {
       return;
     }
+
     input.value?.focus({ preventScroll: true });
     input.value?.select();
   });
@@ -89,7 +93,9 @@ function create(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   const note = createNote();
+
   if ( note ) {
     emit( 'navigate', note.id );
     close();
@@ -100,6 +106,7 @@ function onKeydown( event: KeyboardEvent ): void {
   if ( event.isComposing ) {
     return;
   }
+
   if ( event.key === 'ArrowDown' ) {
     event.preventDefault();
     selectedIndex.value = Math.max( 0, Math.min( results.value.length - 1, selectedIndex.value + 1 ) );
@@ -109,6 +116,7 @@ function onKeydown( event: KeyboardEvent ): void {
   } else if ( event.key === 'Enter' ) {
     event.preventDefault();
     const result = results.value[ selectedIndex.value ];
+
     if ( result ) {
       chooseNote( result.note.id );
     } else if ( !query.value ) {
@@ -121,6 +129,7 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
   if ( event.isComposing ) {
     return;
   }
+
   if ( event.key === 'Escape' ) {
     event.preventDefault();
     event.stopPropagation();
@@ -128,34 +137,46 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
 
     return;
   }
-  // WebKitGTK can report Shift+Tab as Unidentified while retaining its code.
+
+  // account for WebKitGTK reporting Shift+Tab as Unidentified while retaining its code
   const isTab = event.key === 'Tab' || event.key === 'Unidentified' && event.code === 'Tab';
+
   if ( !isTab ) {
     return;
   }
+
   event.preventDefault();
   event.stopPropagation();
+
   const controls = Array.from( dialog.value?.querySelectorAll<HTMLElement>(
     'input:not(:disabled), button:not(:disabled)'
   ) ?? []);
+
   const index = controls.indexOf( document.activeElement as HTMLElement );
+
   const next = event.shiftKey
     ? ( index <= 0 ? controls.length - 1 : index - 1 )
     : ( index + 1 ) % controls.length;
+
   ( controls[ next ] ?? dialog.value )?.focus();
 }
 
 function highlightTitle( title: string ): string {
   const needle = query.value.trim();
+
   if ( !needle ) {
     return escapeHtml( title );
   }
+
   const index = title.toLocaleLowerCase().indexOf( needle.toLocaleLowerCase() );
+
   if ( index < 0 ) {
     return escapeHtml( title );
   }
 
-  return `${ escapeHtml( title.slice( 0, index ) ) }<mark>${ escapeHtml( title.slice( index, index + needle.length ) ) }</mark>${ escapeHtml( title.slice( index + needle.length ) ) }`;
+  return `${ escapeHtml( title.slice( 0, index ) ) }<mark>${
+    escapeHtml( title.slice( index, index + needle.length ) )
+  }</mark>${ escapeHtml( title.slice( index + needle.length ) ) }`;
 }
 
 function escapeHtml( value: string ): string {
@@ -213,7 +234,7 @@ function escapeHtml( value: string ): string {
           >
             <span class="command-result-icon"><AppIcon name="file-text" :size="17" /></span>
             <span class="command-result-copy">
-              <!-- eslint-disable-next-line vue/no-v-html -- highlightTitle escapes note text before adding mark tags. -->
+              <!-- eslint-disable-next-line vue/no-v-html -- escape note text before adding mark tags -->
               <span class="command-result-title" v-html="highlightTitle( result.note.title || 'Untitled note' )" />
               <span>{{ result.snippet || "No content yet" }}</span>
             </span>

@@ -1,7 +1,4 @@
-import {
-  EditorSelection,
-  Transaction
-} from '@codemirror/state';
+import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { liveMarkdownDocumentModel } from './liveMarkdownDocumentModel';
 import { isLiveMarkdownTableDelimiterCandidate } from './liveMarkdownTable';
@@ -23,6 +20,7 @@ function preserveTableDelimiterHyphens(
   }
 
   const value = view.state.doc.toString();
+
   if ( !isLiveMarkdownTableDelimiterCandidate(
     value,
     from,
@@ -32,10 +30,10 @@ function preserveTableDelimiterHyphens(
     return false;
   }
 
-  // The state still contains the intended ASCII hyphens. Let CodeMirror's
-  // DOM observer restore them without a same-text document transaction,
-  // which would otherwise consume or invalidate the preceding undo step.
+  // let CodeMirror restore the state's ASCII hyphens through its DOM observer
+  // a same-text document transaction would consume or invalidate the previous undo step
   const current = view.state.selection.main;
+
   if ( current.from === from && current.to === to ) {
     view.dispatch({
       selection: view.state.selection.replaceRange(

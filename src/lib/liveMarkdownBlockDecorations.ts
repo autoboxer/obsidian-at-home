@@ -9,12 +9,7 @@ import {
   renderedListMarker,
   TaskWidget
 } from './liveMarkdownCodeMirrorWidgets';
-import {
-  addConstruct,
-  addLineDecoration,
-  addMarkDecoration,
-  lineDecoration
-} from './liveMarkdownDecorationModel';
+import { addConstruct, addLineDecoration, addMarkDecoration, lineDecoration } from './liveMarkdownDecorationModel';
 import {
   CodeFenceFooterWidget,
   CodeFenceHeaderWidget,
@@ -33,12 +28,9 @@ import type {
   LiveMarkdownOptions,
   StoredDecoration
 } from './liveMarkdownDecorationModel';
-import type {
-  LiveMarkdownTable,
-  LiveMarkdownTableAlignment,
-  LiveMarkdownTableRow
-} from './liveMarkdownTable';
+import type { LiveMarkdownTable, LiveMarkdownTableAlignment, LiveMarkdownTableRow } from './liveMarkdownTable';
 
+// reserve a base indent plus enough width for each extra digit in an ordered marker
 const LIST_INDENT_STEP_EM = 1.65;
 const LIST_MARKER_CHARACTER_WIDTH_EM = 0.9;
 
@@ -55,24 +47,31 @@ export function addBlockDecorations(
     'live-markdown-block',
     `is-${ quoteDepth ? 'blockquote' : block.type }`
   ];
+
   if ( block.headingLevel ) {
     classes.push( `heading-level-${ block.headingLevel }` );
   }
+
   if ( block.list ) {
     classes.push( `list-depth-${ block.list.depth % 3 }` );
+
     if ( listContentIsAttachmentCard( block, value, options ) ) {
       classes.push( 'is-attachment-card-only' );
     }
   }
+
   if ( quoteDepth ) {
     classes.push( `quote-depth-${ Math.min( quoteDepth, 3 ) }` );
+
     if ( !block.quote ) {
       classes.push( 'is-blockquote-continuation' );
     }
   }
+
   if ( block.task?.checked ) {
     classes.push( 'is-checked' );
   }
+
   addLineDecoration( model, block.from, classes.join( ' ' ) );
 
   if ( block.type === 'heading' ) {
@@ -80,6 +79,7 @@ export function addBlockDecorations(
 
     return;
   }
+
   if ( block.type === 'horizontal-rule' ) {
     addConstruct( model, block.from, block.to, [{
       from: block.from,
@@ -89,8 +89,10 @@ export function addBlockDecorations(
 
     return;
   }
+
   if ( block.type === 'task' && block.task && block.list ) {
     const markerSource = value.slice( block.from, block.content.from );
+
     addConstruct( model, block.from, block.content.from, [{
       from: block.from,
       to: block.content.from,
@@ -102,14 +104,17 @@ export function addBlockDecorations(
         block.content.from
       )
     }], [ renderedListLineDecoration( block, listIndentation ) ], { boundaryReveal: 'construct' });
+
     if ( block.task.checked && block.content.from < block.content.to ) {
       addMarkDecoration( model, block.content, 'live-task-content' );
     }
 
     return;
   }
+
   if ( block.type === 'list' && block.list ) {
     const markerSource = value.slice( block.from, block.content.from );
+
     addConstruct( model, block.from, block.content.from, [{
       from: block.from,
       to: block.content.from,
@@ -123,8 +128,10 @@ export function addBlockDecorations(
 
     return;
   }
+
   if ( block.type === 'blockquote' && block.quote ) {
     const prefix = quotePrefix ?? value.slice( block.from, block.content.from );
+
     addConstruct( model, block.from, block.content.from, [{
       from: block.from,
       to: block.content.from,
@@ -138,8 +145,10 @@ export function addBlockDecorations(
 
     return;
   }
+
   if ( quoteDepth ) {
     const prefix = quotePrefix ?? '> '.repeat( quoteDepth );
+
     model.decorations.push({
       from: block.from,
       to: block.from,
@@ -164,6 +173,7 @@ export function blockquoteDepthAt( tree: Tree, position: number ): number {
     if ( node.name === 'Blockquote' ) {
       depth += 1;
     }
+
     node = node.parent;
   }
 
@@ -176,11 +186,13 @@ export function addCodeFenceDecorations(
   fence: LiveMarkdownCodeFence
 ): void {
   const opening = state.doc.line( fence.openingLine );
+
   const openingClasses = [
     'live-markdown-block',
     'is-code-opening',
     ...( fence.lineNumbers.length === 1 ? [ 'is-code-last' ] : [])
   ];
+
   addConstruct(
     model,
     opening.from,
@@ -196,6 +208,7 @@ export function addCodeFenceDecorations(
   const finalContentLine = fence.closingLine === undefined
     ? fence.lineNumbers.at( -1 )
     : fence.closingLine - 1;
+
   for (
     let lineNumber = fence.openingLine + 1;
     lineNumber <= ( finalContentLine ?? fence.openingLine );
@@ -203,9 +216,11 @@ export function addCodeFenceDecorations(
   ) {
     const line = state.doc.line( lineNumber );
     const classes = [ 'live-markdown-block', 'is-code-content' ];
+
     if ( fence.closingLine === undefined && lineNumber === finalContentLine ) {
       classes.push( 'is-code-last' );
     }
+
     addLineDecoration( model, line.from, classes.join( ' ' ) );
   }
 
@@ -213,6 +228,7 @@ export function addCodeFenceDecorations(
 
   if ( fence.closingLine !== undefined ) {
     const closing = state.doc.line( fence.closingLine );
+
     addConstruct(
       model,
       closing.from,
@@ -240,6 +256,7 @@ function addCodeHighlightDecorations(
   }
 
   const codeFrom = state.doc.line( fence.openingLine + 1 ).from;
+
   for ( const range of highlightCodeRanges( fence.code, fence.language ) ) {
     addMultilineMarkDecoration(
       model,
@@ -259,12 +276,15 @@ function addMultilineMarkDecoration(
   className: string
 ): void {
   let cursor = from;
+
   while ( cursor < to ) {
     const line = state.doc.lineAt( cursor );
     const segmentTo = Math.min( to, line.to );
+
     if ( cursor < segmentTo ) {
       addMarkDecoration( model, { from: cursor, to: segmentTo }, className );
     }
+
     cursor = segmentTo < to ? line.to + 1 : to;
   }
 }
@@ -277,6 +297,7 @@ export function addTableDecorations(
   addTableRowDecorations( model, state, table, table.header, 'header', false );
 
   const delimiterLast = table.rows.length === 0;
+
   addConstruct(
     model,
     table.delimiter.from,
@@ -320,16 +341,19 @@ function addTableRowDecorations(
   last: boolean
 ): void {
   const cells = row.cells.slice( 0, table.columnCount );
+
   const syntax = [
     ...tableRowSyntax( row, cells ),
     ...tableCellBreakSyntax( state, cells )
   ].sort( ( left, right ) => left.from - right.from || left.to - right.to );
+
   const classes = [
     'live-markdown-block',
     'is-table-row',
     `is-table-${ role }`,
     ...( last ? [ 'is-table-last' ] : [])
   ];
+
   const renderedDecorations: StoredDecoration[] = [ lineDecoration(
     row.from,
     classes.join( ' ' )
@@ -338,10 +362,12 @@ function addTableRowDecorations(
   for ( let index = 0; index < table.columnCount; index += 1 ) {
     const cell = cells[ index ];
     const cellLast = index === table.columnCount - 1;
+
     const className = tableCellClass(
       table.alignments[ index ],
       cellLast
     );
+
     if ( cell && cell.editableFrom < cell.editableTo ) {
       renderedDecorations.push({
         from: cell.editableFrom,
@@ -355,6 +381,7 @@ function addTableRowDecorations(
       });
     } else {
       const position = cell?.editableFrom ?? row.to;
+
       renderedDecorations.push({
         from: position,
         to: position,
@@ -407,8 +434,10 @@ function tableRowSyntax(
     if ( cursor < cell.editableFrom ) {
       syntax.push({ from: cursor, to: cell.editableFrom });
     }
+
     cursor = Math.max( cursor, cell.editableTo );
   }
+
   if ( cursor < row.to ) {
     syntax.push({ from: cursor, to: row.to });
   }
@@ -423,6 +452,7 @@ function tableCellBreakSyntax(
   const syntax: HiddenSyntax[] = [];
   const firstCell = cells[ 0 ];
   const lastCell = cells.at( -1 );
+
   if ( !firstCell || !lastCell ) {
     return syntax;
   }
@@ -439,7 +469,9 @@ function tableCellBreakSyntax(
         reference.from >= candidate.editableFrom &&
         reference.to <= candidate.editableTo
       );
+
       const source = state.sliceDoc( reference.from, reference.to );
+
       if (
         !cell ||
         !/^<br[ \t]*\/?>$/i.test( source ) ||
@@ -466,6 +498,7 @@ function tableCellBreakSyntax(
 
 function characterIsEscaped( value: string, index: number ): boolean {
   let backslashes = 0;
+
   for ( let cursor = index - 1; cursor >= 0 && value[ cursor ] === '\\'; cursor -= 1 ) {
     backslashes += 1;
   }
@@ -494,6 +527,7 @@ function listContentIsAttachmentCard(
   const trailingWhitespace = content.match( /[\t ]*$/ )?.[ 0 ].length ?? 0;
   const from = block.content.from + leadingWhitespace;
   const to = block.content.to - trailingWhitespace;
+
   if ( from >= to ) {
     return false;
   }
@@ -509,16 +543,19 @@ export function renderedListIndentations( blocks: readonly LiveMarkdownBlock[]):
   const groupIndentations = new Map<LiveMarkdownListGroup, number>();
   const indentations = new Map<number, number>();
 
-  // Include offscreen siblings and resolve parents first so their extra width
-  // also shifts nested lists. Single-digit markers keep the usual spacing.
+  // include offscreen siblings and resolve parents first so their extra width
+  // also shifts nested lists. Single-digit markers keep the usual spacing
   for ( const group of liveMarkdownListGroups( blocks ) ) {
     const markerLength = group.items.reduce( ( width, block ) =>
       Math.max( width, block.task ? 0 : renderedListMarker( block ).length ), 0
     );
+
     const extraWidth = Math.max( 0, markerLength - 2 ) * LIST_MARKER_CHARACTER_WIDTH_EM;
     const parentIndentation = group.parent ? groupIndentations.get( group.parent ) ?? 0 : 0;
     const indentation = parentIndentation + LIST_INDENT_STEP_EM + extraWidth;
+
     groupIndentations.set( group, indentation );
+
     for ( const block of group.items ) {
       indentations.set( block.from, indentation );
     }

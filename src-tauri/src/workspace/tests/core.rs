@@ -913,8 +913,8 @@ fn load_snapshot_reports_metadata_reconciliation_origin() {
         revision_for_root(&workspace.root).unwrap(),
     )
     .unwrap();
-    // An image/blank tab persists no active note. Loading chooses a restart
-    // fallback, changing metadata even though no external writer was involved.
+    // an image/blank tab persists no active note. Loading chooses a restart
+    // fallback, changing metadata even though no external writer was involved
     assert!(vault.active_note_id.is_none());
     let loaded = load_workspace(&workspace.root, &vault).unwrap();
     assert_eq!(loaded.source_revision, saved.revision);
@@ -974,7 +974,7 @@ fn read_only_file_snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
         .into_iter()
         .map(|entry| entry.unwrap())
         .filter(|entry| {
-            // Commands may acquire advisory locks even when rejecting a write.
+            // commands may acquire advisory locks even when rejecting a write
             entry.path() != root.join(STATE_DIRECTORY).join(WORKSPACE_LOCK_FILE)
                 && entry.path() != root.join(STATE_DIRECTORY).join(EDITOR_POSITIONS_LOCK_FILE)
         })
@@ -1095,7 +1095,7 @@ fn read_only_access_rejects_vault_mutations_after_open() {
         fs::write(&attachment, b"keep this attachment").unwrap();
         let mut loaded = load_workspace(&workspace.root, &empty_vault("Defaults")).unwrap();
         assert_eq!(loaded.access, WorkspaceAccess::ReadWrite);
-        // The previously loaded access mode must not authorize later native writes.
+        // the previously loaded access mode must not authorize later native writes
         fs::write(workspace_state_path(&workspace.root), bytes).unwrap();
         let revision = revision_for_root(&workspace.root).unwrap();
         let files_before = read_only_file_snapshot(&workspace.root);
@@ -1230,8 +1230,8 @@ fn read_only_access_preserves_attachment_copy_and_path_navigation() {
             assert_eq!(relative, path);
             assert_eq!(resolved, workspace.root.join(path).canonicalize().unwrap());
         }
-        // A supplied stable ID still requires readable metadata; do not silently
-        // open a potentially different file using its old path.
+        // a supplied stable ID still requires readable metadata; do not silently
+        // open a potentially different file using its old path
         assert!(resolve_attachment_action_source(
             &workspace.root,
             "Report.pdf",
@@ -1326,8 +1326,8 @@ fn unchanged_load_preserves_metadata_bytes_mtime_and_revision() {
         }
         load_workspace(&workspace.root, &empty_vault("Test vault")).unwrap();
         let path = workspace_state_path(&workspace.root);
-        // A fixed old timestamp makes an accidental rewrite observable even
-        // on filesystems whose modification times have coarse precision.
+        // a fixed old timestamp makes an accidental rewrite observable even
+        // on filesystems whose modification times have coarse precision
         File::options()
             .write(true)
             .open(&path)
@@ -1396,8 +1396,8 @@ fn unchanged_load_migrates_legacy_state_bytes_once() {
     write_legacy_mirrored_workspace_state(&workspace.root, &state);
     let path = workspace_state_path(&workspace.root);
     let legacy_bytes = fs::read(&path).unwrap();
-    // The parser already normalizes this old enum value. Comparing only the
-    // decoded structs would miss the migration that must be persisted.
+    // the parser already normalizes this old enum value. Comparing only the
+    // decoded structs would miss the migration that must be persisted
     assert_eq!(
         read_workspace_state(&workspace.root, &mut WarningCollector::default()).0,
         Some(state.clone())
@@ -1748,8 +1748,8 @@ fn metadata_lock_serializes_processes_across_replacement() {
     const MODE_ENV: &str = "OAH_METADATA_LOCK_TEST_MODE";
     const REVISION_ENV: &str = "OAH_METADATA_LOCK_TEST_REVISION";
 
-    // Re-enter just this test in another process so the process-local mutex
-    // cannot hide a missing or prematurely released filesystem lock.
+    // re-enter just this test in another process so the process-local mutex
+    // cannot hide a missing or prematurely released filesystem lock
     if let Some(root) = std::env::var_os(ROOT_ENV) {
         let root = PathBuf::from(root);
         let mode = std::env::var(MODE_ENV).unwrap();
@@ -1789,7 +1789,7 @@ fn metadata_lock_serializes_processes_across_replacement() {
     let state_path = workspace_state_path(&workspace.root);
     let before = fs::read(&state_path).unwrap();
     let qualified_name = concat!(module_path!(), "::metadata_lock_serializes_processes_across_replacement");
-    // libtest names omit the crate prefix included by module_path!().
+    // libtest names omit the crate prefix included by module_path!()
     let test_name = qualified_name.split_once("::").unwrap().1;
     let run_probe = |mode: &str| {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1819,7 +1819,7 @@ fn metadata_lock_serializes_processes_across_replacement() {
     assert_ne!(committed, before);
     assert_ne!(saved.revision, loaded.revision);
 
-    // Replacing state.json must not replace or release workspace.lock.
+    // replacing state.json must not replace or release workspace.lock
     run_probe("blocked");
     assert_eq!(fs::read(&state_path).unwrap(), committed);
     drop(owner);
@@ -1890,8 +1890,8 @@ fn metadata_replacement_failure_keeps_the_existing_file() {
         atomic_write(&path, b"original").unwrap();
         let before = fs::metadata(&path).unwrap().modified().unwrap();
         let result = atomic_write_with_precondition(&path, b"replacement", || {
-            // A vanished staging file forces the installation itself to fail,
-            // after the precondition passed. The original must stay in place.
+            // a vanished staging file forces the installation itself to fail,
+            // after the precondition passed. The original must stay in place
             let staged = fs::read_dir(&workspace.root)?
                 .map(|entry| entry.unwrap().path())
                 .find(|entry| entry != &path)
@@ -1940,8 +1940,8 @@ fn metadata_replacement_reloads_workspace_registry_and_editor_positions() {
             }],
             ..WorkspaceRegistry::default()
         };
-        // Registry I/O uses an AppHandle only to locate this configuration file.
-        // Exercise its shared writer and decoder without launching a desktop app.
+        // registry I/O uses an AppHandle only to locate this configuration file
+        // exercise its shared writer and decoder without launching a desktop app
         let registry_path = workspace.root.join("config").join(REGISTRY_FILE);
         atomic_write(
             &registry_path,
@@ -1976,7 +1976,7 @@ fn metadata_replacement_sharing_failure_preserves_the_existing_file() {
         atomic_write(&path, b"original").unwrap();
         let held = OpenOptions::new()
             .read(true)
-            .share_mode(1) // FILE_SHARE_READ: deny deletion/replacement while held.
+            .share_mode(1) // allow FILE_SHARE_READ while denying deletion/replacement
             .open(&path)
             .unwrap();
         atomic_write(&path, b"replacement").expect_err("an unshared file must stay intact");
@@ -2159,7 +2159,7 @@ fn storage_lock_file_timeout_preserves_bytes_and_allows_retry() {
 
 #[test]
 fn storage_lock_wait_retries_contention_but_not_permanent_errors() {
-    // The callback releases a real owner only after observing contention.
+    // the callback releases a real owner only after observing contention
     let mutex = Mutex::new(());
     let mut owner = Some(mutex.lock().unwrap());
     let guard = wait_for_storage_lock(Duration::from_secs(1), "busy", || match mutex.try_lock() {
@@ -2274,8 +2274,8 @@ fn incremental_saves_return_the_persisted_name_for_recents() {
     write_saved_note(&workspace, &note);
     let mut revision = revision_for_root(&workspace.root).unwrap();
 
-    // Both the document and metadata-only paths must return the effective name,
-    // including normalization and retention when the next patch omits it.
+    // both the document and metadata-only paths must return the effective name,
+    // including normalization and retention when the next patch omits it
     let fallback = workspace.root.file_name().unwrap().to_str().unwrap();
     for include_note in [false, true] {
         for (requested, expected) in [
@@ -2418,7 +2418,7 @@ fn incremental_metadata_save_does_not_plan_or_replace_documents() {
     let mut state = write_saved_note(&workspace, &original);
     state.last_committed_transaction_id = Some("prior-transaction".to_owned());
     write_workspace_state(&workspace.root, &state).unwrap();
-    // A metadata update needs fingerprints, not Markdown decoding or write plans.
+    // a metadata update needs fingerprints, not Markdown decoding or write plans
     let path = workspace.root.join(&original.relative_path);
     let bytes = [0xff, 0xfe, 0x80];
     fs::write(&path, bytes).unwrap();
@@ -2587,8 +2587,8 @@ fn incremental_save_recovers_an_interrupted_document_transaction() {
         name: Some("Recovered".to_owned()),
         ..Default::default()
     };
-    // Recovery may restore the bytes with a new filesystem timestamp. In that
-    // case the stale revision must reject this request before metadata changes.
+    // recovery may restore the bytes with a new filesystem timestamp. In that
+    // case the stale revision must reject this request before metadata changes
     if let Err(error) = save_workspace_changes(&workspace.root, &changes, revision) {
         assert!(error.contains("vault changed"));
     }

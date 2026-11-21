@@ -44,6 +44,7 @@ export function findMarkdownHeading(
   target: string
 ): MarkdownHeading | undefined {
   const trimmedTarget = target.trim();
+
   if ( !trimmedTarget ) {
     return undefined;
   }
@@ -58,15 +59,17 @@ export function findMarkdownHeading(
   );
 }
 
-/** Offer each addressable title once, using the same first-match rule as navigation. */
+/** offer each addressable title once, using the same first-match rule as navigation */
 export function markdownHeadingSuggestions( markdown: string ): string[] {
   const seen = new Set<string>();
 
   return parseMarkdownHeadings( markdown ).flatMap( ( heading ) => {
     const key = markdownHeadingComparisonKey( heading.text );
+
     if ( !key || seen.has( key ) ) {
       return [];
     }
+
     seen.add( key );
 
     return [ heading.text ];
@@ -89,7 +92,7 @@ export function markdownHeadingSlug( value: string ): string {
   return slug || 'section';
 }
 
-/** Return the visible text represented by inline Markdown in a heading. */
+/** return the visible text represented by inline Markdown in a heading */
 export function markdownHeadingText( value: string ): string {
   return value
     .replace(

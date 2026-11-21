@@ -79,6 +79,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
   const blocks: LiveMarkdownBlock[] = [];
   let fence: OpenFence | undefined;
 
+  // metadata and fenced code stay literal before interpreting any structural prefixes
   for ( const [ index, line ] of lines.entries() ) {
     if ( frontmatterEnd !== undefined && index <= frontmatterEnd ) {
       blocks.push( createPlainBlock( line, 'frontmatter' ) );
@@ -88,6 +89,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
 
     if ( fence ) {
       blocks.push( createPlainBlock( line, 'code' ) );
+
       if ( closesFence( line.source, fence ) ) {
         fence = undefined;
       }
@@ -96,8 +98,10 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
     }
 
     const openingFence = line.source.match( /^ {0,3}(`{3,}|~{3,})/ );
+
     if ( openingFence ) {
       const marker = openingFence[ 1 ]!;
+
       fence = {
         marker: marker[ 0 ]! as '`' | '~',
         length: marker.length
@@ -114,6 +118,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
     }
 
     const horizontalRule = parseHorizontalRule( line );
+
     if ( horizontalRule ) {
       blocks.push( horizontalRule );
 
@@ -121,6 +126,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
     }
 
     const heading = parseHeading( line );
+
     if ( heading ) {
       blocks.push( heading );
 
@@ -128,6 +134,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
     }
 
     const task = parseTask( line );
+
     if ( task ) {
       blocks.push( task );
 
@@ -135,6 +142,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
     }
 
     const list = parseList( line );
+
     if ( list ) {
       blocks.push( list );
 
@@ -142,6 +150,7 @@ export function parseLiveMarkdownBlocks( value: string ): LiveMarkdownBlock[] {
     }
 
     const quote = parseBlockquote( line );
+
     blocks.push( quote ?? createPlainBlock( line, 'text' ) );
   }
 
@@ -159,6 +168,7 @@ export function findLiveMarkdownBlock(
   }
 
   const position = Math.max( 0, offset );
+
   for ( const [ index, block ] of blocks.entries() ) {
     if ( position < block.end || index === blocks.length - 1 ) {
       return block;
@@ -176,10 +186,12 @@ export function activeLiveMarkdownBlocks(
   const selectionFrom = Math.min( anchor, head );
   const selectionTo = Math.max( anchor, head );
   const first = findLiveMarkdownBlock( blocks, selectionFrom );
+
   const last = findLiveMarkdownBlock(
     blocks,
     selectionTo === selectionFrom ? selectionTo : selectionTo - 1
   );
+
   if ( !first || !last ) {
     return [];
   }
@@ -200,6 +212,7 @@ export function setLiveMarkdownTaskChecked(
   }
 
   const { from, to } = block.task.check;
+
   if ( to - from !== 1 || !/[ xX]/.test( value.slice( from, to ) ) ) {
     return value;
   }
@@ -239,12 +252,14 @@ function readSourceLines( value: string ): SourceLine[] {
 
 function findFrontmatterEnd( lines: readonly SourceLine[]): number | undefined {
   const opening = lines[ 0 ]?.source.replace( /^\u{feff}/u, '' ).trimEnd();
+
   if ( opening !== '---' ) {
     return undefined;
   }
 
   for ( let index = 1; index < lines.length; index += 1 ) {
     const line = lines[ index ]!.source.trimEnd();
+
     if ( line === '---' || line === '...' ) {
       return index;
     }
@@ -265,6 +280,7 @@ function closesFence( source: string, fence: OpenFence ): boolean {
 
 function parseHeading( line: SourceLine ): LiveMarkdownBlock | undefined {
   const heading = line.source.match( /^( {0,3})(#{1,6})([\t ]+)(.*)$/ );
+
   if ( !heading ) {
     return undefined;
   }
@@ -274,6 +290,7 @@ function parseHeading( line: SourceLine ): LiveMarkdownBlock | undefined {
   const syntax = [ openingMarker ];
   const closingMarker = heading[ 4 ]!.match( /[\t ]+#+[\t ]*$/ )?.[ 0 ];
   const contentTo = closingMarker ? line.to - closingMarker.length : line.to;
+
   if ( closingMarker ) {
     syntax.push({ from: contentTo, to: line.to });
   }
@@ -306,6 +323,7 @@ function parseTask( line: SourceLine ): LiveMarkdownBlock | undefined {
   const task = line.source.match(
     /^([ \t]*)([-+*]|\d{1,9}[.)])([ \t]+)\[([ xX])\]([ \t]+)(.*)$/
   );
+
   if ( !task ) {
     return undefined;
   }
@@ -338,6 +356,7 @@ function parseList( line: SourceLine ): LiveMarkdownBlock | undefined {
   const list = line.source.match(
     /^([ \t]*)([-+*]|\d{1,9}[.)])([ \t]+)(.*)$/
   );
+
   if ( !list ) {
     return undefined;
   }
@@ -365,6 +384,7 @@ function parseBlockquote( line: SourceLine ): LiveMarkdownBlock | undefined {
 
   while ( prefixLength < line.source.length ) {
     const marker = line.source.slice( prefixLength ).match( /^ {0,3}> ?/ )?.[ 0 ];
+
     if ( !marker ) {
       break;
     }
@@ -410,15 +430,18 @@ function createListMetadata(
   };
 }
 
+// the CommonMark grammar accepts at most nine digits in an ordered marker
 const MAX_ORDERED_LIST_NUMBER = 999_999_999;
 
 function arrangeListItems( blocks: readonly LiveMarkdownBlock[]): void {
   for ( const group of liveMarkdownListGroups( blocks ) ) {
-    // Repeated 1. is conventional Markdown. Otherwise show explicit numbers,
-    // including nested starting numbers and deliberate resets in the source.
+    // repeated 1. is conventional Markdown. Otherwise show explicit numbers,
+    // including nested starting numbers and deliberate resets in the source
     const repeatedOnes = group.ordered && group.items.every( ( block ) => block.list!.number === 1 );
+
     for ( const [ index, block ] of group.items.entries() ) {
       block.list!.depth = group.depth;
+
       if ( repeatedOnes ) {
         block.list!.number = index + 1;
       }
@@ -438,11 +461,12 @@ export function liveMarkdownListGroups(
 
   for ( const block of blocks ) {
     if ( !block.list ) {
-      // Without a blank separator, plain text can continue an item. This also
-      // keeps following siblings together when a user removes a marker.
+      // without a blank separator, plain text can continue an item. This also
+      // keeps following siblings together when a user removes a marker
       if ( block.type === 'text' ) {
         continue;
       }
+
       levels.length = 0;
 
       continue;
@@ -456,6 +480,7 @@ export function liveMarkdownListGroups(
       levels.length = matchingLevel + 1;
     } else {
       let parentDepth = levels.length - 1;
+
       while ( parentDepth >= 0 && levels[ parentDepth ]!.indentation >= list.indentation ) {
         parentDepth -= 1;
       }
@@ -466,6 +491,7 @@ export function liveMarkdownListGroups(
 
     const delimiter = block.source[ list.marker.to - block.from - 1 ]!;
     let level = levels[ depth ];
+
     if ( !level || level.ordered !== list.ordered || level.delimiter !== delimiter ) {
       level = {
         depth,
@@ -478,6 +504,7 @@ export function liveMarkdownListGroups(
       levels[ depth ] = level;
       groups.push( level );
     }
+
     level.items.push( block );
   }
 

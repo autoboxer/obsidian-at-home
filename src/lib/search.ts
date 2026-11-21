@@ -19,8 +19,8 @@ interface ScoredField {
 }
 
 /**
- * A small, deterministic full-text search tuned for a local notes collection.
- * Titles carry the most weight, followed by tags, folders and body text.
+ * a small, deterministic full-text search tuned for a local notes collection
+ * titles carry the most weight, followed by tags, folders and body text
  */
 export function searchNotes(
   notes: readonly Note[],
@@ -31,6 +31,7 @@ export function searchNotes(
   const options = toOptions( optionsOrFolders, explicitLimit );
   const terms = parseSearchTerms( query );
   const phrase = terms.join( ' ' );
+
   if ( !phrase || terms.length === 0 ) {
     return [];
   }
@@ -42,9 +43,11 @@ export function searchNotes(
     const title = normalizeSearchText( note.title );
     const content = normalizeSearchText( note.content );
     const tags = note.tags.map( normalizeSearchText );
+
     const folderLabel = normalizeSearchText(
       folderName( note.folderId, options.folderNames ) ?? ''
     );
+
     if ( exactTag && !tags.includes( exactTag ) ) {
       continue;
     }
@@ -53,24 +56,28 @@ export function searchNotes(
     const contentScore = scoreContent( content, phrase, terms );
     const tagScore = scoreTags( tags, phrase, terms );
     const folderScore = scoreFolder( folderLabel, phrase, terms );
+
     const allFields: Array<[SearchResult[ 'reason' ], ScoredField]> = [
       [ 'title', titleScore ],
       [ 'tag', tagScore ],
       [ 'folder', folderScore ],
       [ 'content', contentScore ]
     ];
+
     const scopedReason = options.scope === 'titles'
       ? 'title'
       : options.scope === 'tags'
         ? 'tag'
         : options.scope;
+
     const fields = options.scope === 'all'
       ? allFields
       : allFields.filter( ([ reason ]) => reason === scopedReason );
+
     const matched = new Set( fields.flatMap( ([ , field ]) => [ ...field.matchedTerms ]) );
 
-    // Multi-word searches are intentionally conjunctive across the selected
-    // fields. This keeps "meeting api" useful without a heavyweight index.
+    // multi-word searches are intentionally conjunctive across the selected
+    // fields. This keeps "meeting api" useful without a heavyweight index
     if ( terms.some( ( term ) => !matched.has( term ) ) ) {
       continue;
     }
@@ -78,6 +85,7 @@ export function searchNotes(
     const [ reason ] = fields.reduce( ( best, current ) =>
       current[ 1 ].score > best[ 1 ].score ? current : best
     );
+
     const score = fields.reduce( ( total, [ , field ]) => total + field.score, 0 );
 
     if ( score <= 0 ) {
@@ -108,7 +116,7 @@ export function searchNotes(
     .map( ({ updatedAt: _updatedAt, ...result }) => result );
 }
 
-/** Build a plain-text, context-aware excerpt around the earliest query hit. */
+/** build a plain-text, context-aware excerpt around the earliest query hit */
 export function createSearchSnippet(
   markdown: string,
   queryOrTerms: string | readonly string[],
@@ -116,6 +124,7 @@ export function createSearchSnippet(
 ): string {
   const safeMaxLength = Math.max( 40, maxLength );
   const text = markdownToSearchText( markdown );
+
   if ( !text ) {
     return '';
   }
@@ -127,12 +136,15 @@ export function createSearchSnippet(
     .map( normalizeSearchText )
     .filter( Boolean )
     .sort( ( a, b ) => b.length - a.length );
+
   const comparableText = normalizeSearchText( text );
 
   let hitIndex = -1;
   let hitLength = 0;
+
   for ( const term of terms ) {
     const index = comparableText.indexOf( term );
+
     if ( index >= 0 && ( hitIndex < 0 || index < hitIndex ) ) {
       hitIndex = index;
       hitLength = term.length;
@@ -142,20 +154,25 @@ export function createSearchSnippet(
   if ( text.length <= safeMaxLength ) {
     return text;
   }
+
   if ( hitIndex < 0 ) {
     return `${ trimAtWord( text, safeMaxLength ) }…`;
   }
 
   const desiredStart = Math.max( 0, hitIndex - Math.floor( ( safeMaxLength - hitLength ) / 2 ) );
   let start = desiredStart;
+
   if ( start > 0 ) {
     const nextSpace = text.indexOf( ' ', start );
+
+    // avoid a partial opening word without moving far enough to lose the query hit
     if ( nextSpace >= 0 && nextSpace - start < 24 ) {
       start = nextSpace + 1;
     }
   }
 
   let excerpt = text.slice( start, start + safeMaxLength );
+
   if ( start + safeMaxLength < text.length ) {
     excerpt = trimAtWord( excerpt, excerpt.length );
   }
@@ -173,9 +190,11 @@ export function parseSearchTerms( query: string ): string[] {
 
   while ( ( match = tokenPattern.exec( query ) ) !== null ) {
     const term = normalizeSearchText( match[ 1 ] ?? match[ 2 ] ?? match[ 3 ] ?? '' );
+
     if ( !term || seen.has( term ) ) {
       continue;
     }
+
     seen.add( term );
     terms.push( term );
   }
@@ -183,8 +202,10 @@ export function parseSearchTerms( query: string ): string[] {
   return terms;
 }
 
+// rank exact titles above prefixes and substrings, with body matches carrying less weight
 function scoreTitle( title: string, phrase: string, terms: readonly string[]): ScoredField {
   const result = scoreFieldMatches( title, terms, 34, 22 );
+
   if ( title === phrase ) {
     result.score += 180;
   } else if ( title.startsWith( phrase ) ) {
@@ -199,12 +220,15 @@ function scoreTitle( title: string, phrase: string, terms: readonly string[]): S
 function scoreContent( content: string, phrase: string, terms: readonly string[]): ScoredField {
   const result = scoreFieldMatches( content, terms, 5, 3 );
   const phraseIndex = content.indexOf( phrase );
+
   if ( phraseIndex >= 0 ) {
     result.score += 18;
   }
 
   for ( const term of terms ) {
     const occurrences = countOccurrences( content, term, 8 );
+
+    // cap repetition bonuses so long notes cannot overwhelm a stronger title or tag match
     result.score += Math.min( occurrences, 8 ) * 1.25;
   }
 
@@ -238,6 +262,7 @@ function scoreTags( tags: readonly string[], phrase: string, terms: readonly str
 
 function scoreFolder( folder: string, phrase: string, terms: readonly string[]): ScoredField {
   const result = scoreFieldMatches( folder, terms, 14, 8 );
+
   if ( folder === phrase ) {
     result.score += 30;
   } else if ( folder.includes( phrase ) ) {
@@ -258,11 +283,14 @@ function scoreFieldMatches(
 
   for ( const term of terms ) {
     const index = field.indexOf( term );
+
     if ( index < 0 ) {
       continue;
     }
+
     matchedTerms.add( term );
     score += hasWordAt( field, term, index ) ? wholeWordWeight : partialWeight;
+
     if ( index === 0 ) {
       score += wholeWordWeight * 0.25;
     }
@@ -282,11 +310,14 @@ function hasWordAt( field: string, term: string, index: number ): boolean {
 function countOccurrences( value: string, needle: string, limit: number ): number {
   let count = 0;
   let cursor = 0;
+
   while ( count < limit ) {
     const index = value.indexOf( needle, cursor );
+
     if ( index < 0 ) {
       break;
     }
+
     count += 1;
     cursor = index + Math.max( 1, needle.length );
   }
@@ -301,9 +332,11 @@ function folderName(
   if ( !folderId || !lookup ) {
     return undefined;
   }
+
   if ( typeof lookup === 'function' ) {
     return lookup( folderId );
   }
+
   if ( 'get' in lookup && typeof lookup.get === 'function' ) {
     return lookup.get( folderId );
   }
@@ -338,6 +371,7 @@ function toOptions(
       || 'scope' in value
       || 'exactTag' in value
     );
+
   const options = looksLikeOptions ? value as SearchOptions : { folderNames: value as FolderNameLookup };
 
   return {
@@ -366,6 +400,7 @@ function trimAtWord( value: string, maxLength: number ): string {
   const sliced = value.slice( 0, maxLength );
   const lastSpace = sliced.lastIndexOf( ' ' );
 
+  // keep at least 65% of the excerpt when trimming a trailing partial word
   return lastSpace > maxLength * 0.65 ? sliced.slice( 0, lastSpace ) : sliced;
 }
 

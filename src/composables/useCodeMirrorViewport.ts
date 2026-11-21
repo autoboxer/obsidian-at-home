@@ -3,10 +3,16 @@ import { syntaxTreeAvailable } from '@codemirror/language';
 import { EditorSelection } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { joinLeadingFrontmatter, markdownBodyStart } from '../lib/frontmatter';
-import { registerNoteEditorPositionCapture, setNoteTabEditorPosition, type NoteEditorViewPosition } from '../stores/editorPositions';
+import {
+  registerNoteEditorPositionCapture,
+  setNoteTabEditorPosition,
+  type NoteEditorViewPosition
+} from '../stores/editorPositions';
 import type { NoteEditorPosition } from '../types';
 
+// sample just inside the viewport to avoid anchoring to a clipped line above it
 const VIEWPORT_ANCHOR_MARGIN = 8;
+// prefer a nearby rendered block over an estimated height from virtualized content
 const VIRTUALIZED_VIEWPORT_THRESHOLD = 200;
 
 export function useCodeMirrorViewport(
@@ -25,6 +31,7 @@ export function useCodeMirrorViewport(
 
   function focusDocumentOffset( offset: number ): boolean {
     const view = editorView.value;
+
     if ( !view || !Number.isFinite( offset ) ) {
       return false;
     }
@@ -38,6 +45,7 @@ export function useCodeMirrorViewport(
       getFrontmatterPrefix(),
       view.state.doc.toString()
     );
+
     const position = Math.min(
       view.state.doc.length,
       Math.max( 0, Math.trunc( offset ) - bodyStart )
@@ -60,6 +68,7 @@ export function useCodeMirrorViewport(
 
   function handleEditorScroll(): void {
     const view = editorView.value;
+
     if ( view ) {
       schedulePositionCapture( view );
     }
@@ -82,8 +91,8 @@ export function useCodeMirrorViewport(
       return;
     }
 
-    // Keep the mounted editor measurable while CodeMirror finishes parsing the
-    // restored viewport, then expose the completed rendering in a single frame.
+    // keep the mounted editor measurable while CodeMirror finishes parsing the
+    // restored viewport, then expose the completed rendering in a single frame
     view.requestMeasure({
       key: renderReadyKey,
       read: ( measuredView ) => syntaxTreeAvailable(
@@ -94,6 +103,7 @@ export function useCodeMirrorViewport(
         if ( ready && editorView.value === measuredView ) {
           const scrollLeft = measuredView.scrollDOM.scrollLeft;
           const scrollTop = measuredView.scrollDOM.scrollTop;
+
           editorRenderReady.value = true;
           measuredView.scrollDOM.scrollLeft = scrollLeft;
           measuredView.scrollDOM.scrollTop = scrollTop;
@@ -104,13 +114,16 @@ export function useCodeMirrorViewport(
 
   function captureEditorPosition( view: EditorView ): NoteEditorViewPosition {
     const selection = view.state.selection.main;
+
     const bodyStart = markdownBodyStart(
       getFrontmatterPrefix(),
       view.state.doc.toString()
     );
+
     const scrollTop = view.scrollDOM.scrollTop;
     const candidate = view.lineBlockAtHeight( scrollTop + VIEWPORT_ANCHOR_MARGIN );
     const firstVisibleBlock = view.viewportLineBlocks[ 0 ];
+
     const viewportBlock = candidate.from >= view.viewport.from
       || !firstVisibleBlock
       || firstVisibleBlock.top - scrollTop > VIRTUALIZED_VIEWPORT_THRESHOLD
@@ -122,7 +135,10 @@ export function useCodeMirrorViewport(
         anchor: selection.anchor + bodyStart,
         head: selection.head + bodyStart
       },
-      ranges: view.state.selection.ranges.map( ( range ) => ({ anchor: range.anchor + bodyStart, head: range.head + bodyStart }) ),
+      ranges: view.state.selection.ranges.map( ( range ) => ({
+        anchor: range.anchor + bodyStart,
+        head: range.head + bodyStart
+      }) ),
       mainIndex: view.state.selection.mainIndex,
       viewport: {
         anchor: viewportBlock.from + bodyStart,
@@ -134,6 +150,7 @@ export function useCodeMirrorViewport(
 
   function emitEditorPosition( position: NoteEditorViewPosition ): void {
     const view = editorView.value;
+
     if ( view ) {
       setNoteTabEditorPosition(
         props.vaultId,
@@ -143,6 +160,7 @@ export function useCodeMirrorViewport(
         position
       );
     }
+
     emit( 'editorPosition', props.vaultId, props.noteId, position );
   }
 
@@ -152,6 +170,7 @@ export function useCodeMirrorViewport(
   ): void {
     viewportRestoreFrame = window.requestAnimationFrame( () => {
       viewportRestoreFrame = undefined;
+
       if ( editorView.value !== view ) {
         return;
       }
@@ -160,10 +179,12 @@ export function useCodeMirrorViewport(
         key: viewportRestoreKey,
         read: ( measuredView ) => {
           const viewportBlock = measuredView.lineBlockAt( position.viewport.anchor );
+
           const maximumTop = Math.max(
             0,
             measuredView.scrollDOM.scrollHeight - measuredView.scrollDOM.clientHeight
           );
+
           const maximumLeft = Math.max(
             0,
             measuredView.scrollDOM.scrollWidth - measuredView.scrollDOM.clientWidth
@@ -213,13 +234,17 @@ export function useCodeMirrorViewport(
   function disposeEditorPosition(): void {
     const view = editorView.value;
     const captureWasActive = removePositionCapture?.() ?? false;
+
     removePositionCapture = undefined;
+
     if ( viewportRestoreFrame !== undefined ) {
       window.cancelAnimationFrame( viewportRestoreFrame );
       viewportRestoreFrame = undefined;
     }
+
     if ( view ) {
       view.scrollDOM.removeEventListener( 'scroll', handleEditorScroll );
+
       if ( positionCaptureEnabled && captureWasActive ) {
         emitEditorPosition( captureEditorPosition( view ) );
       }
