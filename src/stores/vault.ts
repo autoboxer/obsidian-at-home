@@ -1387,7 +1387,7 @@ function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.r
   uiState.imageRefreshToken += 1;
   uiState.attachmentRefreshToken += 1;
   hydrateRecentlyDeletedNotes( workspace.recentlyDeletedNotes );
-  initializeNoteEditorPositions(
+  const positionVaultId = initializeNoteEditorPositions(
     'native',
     workspace.descriptor.path,
     vaultState.notes,
@@ -1402,7 +1402,7 @@ function applyWorkspace( workspace: WorkspaceLoad, recentVaults = vaultSession.r
   if ( previousPath === workspace.descriptor.path ) {
     pruneNoteNavigation();
   } else {
-    resetNoteNavigation();
+    resetNoteNavigation( positionVaultId );
     uiState.notesView = 'editor';
   }
   vaultSession.phase = 'ready';
