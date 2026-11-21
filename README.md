@@ -24,10 +24,10 @@ This is not a complete Obsidian replacement: cloud sync, graph view, automation,
 ## Features
 
 - Create, open, and switch between vaults of ordinary `.md` and `.markdown` files.
-- Organize notes in nested folders with drag-and-drop and right-click file actions.
+- Organize notes in nested folders with a resizable sidebar, drag-and-drop, and right-click file actions.
 - Write in a unified live Markdown editor with inline formatting, interactive task checkboxes, tables, spellcheck, syntax-highlighted fenced code blocks, and find-in-note.
-- Embed local images and attachments, resize images, and keep assets with the vault.
-- Move through note history with back and forward controls, or revisit notes from **Recent notes**.
+- Embed local images and attachments, resize images, and preview images from the sidebar.
+- Work in multiple note tabs with independent navigation history, cursor positions, and scroll positions.
 - Return to each note's cursor and scroll position, even after restarting the app.
 - Zoom the app with `Ctrl/Cmd` + `+`, `-`, or `0`.
 - Personalize the app with light and dark themes, bundled typefaces, or fonts installed on your computer.
