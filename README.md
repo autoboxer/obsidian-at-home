@@ -52,8 +52,8 @@ Neither option copies Canvas files, themes, plugins, hotkeys, or workspace setti
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 22.12 or newer and npm; if using Node.js 20, use version 20.19 or newer
-- A stable [Rust toolchain](https://rustup.rs/)
+- [Node.js](https://nodejs.org/) 26 and npm (`nvm install` uses the version in `.nvmrc`)
+- A stable [Rust toolchain](https://rustup.rs/) version 1.90 or newer
 - The [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system
 
 Clone the repository and install dependencies:
