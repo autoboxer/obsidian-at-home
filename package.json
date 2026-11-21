@@ -1,7 +1,7 @@
 {
   "name": "obsidian-at-home",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A local-only desktop app for writing, organizing, and linking Markdown notes.",
   "type": "module",
   "scripts": {
@@ -36,9 +36,9 @@
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/source-serif-4": "^5.3.1",
     "@lezer/common": "^1.5.6",
-    "@tauri-apps/api": "^2.12.5",
-    "@tauri-apps/plugin-clipboard-manager": "^2.5.0",
-    "@tauri-apps/plugin-opener": "^2.7.3",
+    "@tauri-apps/api": "~2.12.5",
+    "@tauri-apps/plugin-clipboard-manager": "2.5.0",
+    "@tauri-apps/plugin-opener": "2.7.3",
     "highlight.js": "^11.12.0",
     "vue": "^3.5.46"
   },
