@@ -25,6 +25,7 @@ import type {
   VaultAttachmentFile
 } from '../types';
 
+// bound a single drop so large selections cannot flood the native upload queue
 const MAX_EXTERNAL_DROP_FILES = 100;
 
 interface CodeMirrorAssetProps {
@@ -76,7 +77,8 @@ export function useCodeMirrorAssets(
   const pendingImageInsertions = new Map<string, PendingImageInsertion>();
   const imageSourcePromises = new Map<string, Promise<string>>();
   const imageObjectUrls = new Set<string>();
-  // Relative image paths depend on the containing folder, not the note's name.
+
+  // relative image paths depend on the containing folder, not the note's name
   const imageSourceContext = computed( () => `${ props.vaultPath ?? '' }\u0000${
     props.noteRelativePath.slice( 0, props.noteRelativePath.lastIndexOf( '/' ) + 1 )
   }` );
@@ -89,9 +91,11 @@ export function useCodeMirrorAssets(
     image: ParsedMarkdownImage
   ): Promise<string | undefined> {
     const source = sanitizeImageUrl( image.destination );
+
     if ( !source ) {
       return undefined;
     }
+
     if (
       !isTauri()
       || !props.vaultPath
@@ -102,10 +106,13 @@ export function useCodeMirrorAssets(
     }
 
     const generation = imageResolverGeneration;
+
     const cacheKey = `${ generation }\u0000${ imageSourceContext.value }\u0000${
       image.assetId ?? ''
     }\u0000${ image.destination }`;
+
     const cached = imageSourcePromises.get( cacheKey );
+
     if ( cached ) {
       return cached;
     }
@@ -117,16 +124,21 @@ export function useCodeMirrorAssets(
         decodeMarkdownImageDestination( image.destination ),
         image.assetId
       );
+
       if ( imageResolverDisposed || generation !== imageResolverGeneration ) {
         throw new Error( 'The image changed before it finished loading.' );
       }
+
       const mediaType = props.embeddedImages.find( ( asset ) => asset.id === image.assetId )?.mediaType
         ?? imageMediaTypeForPath( image.destination );
+
       const url = URL.createObjectURL( new Blob([ bytes.slice().buffer ], { type: mediaType }) );
+
       imageObjectUrls.add( url );
 
       return url;
     })();
+
     imageSourcePromises.set( cacheKey, pending );
     pending.catch( () => {
       if ( imageSourcePromises.get( cacheKey ) === pending ) {
@@ -140,9 +152,11 @@ export function useCodeMirrorAssets(
   function clearLiveMarkdownImageSources(): void {
     imageResolverGeneration += 1;
     imageSourcePromises.clear();
+
     for ( const url of imageObjectUrls ) {
       URL.revokeObjectURL( url );
     }
+
     imageObjectUrls.clear();
   }
 
@@ -165,12 +179,16 @@ export function useCodeMirrorAssets(
     const tracked = attachment.assetId
       ? props.embeddedAttachments.find( ( asset ) => asset.id === attachment.assetId )
       : undefined;
+
     const relativePath = tracked?.relativePath
       ?? resolveMarkdownImagePath( props.noteRelativePath, attachment.destination );
+
     if ( !relativePath ) {
       return undefined;
     }
+
     const portablePath = relativePath.toLocaleLowerCase();
+
     const matches = attachment.assetId
       ? props.attachmentFiles.filter( ( candidate ) =>
         candidate.assetId === attachment.assetId
@@ -178,7 +196,9 @@ export function useCodeMirrorAssets(
       : props.attachmentFiles.filter( ( candidate ) =>
         candidate.relativePath.toLocaleLowerCase() === portablePath
       );
+
     const file = matches.length === 1 ? matches[ 0 ] : undefined;
+
     const renameTarget = file && props.vaultPath && isTauri()
       ? {
         ...( file.assetId ? { assetId: file.assetId } : {}),
@@ -201,6 +221,7 @@ export function useCodeMirrorAssets(
   ): void {
     const relativePath = metadata?.relativePath
       ?? resolveMarkdownImagePath( props.noteRelativePath, attachment.destination );
+
     if ( relativePath ) {
       emit(
         'activateAttachment',
@@ -233,10 +254,13 @@ export function useCodeMirrorAssets(
   ): void {
     const relativePath = metadata?.relativePath
       ?? resolveMarkdownImagePath( props.noteRelativePath, attachment.destination );
+
     if ( !relativePath ) {
       return;
     }
+
     const assetId = metadata?.renameTarget?.assetId;
+
     if ( event === 'revealAttachmentInTree' ) {
       emit( 'revealAttachmentInTree', assetId, relativePath );
     } else {
@@ -250,17 +274,22 @@ export function useCodeMirrorAssets(
     if ( props.readOnly || !view ) {
       return undefined;
     }
+
     if ( view.state.selection.ranges.length !== 1 ) {
       notify( 'Use a single selection to insert an image or file.', 'neutral' );
+
       return undefined;
     }
 
     const selection = view.state.selection.main;
+
     const inTable = liveMarkdownDocumentModel( view.state ).tables.some( ( table ) =>
       selection.from >= table.from && selection.to <= table.to
     );
+
     imageInsertionSequence += 1;
     const token = `${ Date.now().toString( 36 ) }-${ imageInsertionSequence.toString( 36 ) }`;
+
     const insertion: PendingImageInsertion = {
       from: selection.from,
       inTable,
@@ -269,6 +298,7 @@ export function useCodeMirrorAssets(
       to: selection.to,
       token
     };
+
     pendingImageInsertions.set( token, insertion );
 
     return {
@@ -289,7 +319,9 @@ export function useCodeMirrorAssets(
   ): boolean {
     const view = editorView.value;
     const insertion = pendingImageInsertions.get( capture.token );
+
     pendingImageInsertions.delete( capture.token );
+
     if (
       props.readOnly
       || !view
@@ -305,10 +337,12 @@ export function useCodeMirrorAssets(
 
     if ( view.state.selection.ranges.length !== 1 ) {
       notify( 'Use a single selection to insert an image or file.', 'neutral' );
+
       return false;
     }
 
     const cursor = insertion.from + markdownImage.length;
+
     view.dispatch({
       changes: {
         from: insertion.from,
@@ -326,9 +360,11 @@ export function useCodeMirrorAssets(
 
   function requestImageEmbed( view: EditorView ): boolean {
     const capture = captureImageInsertion( view );
+
     if ( !capture ) {
       return view.state.selection.ranges.length > 1;
     }
+
     emit( 'requestEmbedImage', capture );
 
     return true;
@@ -353,9 +389,11 @@ export function useCodeMirrorAssets(
 
   function requestAttachmentEmbed( view: EditorView ): boolean {
     const capture = captureAttachmentInsertion( view );
+
     if ( !capture ) {
       return view.state.selection.ranges.length > 1;
     }
+
     emit( 'requestEmbedAttachment', capture );
 
     return true;
@@ -369,16 +407,20 @@ export function useCodeMirrorAssets(
     }
 
     const clipboard = event.clipboardData;
+
     if ( !clipboard ) {
       return;
     }
+
     const imageItem = Array.from( clipboard.items ).find( ( item ) =>
       item.kind === 'file' && item.type.toLocaleLowerCase().startsWith( 'image/' )
     );
+
     const imageSignaled = Boolean( imageItem )
       || Array.from( clipboard.types ).some( ( type ) =>
         type === 'Files' || type.toLocaleLowerCase().startsWith( 'image/' )
       );
+
     if ( !imageSignaled ) {
       return;
     }
@@ -386,14 +428,17 @@ export function useCodeMirrorAssets(
     event.preventDefault();
     event.stopImmediatePropagation();
     const capture = captureImageInsertion();
+
     if ( !capture ) {
       return;
     }
+
     emit( 'pasteImage', capture, imageItem?.getAsFile() ?? undefined );
   }
 
   function isExternalFileDrag( event: DragEvent ): boolean {
     const types = Array.from( event.dataTransfer?.types ?? []);
+
     return types.includes( 'Files' )
       && !types.includes( NOTE_DRAG_MIME )
       && !types.includes( NOTE_IMAGE_DRAG_MIME )
@@ -410,6 +455,7 @@ export function useCodeMirrorAssets(
     if ( props.readOnly || !editorRenderReady.value || !isExternalFileDrag( event ) ) {
       return;
     }
+
     externalFileDragDepth += 1;
     externalFileDragActive.value = true;
   }
@@ -418,7 +464,9 @@ export function useCodeMirrorAssets(
     if ( !externalFileDragActive.value ) {
       return;
     }
+
     externalFileDragDepth = Math.max( 0, externalFileDragDepth - 1 );
+
     if ( !externalFileDragDepth ) {
       externalFileDragActive.value = false;
     }
@@ -431,6 +479,7 @@ export function useCodeMirrorAssets(
     const vaultImage = types.includes( VAULT_IMAGE_DRAG_MIME );
     const vaultAttachment = types.includes( VAULT_ATTACHMENT_DRAG_MIME );
     const externalFiles = isExternalFileDrag( event );
+
     if (
       !movingWithinNote
       && !vaultNote
@@ -440,11 +489,14 @@ export function useCodeMirrorAssets(
     ) {
       return;
     }
+
     event.preventDefault();
     event.stopImmediatePropagation();
+
     if ( externalFiles && editorRenderReady.value && !props.readOnly ) {
       externalFileDragActive.value = true;
     }
+
     if ( event.dataTransfer ) {
       event.dataTransfer.dropEffect = props.readOnly ? 'none' : movingWithinNote ? 'move' : 'copy';
     }
@@ -453,35 +505,44 @@ export function useCodeMirrorAssets(
   function blockUnavailableEditorDrag( event: DragEvent ): void {
     if ( props.readOnly || !editorRenderReady.value ) {
       clearExternalFileDrag();
+
       if ( event.dataTransfer ) {
         event.dataTransfer.dropEffect = 'none';
       }
+
       blockPendingEditorInteraction( event );
     }
   }
 
   function handleSourceEditorDrop( event: DragEvent ): void {
     clearExternalFileDrag();
+
     if ( props.readOnly ) {
       event.preventDefault();
       event.stopImmediatePropagation();
 
       return;
     }
+
     const transfer = event.dataTransfer;
     const internalImage = parseInternalImageDrag( transfer?.getData( NOTE_IMAGE_DRAG_MIME ) );
     const relativePath = transfer?.getData( VAULT_IMAGE_DRAG_MIME ).trim() ?? '';
+
     const attachmentRelativePath = transfer
       ?.getData( VAULT_ATTACHMENT_DRAG_MIME )
       .trim() ?? '';
+
     const types = Array.from( transfer?.types ?? []);
     const vaultNote = types.includes( NOTE_DRAG_MIME );
+
     const externalFiles = !internalImage
       && !vaultNote
       && !relativePath
       && !attachmentRelativePath
       && types.includes( 'Files' );
+
     const view = editorView.value;
+
     if (
       !internalImage
       && !vaultNote
@@ -491,20 +552,26 @@ export function useCodeMirrorAssets(
     ) {
       return;
     }
+
     event.preventDefault();
     event.stopImmediatePropagation();
+
     if ( !view || !editorRenderReady.value ) {
       return;
     }
+
     const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false )
       ?? view.state.selection.main.head;
+
     if ( vaultNote ) {
       const link = props.noteLinkForId( transfer?.getData( NOTE_DRAG_MIME ).trim() ?? '' );
+
       if ( !link ) {
         notify( 'That note is no longer available in this vault', 'warning' );
 
         return;
       }
+
       view.dispatch({
         changes: { from: position, insert: link },
         selection: EditorSelection.cursor( position + link.length ),
@@ -516,35 +583,43 @@ export function useCodeMirrorAssets(
 
       return;
     }
+
     if ( internalImage ) {
       moveImageReferenceWithinNote( view, internalImage.from, internalImage.to, position );
 
       return;
     }
+
     view.dispatch({
       selection: EditorSelection.cursor( position ),
       scrollIntoView: true,
       userEvent: 'select.pointer'
     });
+
     if ( externalFiles && transfer ) {
       const dropped = collectExternalDroppedFiles( transfer );
       const capture = captureAttachmentInsertion( view );
+
       if ( capture ) {
         emit( 'externalFileDrop', capture, dropped.files, dropped.rejectedCount );
       }
 
       return;
     }
+
     if ( attachmentRelativePath ) {
       const capture = captureAttachmentInsertion( view );
+
       if ( capture ) {
         emit( 'vaultAttachmentDrop', capture, attachmentRelativePath );
       }
     } else {
       const capture = captureImageInsertion( view );
+
       if ( !capture ) {
         return;
       }
+
       emit( 'vaultImageDrop', capture, relativePath );
     }
   }
@@ -555,7 +630,7 @@ export function useCodeMirrorAssets(
   }
 
   function isAmbiguousExternalDroppedFile( file: File ): boolean {
-    // Without entry metadata, WebKit can represent an unavailable folder this way.
+    // without entry metadata, WebKit can represent an unavailable folder this way
     return file.size === 0 && !file.type.trim();
   }
 
@@ -565,14 +640,17 @@ export function useCodeMirrorAssets(
     const items = Array.from( transfer.items ).filter( ( item ) => item.kind === 'file' );
     const files: File[] = [];
     let rejectedCount = 0;
+
     if ( items.length ) {
       for ( const item of items ) {
         const entry = ( item as DataTransferItem & {
           webkitGetAsEntry?: () => ExternalFileSystemEntry | null;
         }).webkitGetAsEntry?.();
+
         const file = entry?.isDirectory || ( entry && !entry.isFile )
           ? null
           : item.getAsFile();
+
         if (
           !file
           || ( !entry && isAmbiguousExternalDroppedFile( file ) )
@@ -607,8 +685,10 @@ export function useCodeMirrorAssets(
     if ( !value ) {
       return undefined;
     }
+
     try {
       const parsed = JSON.parse( value ) as { from?: unknown; to?: unknown };
+
       if (
         Number.isSafeInteger( parsed.from )
         && Number.isSafeInteger( parsed.to )
@@ -618,7 +698,7 @@ export function useCodeMirrorAssets(
         return { from: parsed.from as number, to: parsed.to as number };
       }
     } catch {
-      // Ignore malformed drag data from outside this editor.
+      // ignore malformed drag data from outside this editor
     }
 
     return undefined;
@@ -640,17 +720,22 @@ export function useCodeMirrorAssets(
 
       return;
     }
+
     const source = view.state.sliceDoc( from, to );
     const image = parseMarkdownImageAt( source, 0 );
+
     if ( !image || image.end + 1 !== source.length ) {
       view.focus();
 
       return;
     }
+
     const insertionStart = position < from ? position : position - ( to - from );
+
     const changes = position < from
       ? [{ from: position, insert: source }, { from, to, insert: '' }]
       : [{ from, to, insert: '' }, { from: position, insert: source }];
+
     view.dispatch({
       changes,
       selection: EditorSelection.cursor( insertionStart + source.length ),
@@ -663,6 +748,7 @@ export function useCodeMirrorAssets(
   function mapPendingImageInsertions( update: ViewUpdate ): void {
     for ( const insertion of pendingImageInsertions.values() ) {
       const empty = insertion.from === insertion.to;
+
       insertion.from = update.changes.mapPos( insertion.from, -1 );
       insertion.to = update.changes.mapPos( insertion.to, empty ? -1 : 1 );
     }

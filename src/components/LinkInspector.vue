@@ -28,9 +28,11 @@ const uniqueOutgoing = computed( () => {
       note?.id ?? [ 'destination' in link ? 'markdown' : 'wiki', link.target ],
       link.heading ?? ''
     ]);
+
     if ( seen.has( key ) ) {
       return false;
     }
+
     seen.add( key );
 
     return true;
@@ -51,8 +53,9 @@ function openOutgoing( link: NoteLink, noteId?: string ): void {
 
 function openBacklink( noteId: string ): void {
   const path = noteLinkPaths.value.get( noteId );
+
   if ( path ) {
-    // A backlink identifies an exact source note, regardless of duplicate names.
+    // a backlink identifies an exact source note, regardless of duplicate names
     emit( 'openNoteLink', { target: `/${ path }` });
   }
 }
@@ -133,7 +136,10 @@ function formatDate( timestamp?: number ): string {
       </section>
       <section v-else class="note-info-card">
         <div class="info-row">
-          <span>File</span><strong :title="activeImage.relativePath.split( '/' ).at( -1 )">{{ activeImage.relativePath.split( '/' ).at( -1 ) }}</strong>
+          <span>File</span>
+          <strong :title="activeImage.relativePath.split( '/' ).at( -1 )">
+            {{ activeImage.relativePath.split( '/' ).at( -1 ) }}
+          </strong>
         </div>
         <div class="info-row">
           <span>Path</span><strong :title="activeImage.relativePath">{{ activeImage.relativePath }}</strong>
@@ -161,10 +167,16 @@ function formatDate( timestamp?: number ): string {
               :class="{ unresolved: !item.note }"
               @click="openOutgoing( item.link, item.note?.id )"
             >
-              <span class="connection-node"><AppIcon :name="item.note || !canCreateTarget( item.link ) ? 'file-text' : 'plus'" :size="14" /></span>
+              <span class="connection-node">
+                <AppIcon :name="item.note || !canCreateTarget( item.link ) ? 'file-text' : 'plus'" :size="14" />
+              </span>
               <span>
                 <strong>{{ item.link.display || item.link.target }}</strong>
-                <small>{{ item.note ? ( item.note.folderId ? folderPath( item.note.folderId ) : 'Vault root' ) : ( canCreateTarget( item.link ) ? 'Create this note' : 'Note not found' ) }}</small>
+                <small>{{
+                  item.note
+                    ? ( item.note.folderId ? folderPath( item.note.folderId ) : 'Vault root' )
+                    : ( canCreateTarget( item.link ) ? 'Create this note' : 'Note not found' )
+                }}</small>
               </span>
               <AppIcon name="chevron" :size="13" />
             </button>
@@ -210,7 +222,8 @@ function formatDate( timestamp?: number ): string {
             <span>Updated</span><strong>{{ formatDate( activeNote.updatedAt ) }}</strong>
           </div>
           <div class="info-row">
-            <span>Folder</span><strong>{{ activeNote.folderId ? folderPath( activeNote.folderId ) : 'Vault root' }}</strong>
+            <span>Folder</span>
+            <strong>{{ activeNote.folderId ? folderPath( activeNote.folderId ) : 'Vault root' }}</strong>
           </div>
         </section>
         <section class="info-tags">

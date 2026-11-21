@@ -50,10 +50,12 @@ watch(
     if ( !image ) {
       return;
     }
+
     const sameImage = previousImage && ( image.assetId && previousImage.assetId
       ? image.assetId === previousImage.assetId
       : image.relativePath === previousImage.relativePath );
-    // Open on navigation, while refreshes and inventory updates respect dismissal.
+
+    // open on navigation, while refreshes and inventory updates respect dismissal
     if ( tabId !== previousTabId || !sameImage ) {
       uiState.contextOpen = true;
     }
@@ -69,19 +71,22 @@ watch(
     () => vaultSession.busy
   ],
   ([ vaultId, tabIds, noteIds, busy ]) => {
-    // Keep rollback snapshots until the operation settles. Run after the old
-    // editor unmounts so its final position capture cannot revive a closed tab.
+    // keep rollback snapshots until the operation settles. Run after the old
+    // editor unmounts so its final position capture cannot revive a closed tab
     if ( busy ) {
       return;
     }
+
     const tabs = new Set( tabIds );
     const notes = new Set( noteIds );
+
     const keepDocument = ( documentId: string ): boolean => {
-      // SourceEditor uses the same vault/tab/note key for both view caches.
+      // the editor uses the same vault/tab/note key for both view caches
       const [ savedVault, tabId, noteId ] = JSON.parse( documentId ) as string[];
 
       return savedVault === vaultId && tabs.has( tabId! ) && notes.has( noteId! );
     };
+
     pruneNoteTabEditorPositions( keepDocument );
     pruneLiveMarkdownHeadingFolds( keepDocument );
   },
@@ -95,16 +100,21 @@ const assetDeletionDialog = ref<HTMLElement>();
 const assetDeletionCancel = ref<HTMLButtonElement>();
 let assetDeletionReturnFocus: HTMLElement | null = null;
 const assetDeletionName = computed( () => assetDeletionState.request?.relativePath.split( '/' ).at( -1 ) );
+
 const assetDeletionReferenceSummary = computed( () => {
   const request = assetDeletionState.request;
+
   if ( !request ) {
     return '';
   }
+
   const recovery = request.recoveryReferenceCount
     ? `, including ${ request.recoveryReferenceCount } in Recently Deleted`
     : '';
 
-  return `This file has ${ request.referenceCount } ${ request.referenceCount === 1 ? 'reference' : 'references' }${ recovery }.`;
+  return `This file has ${ request.referenceCount } ${
+    request.referenceCount === 1 ? 'reference' : 'references'
+  }${ recovery }.`;
 });
 
 watch(
@@ -113,13 +123,16 @@ watch(
     if ( !request ) {
       return;
     }
+
     if ( !previous ) {
       const row = Array.from( document.querySelectorAll<HTMLElement>( '[data-vault-item-kind]' ) ).find(
         ( element ) => element.dataset.vaultItemKind === request.kind
           && element.dataset.vaultItemRelativePath === request.relativePath
       );
+
       assetDeletionReturnFocus = row?.querySelector<HTMLElement>( '[data-vault-item-primary]' ) ?? null;
     }
+
     await nextTick();
     assetDeletionCancel.value?.focus({ preventScroll: true });
   }
@@ -129,9 +142,11 @@ function restoreAssetDeletionFocus(): void {
   if ( assetDeletionState.request || vaultChooserVisible.value ) {
     return;
   }
+
   const target = assetDeletionReturnFocus?.isConnected
     ? assetDeletionReturnFocus
     : document.querySelector<HTMLElement>( '.vault-tree-root-main' );
+
   target?.focus({ preventScroll: true });
   assetDeletionReturnFocus = null;
 }
@@ -143,13 +158,20 @@ function handleAssetDeletionKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   const isTab = event.key === 'Tab' || event.key === 'Unidentified' && event.code === 'Tab';
+
   if ( !isTab ) {
     return;
   }
-  const buttons = Array.from( assetDeletionDialog.value?.querySelectorAll<HTMLButtonElement>( 'button:not(:disabled)' ) ?? []);
+
+  const buttons = Array.from(
+    assetDeletionDialog.value?.querySelectorAll<HTMLButtonElement>( 'button:not(:disabled)' ) ?? []
+  );
+
   const first = buttons[ 0 ];
   const last = buttons.at( -1 );
+
   if ( !first || !last ) {
     event.preventDefault();
     assetDeletionDialog.value?.focus();
@@ -163,6 +185,7 @@ function handleAssetDeletionKeydown( event: KeyboardEvent ): void {
 }
 
 const requestedView = new URLSearchParams( window.location.search ).get( 'view' ) as ToolView | null;
+
 if ( requestedView && [ 'notes', 'search', 'templates', 'snippets', 'settings' ].includes( requestedView ) ) {
   uiState.tool = requestedView;
 }
@@ -171,11 +194,13 @@ const vaultChooserVisible = computed(
   () => vaultSession.phase !== 'loading'
     && ( vaultSession.phase !== 'ready' || uiState.vaultChooserOpen )
 );
+
 const readOnlyReason = computed( () => (
   vaultSession.phase === 'ready' && vaultSession.access.mode === 'read-only'
     ? vaultSession.access.reason
     : null
 ) );
+
 const appInteractionBlocked = computed(
   () => vaultSession.phase !== 'ready'
     || uiState.vaultChooserOpen
@@ -185,7 +210,7 @@ const appInteractionBlocked = computed(
 
 watch( () => uiState.commandOpen, ( open ) => {
   if ( !open ) {
-    // Opening and closing in one update may never mount a leaving transition.
+    // opening and closing in one update may never mount a leaving transition
     void nextTick( () => {
       if ( commandModalActive.value && !document.querySelector( '.command-backdrop' ) ) {
         void finishCommandClose();
@@ -194,20 +219,26 @@ watch( () => uiState.commandOpen, ( open ) => {
 
     return;
   }
-  // Capture the invoking control before rendering inert blurs the background.
+
+  // capture the invoking control before rendering inert blurs the background
   const focused = document.activeElement;
-  if ( focused instanceof HTMLElement && focused !== document.body && !focused.closest( '.command-backdrop, [inert]' ) ) {
+
+  if (
+    focused instanceof HTMLElement && focused !== document.body &&
+    !focused.closest( '.command-backdrop, [inert]' )
+  ) {
     commandReturnFocus = focused;
   } else if ( !commandModalActive.value ) {
     commandReturnFocus = null;
   }
+
   commandFocusNoteId = null;
   commandModalActive.value = true;
 }, { flush: 'sync' });
 
 watch( appInteractionBlocked, ( blocked ) => {
   if ( blocked ) {
-    // Vault recovery and other blocking operations own focus from this point.
+    // vault recovery and other blocking operations own focus from this point
     uiState.commandOpen = false;
     commandReturnFocus = null;
     commandFocusNoteId = null;
@@ -216,7 +247,13 @@ watch( appInteractionBlocked, ( blocked ) => {
 });
 
 watch(
-  [ () => uiState.noteTitleFocusId, () => activeNote.value?.id, () => uiState.tool, () => uiState.notesView, canEditVault ],
+  [
+    () => uiState.noteTitleFocusId,
+    () => activeNote.value?.id,
+    () => uiState.tool,
+    () => uiState.notesView,
+    canEditVault
+  ],
   () => {
     if ( uiState.noteTitleFocusId ) {
       restoreWorkspaceFocus();
@@ -238,9 +275,11 @@ function restoreWorkspaceFocus(): void {
   ) ) {
     uiState.noteTitleFocusId = null;
   }
+
   if ( commandModalActive.value || uiState.commandOpen || appInteractionBlocked.value ) {
     return;
   }
+
   if ( document.querySelector( '[data-modal-scroll-active]' ) ) {
     commandReturnFocus = null;
     commandFocusNoteId = null;
@@ -248,6 +287,7 @@ function restoreWorkspaceFocus(): void {
 
     return;
   }
+
   if ( commandFocusNoteId && (
     uiState.tool !== 'notes'
     || uiState.notesView !== 'editor'
@@ -255,30 +295,38 @@ function restoreWorkspaceFocus(): void {
   ) ) {
     commandFocusNoteId = null;
   }
+
   const previous = commandReturnFocus;
+
   if ( !previous && !commandFocusNoteId && !uiState.noteTitleFocusId ) {
     return;
   }
+
   const title = uiState.noteTitleFocusId
     ? document.querySelector<HTMLInputElement>( '.note-title-input' )
     : null;
-  // A newly created note owns focus once its workspace and any outgoing modal
-  // have finished mounting/leaving. Do not fall back to its body while waiting.
+
+  // a newly created note owns focus once its workspace and any outgoing modal
+  // have finished mounting/leaving. Do not fall back to its body while waiting
   const target = ( uiState.noteTitleFocusId ? [ title ] : [
     previous,
     document.querySelector<HTMLElement>( '.source-editor .cm-content' ),
     commandFocusNoteId ? null : document.querySelector<HTMLElement>( '.rail-nav .rail-button.active' )
   ]).find( ( element ) => element?.isConnected
     && element.getClientRects().length
-    // An outgoing sidebar/tool can still be connected during its transition.
+    // an outgoing sidebar/tool can still be connected during its transition
     && !element.closest( '[inert], :disabled, [hidden], .panel-left-leave-active, .workspace-switch-leave-active' ) );
+
   target?.focus({ preventScroll: true });
+
   if ( title && target === title && document.activeElement === title ) {
     title.select();
     uiState.noteTitleFocusId = null;
   }
+
   commandReturnFocus = null;
-  // A tool transition can still be mounting the chosen note's editor.
+
+  // a tool transition can still be mounting the chosen note's editor
   if ( target ) {
     commandFocusNoteId = null;
   }
@@ -288,6 +336,7 @@ async function finishCommandClose(): Promise<void> {
   if ( uiState.commandOpen ) {
     return;
   }
+
   commandModalActive.value = false;
   await nextTick();
   restoreWorkspaceFocus();
@@ -295,6 +344,7 @@ async function finishCommandClose(): Promise<void> {
 
 function runToastAction(): void {
   const action = uiState.toast?.action;
+
   uiState.toast = null;
   action?.run();
 }
@@ -313,12 +363,15 @@ const titlebarContext = computed( () => {
 
     return activeImage.value?.relativePath.split( '/' ).at( -1 ) || activeNote.value?.title || vaultState.name;
   }
+
   if ( uiState.tool === 'search' ) {
     return 'Search';
   }
+
   if ( uiState.tool === 'templates' ) {
     return 'Templates';
   }
+
   if ( uiState.tool === 'snippets' ) {
     return 'CSS snippets';
   }
@@ -330,19 +383,24 @@ function handleTabKeyboard( event: KeyboardEvent ): void {
   if ( event.altKey || event.isComposing ) {
     return;
   }
+
   const key = event.key.toLocaleLowerCase();
   const command = event.ctrlKey || event.metaKey;
   const newTab = command && !event.shiftKey && key === 't';
   const closeTab = command && !event.shiftKey && key === 'w';
+
   const switchTab = event.ctrlKey && !event.metaKey
     && ( key === 'tab' || key === 'unidentified' && event.code === 'Tab' );
+
   if ( !newTab && !closeTab && !switchTab ) {
     return;
   }
-  // Handle before editor bindings and native window shortcuts. Blocking UI
-  // retains ownership; these keys must not edit text or close the app window.
+
+  // handle before editor bindings and native window shortcuts. Blocking UI
+  // retains ownership; these keys must not edit text or close the app window
   event.preventDefault();
   event.stopPropagation();
+
   if (
     appInteractionBlocked.value || commandModalActive.value || uiState.commandOpen
     || document.documentElement.hasAttribute( 'data-modal-scroll-lock' )
@@ -350,6 +408,7 @@ function handleTabKeyboard( event: KeyboardEvent ): void {
   ) {
     return;
   }
+
   if ( newTab ) {
     createNoteTab();
   } else if ( uiState.tool === 'notes' && uiState.notesView === 'editor' ) {
@@ -358,6 +417,7 @@ function handleTabKeyboard( event: KeyboardEvent ): void {
     } else {
       const tabs = noteTabsState.tabs;
       const index = tabs.findIndex( ( tab ) => tab.id === activeNoteTab.value.id );
+
       activateNoteTab( tabs[ ( index + ( event.shiftKey ? -1 : 1 ) + tabs.length ) % tabs.length ]!.id );
     }
   }
@@ -367,18 +427,22 @@ function handleKeyboard( event: KeyboardEvent ): void {
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLocaleLowerCase();
   const target = event.target;
+
   const isEditing = target instanceof Element
     && Boolean( target.closest(
       "input, textarea, select, [contenteditable]:not([contenteditable='false'])"
     ) );
+
   const vaultSearchShortcut = modifier && event.shiftKey && key === 'f'
     && !event.altKey && !event.isComposing;
+
   const appShortcut = (
     modifier && [ 'n', 'o', '\\' ].includes( key )
     || modifier && event.shiftKey && key === 't'
     || vaultSearchShortcut
     || !modifier && !isEditing && key === '/'
   );
+
   const zoomShortcut = modifier
     && !event.altKey
     && [ '+', '=', '-', '_', '0' ].includes( event.key );
@@ -393,6 +457,7 @@ function handleKeyboard( event: KeyboardEvent ): void {
 
   if ( zoomShortcut ) {
     event.preventDefault();
+
     if ( event.key === '0' ) {
       resetZoom();
     } else if ( event.key === '-' || event.key === '_' ) {
@@ -422,8 +487,10 @@ function handleKeyboard( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( modifier && key === 'o' ) {
     event.preventDefault();
+
     if ( uiState.commandOpen ) {
       uiState.commandOpen = false;
     } else {
@@ -432,20 +499,24 @@ function handleKeyboard( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( modifier && key === 'n' ) {
     event.preventDefault();
     createNote();
 
     return;
   }
+
   if ( modifier && event.shiftKey && key === 't' ) {
     event.preventDefault();
     uiState.tool = 'templates';
 
     return;
   }
+
   if ( modifier && key === '\\' ) {
     event.preventDefault();
+
     if ( uiState.tool !== 'notes' ) {
       uiState.tool = 'notes';
       uiState.notesView = 'editor';
@@ -456,6 +527,7 @@ function handleKeyboard( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( event.key === 'Escape' && uiState.commandOpen ) {
     event.preventDefault();
     event.stopPropagation();
@@ -644,7 +716,10 @@ onBeforeUnmount( () => {
         role="status"
       >
         <span class="toast-icon">
-          <AppIcon :name="uiState.toast.tone === 'success' ? 'check' : uiState.toast.tone === 'warning' ? 'info' : 'sparkles'" :size="15" />
+          <AppIcon
+            :name="uiState.toast.tone === 'success' ? 'check' : uiState.toast.tone === 'warning' ? 'info' : 'sparkles'"
+            :size="15"
+          />
         </span>
         <span>{{ uiState.toast.message }}</span>
         <button

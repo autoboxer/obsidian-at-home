@@ -21,6 +21,7 @@ const props = withDefaults(
   defineProps<{ attachment: VaultAttachmentFile; depth?: number }>(),
   { depth: 0 }
 );
+
 const dragging = ref( false );
 const editing = ref( false );
 const editValue = ref( '' );
@@ -33,16 +34,19 @@ const mainButton = ref<HTMLButtonElement>();
 const fileName = computed( () =>
   props.attachment.relativePath.split( '/' ).at( -1 ) || 'Attachment'
 );
+
 const archive = computed( () => markdownAttachmentIsArchive(
   props.attachment.relativePath,
   props.attachment.mediaType
 ) );
+
 const executable = computed( () =>
   markdownAttachmentIsExecutable(
     props.attachment.relativePath,
     props.attachment.openingDisabled
   )
 );
+
 const actionLabel = computed( () => {
   if ( executable.value ) {
     return 'Opening unavailable';
@@ -50,9 +54,13 @@ const actionLabel = computed( () => {
 
   return archive.value ? 'Save archive as…' : 'Open file';
 });
+
 const rowTitle = computed( () =>
-  !canEditVault.value ? props.attachment.relativePath : `${ props.attachment.relativePath } · Drag into the editor to insert or onto a folder to move`
+  !canEditVault.value
+    ? props.attachment.relativePath
+    : `${ props.attachment.relativePath } · Drag into the editor to insert or onto a folder to move`
 );
+
 const revealed = computed( () => vaultTreeItemIsRevealed({
   assetId: props.attachment.assetId,
   kind: 'attachment',
@@ -65,9 +73,11 @@ function startDrag( event: DragEvent ): void {
 
     return;
   }
+
   if ( !event.dataTransfer ) {
     return;
   }
+
   closeMenu();
   event.dataTransfer.clearData();
   event.dataTransfer.effectAllowed = 'copyMove';
@@ -82,6 +92,7 @@ function startDrag( event: DragEvent ): void {
 
 function finishDrag(): void {
   dragging.value = false;
+
   if ( treeDragState.attachmentPath === props.attachment.relativePath ) {
     treeDragState.attachmentPath = null;
   }
@@ -105,9 +116,11 @@ async function deleteAsset(): Promise<void> {
   closeMenu();
   await requestVaultAssetDeletion( 'attachment', props.attachment );
   await nextTick();
+
   const target = mainButton.value?.isConnected
     ? mainButton.value
     : document.querySelector<HTMLButtonElement>( '.vault-tree-root-main' );
+
   target?.focus({ preventScroll: true });
 }
 
@@ -115,12 +128,14 @@ function beginRename(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   closeMenu();
   editValue.value = fileName.value;
   editing.value = true;
   nextTick( () => {
     renameInput.value?.focus();
     const extensionStart = editValue.value.lastIndexOf( '.' );
+
     renameInput.value?.setSelectionRange(
       0,
       extensionStart > 0 ? extensionStart : editValue.value.length
@@ -132,8 +147,11 @@ function saveRename(): void {
   if ( !editing.value ) {
     return;
   }
+
   const requestedName = editValue.value;
+
   editing.value = false;
+
   if ( requestedName !== fileName.value ) {
     void renameVaultAttachment( props.attachment, requestedName );
   }
@@ -152,9 +170,11 @@ function handleRowKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( event.key === 'ContextMenu' || ( event.key === 'F10' && event.shiftKey ) ) {
     event.preventDefault();
     const bounds = mainButton.value?.getBoundingClientRect();
+
     if ( bounds ) {
       openContextMenu({ clientX: bounds.left, clientY: bounds.bottom });
     }
@@ -164,6 +184,7 @@ function handleRowKeydown( event: KeyboardEvent ): void {
 function openContextMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void {
   const menuWidth = 190;
   const menuHeight = 140;
+
   menuPosition.value = {
     x: Math.max( 8, Math.min( event.clientX, window.innerWidth - menuWidth - 8 ) ),
     y: Math.max( 8, Math.min( event.clientY, window.innerHeight - menuHeight - 8 ) )
@@ -175,6 +196,7 @@ function openContextMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void
 function closeMenu( restoreFocus = false ): void {
   menuOpen.value = false;
   menuPosition.value = undefined;
+
   if ( restoreFocus ) {
     nextTick( () => mainButton.value?.focus() );
   }
@@ -188,6 +210,7 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if (
     ( event.key === 'Tab' || ( event.key === 'Unidentified' && event.code === 'Tab' ) )
     && event.shiftKey
@@ -201,16 +224,23 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( ![ 'ArrowDown', 'ArrowUp', 'Home', 'End' ].includes( event.key ) ) {
     return;
   }
-  const items = Array.from( menu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []);
+
+  const items = Array.from(
+    menu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []
+  );
+
   if ( !items.length ) {
     return;
   }
+
   event.preventDefault();
   const currentIndex = items.indexOf( document.activeElement as HTMLButtonElement );
   let nextIndex: number;
+
   if ( event.key === 'Home' ) {
     nextIndex = 0;
   } else if ( event.key === 'End' || ( event.key === 'ArrowUp' && currentIndex < 0 ) ) {
@@ -220,14 +250,17 @@ function handleMenuKeydown( event: KeyboardEvent ): void {
   } else {
     nextIndex = ( currentIndex - 1 + items.length ) % items.length;
   }
+
   items[ nextIndex ]?.focus();
 }
 
 function handleMenuFocusOut( event: FocusEvent ): void {
   const anchor = event.currentTarget as HTMLElement;
+
   if ( event.relatedTarget instanceof Node && anchor.contains( event.relatedTarget ) ) {
     return;
   }
+
   closeMenu();
 }
 </script>
@@ -274,7 +307,9 @@ function handleMenuFocusOut( event: FocusEvent ): void {
             ref="menu"
             class="popover-menu vault-tree-attachment-popover"
             :class="{ 'tree-context-menu': menuPosition }"
-            :style="menuPosition ? { left: `${menuPosition.x}px`, top: `${menuPosition.y}px`, right: 'auto' } : undefined"
+            :style="menuPosition
+              ? { left: `${menuPosition.x}px`, top: `${menuPosition.y}px`, right: 'auto' }
+              : undefined"
             role="menu"
             tabindex="-1"
             :aria-label="`Actions for ${fileName}`"

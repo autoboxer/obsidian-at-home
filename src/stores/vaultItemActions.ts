@@ -1,8 +1,5 @@
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import {
-  markdownAttachmentIsArchive,
-  markdownAttachmentIsExecutable
-} from '../lib/markdownAttachments';
+import { markdownAttachmentIsArchive, markdownAttachmentIsExecutable } from '../lib/markdownAttachments';
 import {
   locateWorkspaceVaultItem,
   openWorkspaceAttachment,
@@ -53,6 +50,7 @@ export function createVaultItemActions(
 
       return;
     }
+
     if ( markdownAttachmentIsExecutable(
       attachment.relativePath,
       attachment.openingDisabled
@@ -61,32 +59,39 @@ export function createVaultItemActions(
 
       return;
     }
+
     try {
       if ( markdownAttachmentIsArchive( attachment.relativePath, attachment.mediaType ) ) {
         let preferredDirectory: string | undefined;
+
         try {
           preferredDirectory = window.localStorage.getItem( ARCHIVE_COPY_DIRECTORY_KEY )
             || undefined;
         } catch {
-          // A Downloads default remains available when browser storage is unavailable.
+          // a Downloads default remains available when browser storage is unavailable
         }
+
         const result = await saveWorkspaceAttachmentCopy(
           vaultSession.path,
           attachment.relativePath,
           attachment.assetId,
           preferredDirectory
         );
+
         if ( !result ) {
           return;
         }
+
         const directory = parentSystemPath( result.path );
+
         if ( directory ) {
           try {
             window.localStorage.setItem( ARCHIVE_COPY_DIRECTORY_KEY, directory );
           } catch {
-            // Remembering the folder is helpful but not required for a successful copy.
+            // remembering the folder is helpful but not required for a successful copy
           }
         }
+
         notify( 'Saved the archive outside the vault', 'success', {
           label: 'Reveal archive',
           run: () => {
@@ -98,6 +103,7 @@ export function createVaultItemActions(
 
         return;
       }
+
       await openWorkspaceAttachment(
         vaultSession.path,
         attachment.relativePath,
@@ -112,32 +118,40 @@ export function createVaultItemActions(
     if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
       return locator.relativePath;
     }
+
     const sourcePath = vaultSession.path;
     let relativePath = locator.relativePath;
+
     if ( locator.kind === 'note' || locator.kind === 'folder' ) {
       if ( !( await flushVault() ) ) {
         return undefined;
       }
+
       if ( vaultSession.backend !== 'native' || vaultSession.path !== sourcePath ) {
         return undefined;
       }
+
       if ( locator.kind === 'note' ) {
         const note = locator.itemId
           ? vaultState.notes.find( ( candidate ) => candidate.id === locator.itemId )
           : vaultState.notes.find( ( candidate ) => candidate.relativePath === locator.relativePath );
+
         relativePath = note?.relativePath ?? '';
       } else {
         const folder = locator.itemId
           ? vaultState.folders.find( ( candidate ) => candidate.id === locator.itemId )
           : vaultState.folders.find( ( candidate ) => folderPath( candidate.id ) === locator.relativePath );
+
         relativePath = folder ? folderPath( folder.id ) : '';
       }
+
       if ( !relativePath ) {
         notify( 'The vault item is no longer available.', 'warning' );
 
         return undefined;
       }
     }
+
     try {
       return await locateWorkspaceVaultItem(
         sourcePath,
@@ -156,6 +170,7 @@ export function createVaultItemActions(
     const operation = ++vaultTreeRevealOperation;
     const sourceVaultKey = currentVaultTreeKey();
     const locatedPath = await locateVaultItem( locator );
+
     if (
       !locatedPath
       || operation !== vaultTreeRevealOperation
@@ -165,6 +180,7 @@ export function createVaultItemActions(
     }
 
     const target = currentVaultTreeItem( locator, locatedPath );
+
     if ( !target ) {
       notify( "The vault item could not be found in the app's file tree.", 'warning' );
 
@@ -194,6 +210,7 @@ export function createVaultItemActions(
     ) {
       return false;
     }
+
     if ( vaultTreeRevealTarget.assetId ) {
       return locator.assetId === vaultTreeRevealTarget.assetId;
     }
@@ -219,8 +236,10 @@ export function createVaultItemActions(
 
       return;
     }
+
     const sourcePath = vaultSession.path;
     const relativePath = await locateVaultItem( locator );
+
     if (
       !relativePath
       || vaultSession.backend !== 'native'
@@ -228,6 +247,7 @@ export function createVaultItemActions(
     ) {
       return;
     }
+
     try {
       await showWorkspaceVaultItemInFolder(
         sourcePath,
@@ -260,6 +280,7 @@ export function createVaultItemActions(
         }
         : undefined;
     }
+
     if ( locator.kind === 'image' ) {
       const image = locator.assetId
         ? vaultState.imageFiles.find( ( candidate ) => candidate.assetId === locator.assetId )
@@ -272,11 +293,13 @@ export function createVaultItemActions(
         }
         : undefined;
     }
+
     if ( locator.kind === 'note' ) {
       const note = vaultState.notes.find( ( candidate ) => candidate.relativePath === locatedPath );
 
       return note ? { relativePath: note.relativePath } : undefined;
     }
+
     const folder = vaultState.folders.find( ( candidate ) => folderPath( candidate.id ) === locatedPath );
 
     return folder ? { relativePath: locatedPath } : undefined;

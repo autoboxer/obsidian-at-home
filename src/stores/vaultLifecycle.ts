@@ -30,6 +30,7 @@ import type { createVaultRecovery } from './vaultRecovery';
 import { assetDeletionState, uiState, vaultSession, vaultState, type ToastTone } from './vaultState';
 
 const LEGACY_MIGRATED_KEY = 'obsidian-at-home.vault.filesystem-migrated.v1';
+// poll for external edits without continuously rescanning the vault
 const EXTERNAL_CHECK_DELAY = 3_000;
 
 interface VaultLifecycleDependencies {
@@ -75,12 +76,14 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     snapshotVault,
     vaultChanges
   } = dependencies;
+
   const {
     hydrateRecentlyDeletedNotes,
     pruneExpiredRecentlyDeletedNotes,
     scheduleRecentlyDeletedExpiry,
     snapshotRecentlyDeletedNotes
   } = recovery;
+
   let externalCheckTimer: ReturnType<typeof setInterval> | undefined;
   let checkingExternalChanges = false;
   let initializePromise: Promise<void> | null = null;
@@ -99,8 +102,8 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
   }
 
   function reconcileCancelledLoad( workspace: WorkspaceLoad, generation: number ): void {
-    // A discarded snapshot may still have normalized metadata on disk. Accept
-    // only writes derived from our exact revision, never an external change.
+    // a discarded snapshot may still have normalized metadata on disk. Accept
+    // only writes derived from our exact revision, never an external change
     if ( generation === getSessionGeneration()
       && workspace.descriptor.path === vaultSession.path
       && workspace.sourceRevision === vaultSession.revision ) {
@@ -112,6 +115,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     if ( initializePromise ) {
       return initializePromise;
     }
+
     initializePromise = initializeVaultStorage();
 
     return initializePromise;
@@ -124,6 +128,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
     if ( !isTauri() ) {
       let storedVault: StoredBrowserWorkspace | null;
+
       try {
         storedVault = readStoredVault();
       } catch ( error ) {
@@ -138,10 +143,13 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
         return;
       }
+
       const browserVault = storedVault?.vault ?? createSeedVault();
+
       hydrateVault( browserVault );
       hydrateRecentlyDeletedNotes( storedVault?.recentlyDeletedNotes ?? []);
       const positionVaultId = initializeNoteEditorPositions( 'browser', null, vaultState.notes );
+
       resetNoteNavigation( positionVaultId );
       vaultSession.backend = 'browser';
       vaultSession.phase = 'ready';
@@ -153,10 +161,13 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       vaultSession.warnings = [];
       markVaultInitialized();
       vaultChanges.acknowledge( vaultChanges.version );
+
       if ( storedVault?.needsRewrite ) {
         persistBrowserWorkspace( snapshotVault(), snapshotRecentlyDeletedNotes() );
       }
+
       scheduleRecentlyDeletedExpiry();
+
       void pruneExpiredRecentlyDeletedNotes();
       installVaultLifecycleHandlers();
 
@@ -165,18 +176,22 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
     vaultSession.backend = 'native';
     let legacy: StoredBrowserWorkspace | null = null;
+
     try {
       legacy = readStoredVault();
     } catch {
-      // A newer browser workspace remains untouched and unavailable for migration
+      // a newer browser workspace remains untouched and unavailable for migration
     }
+
     vaultSession.legacyAvailable = Boolean(
       legacy && safeStorageGet( LEGACY_MIGRATED_KEY ) !== legacy.migrationFingerprint
     );
 
     try {
       const result = await bootstrapWorkspace( createEmptyVault() );
+
       vaultSession.recentVaults = result.recentVaults;
+
       if ( result.workspace ) {
         applyWorkspace( result.workspace, result.recentVaults );
       } else {
@@ -208,34 +223,48 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     if ( vaultSession.backend !== 'native' || vaultSession.busy ) {
       return false;
     }
+
     const cleanName = name.trim();
+
     if ( !cleanName ) {
       return false;
     }
 
     vaultSession.busy = true;
     vaultSession.error = null;
+
     try {
       if ( !( await flushBeforeVaultChange() ) ) {
         return false;
       }
 
       const parentPath = await pickFolder();
+
       if ( !parentPath ) {
         return false;
       }
+
       const legacy = useLegacy ? readStoredVault() : null;
+
       if ( useLegacy && !legacy ) {
         throw new Error( 'The previous notes could not be read from app storage.' );
       }
+
       const initial = legacy?.vault ?? createSeedVault();
       const workspace = await createWorkspace( parentPath, cleanName, initial );
+
       applyWorkspace( workspace );
 
       if ( useLegacy && legacy ) {
         safeStorageSet( LEGACY_MIGRATED_KEY, legacy.migrationFingerprint );
         vaultSession.legacyAvailable = false;
-        notify( `Saved ${ legacy.vault.notes.length } ${ legacy.vault.notes.length === 1 ? 'note' : 'notes' } as Markdown files`, 'success' );
+
+        notify(
+          `Saved ${ legacy.vault.notes.length } ${
+            legacy.vault.notes.length === 1 ? 'note' : 'notes'
+          } as Markdown files`,
+          'success'
+        );
       } else {
         notify( `Created ${ workspace.descriptor.name }`, 'success' );
       }
@@ -247,6 +276,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       return false;
     } finally {
       vaultSession.busy = false;
+
       scheduleRecentlyDeletedExpiry();
     }
   }
@@ -258,17 +288,22 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
     vaultSession.busy = true;
     vaultSession.error = null;
+
     try {
       if ( !( await flushBeforeVaultChange() ) ) {
         return false;
       }
 
       const path = await pickFolder();
+
       if ( !path ) {
         return false;
       }
+
       const workspace = await openWorkspace( path, createEmptyVault() );
+
       applyWorkspace( workspace );
+
       notify( `Opened ${ workspace.descriptor.name }`, 'success' );
 
       return true;
@@ -278,6 +313,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       return false;
     } finally {
       vaultSession.busy = false;
+
       scheduleRecentlyDeletedExpiry();
     }
   }
@@ -289,13 +325,16 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
     vaultSession.busy = true;
     vaultSession.error = null;
+
     try {
       if ( !( await flushBeforeVaultChange() ) ) {
         return false;
       }
 
       const workspace = await openWorkspace( path, createEmptyVault() );
+
       applyWorkspace( workspace );
+
       notify( `Switched to ${ workspace.descriptor.name }`, 'success' );
 
       return true;
@@ -305,24 +344,28 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       return false;
     } finally {
       vaultSession.busy = false;
+
       scheduleRecentlyDeletedExpiry();
     }
   }
 
   async function forgetCurrentVault(): Promise<boolean> {
     const path = vaultSession.path;
+
     if ( vaultSession.backend !== 'native' || !path || vaultSession.busy ) {
       return false;
     }
 
     vaultSession.busy = true;
     vaultSession.error = null;
+
     try {
       if ( !( await flushBeforeVaultChange() ) ) {
         return false;
       }
 
       const recentVaults = await forgetWorkspace( path );
+
       advanceSessionGeneration();
       vaultSession.recentVaults = recentVaults;
       vaultSession.path = null;
@@ -336,6 +379,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       resetNoteNavigation();
       vaultChanges.reset();
       uiState.vaultChooserOpen = true;
+
       notify( 'Vault forgotten; its files are still on disk', 'neutral' );
 
       return true;
@@ -345,6 +389,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       return false;
     } finally {
       vaultSession.busy = false;
+
       scheduleRecentlyDeletedExpiry();
     }
   }
@@ -353,6 +398,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     if ( !vaultSession.path || vaultSession.backend !== 'native' ) {
       return;
     }
+
     try {
       await revealItemInDir( vaultSession.path );
     } catch ( error ) {
@@ -365,46 +411,59 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     options: { preserveChanges?: boolean; isCurrent?: () => boolean } = {}
   ): Promise<boolean> {
     const path = vaultSession.path;
+
     if ( vaultSession.backend !== 'native' || !path || vaultSession.busy ) {
       return false;
     }
 
     await pendingWorkspaceReload;
+
     if ( options.preserveChanges
       && ( vaultChanges.hasNonNavigationChanges || hasSaveInFlight() || hasRecoverySaveInFlight() ) ) {
       const saved = await flushVault();
+
       if ( !saved && vaultChanges.hasNonNavigationChanges ) {
         return false;
       }
     }
+
     if ( path !== vaultSession.path || vaultSession.busy || options.isCurrent && !options.isCurrent() ) {
       return false;
     }
 
     const version = vaultChanges.version;
     const generation = getSessionGeneration();
+
     vaultSession.busy = true;
+
     return trackWorkspaceReload( ( async () => {
       try {
         await flushNoteEditorPositions( currentEditorPositionVaultId() );
         const workspace = await openWorkspace( path, createEmptyVault() );
-        // Optional refreshes must not replace edits made while reading disk.
-        // Explicit conflict-recovery reloads retain their discard behavior.
+
+        // optional refreshes must not replace edits made while reading disk
+        // explicit conflict-recovery reloads retain their discard behavior
         if ( options.isCurrent && !options.isCurrent()
           || options.preserveChanges && ( vaultChanges.hasNonNavigationChanges || vaultChanges.version !== version ) ) {
           reconcileCancelledLoad( workspace, generation );
 
           return false;
         }
+
         const recentNoteIds = [ ...vaultState.recentNoteIds ];
         const selectedFolderId = vaultState.selectedFolderId;
+
         applyWorkspace( workspace );
+
         if ( options.preserveChanges ) {
-          // Keep the session's navigation, dropping targets removed on disk.
-          // Track it again so it is saved against the newly loaded revision.
+          // keep the session's navigation, dropping targets removed on disk
+          // track it again so it is saved against the newly loaded revision
           vaultState.recentNoteIds = normalizeRecentNoteIds( recentNoteIds, vaultState.notes, vaultState.activeNoteId );
-          vaultState.selectedFolderId = normalizeFolderSelection( selectedFolderId, vaultState.notes, vaultState.recentNoteIds );
+          vaultState.selectedFolderId = normalizeFolderSelection(
+            selectedFolderId, vaultState.notes, vaultState.recentNoteIds
+          );
         }
+
         notify( 'Reloaded the vault from disk', 'success' );
 
         return true;
@@ -414,6 +473,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
         return false;
       } finally {
         vaultSession.busy = false;
+
         scheduleRecentlyDeletedExpiry();
       }
     })() );
@@ -430,13 +490,16 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
         return false;
       }
+
       if ( !( await flushVault() ) ) {
         vaultSession.error = 'Save the current changes before switching vaults.';
 
         return false;
       }
     }
+
     const positionsSaved = await flushNoteEditorPositions( currentEditorPositionVaultId() );
+
     if ( !positionsSaved ) {
       vaultSession.error = 'Save the current document position before switching vaults.';
     }
@@ -490,19 +553,24 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
     if ( closeHandlerInstalled ) {
       return;
     }
+
     closeHandlerInstalled = true;
     const appWindow = getCurrentWindow();
+
     try {
       await appWindow.onCloseRequested( async ( event ) => {
         if ( closingAfterSave ) {
           return;
         }
+
         if ( vaultSession.busy ) {
           event.preventDefault();
+
           notify( 'Wait for the current vault action to finish before closing', 'warning' );
 
           return;
         }
+
         if (
           !vaultChanges.hasChanges
           && !hasSaveInFlight()
@@ -510,17 +578,22 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
         ) {
           return;
         }
+
         event.preventDefault();
         const saved = await flushVault();
+
         if ( !saved ) {
           notify( vaultSession.error || 'Save the current changes before closing', 'warning' );
 
           return;
         }
+
         const positionsSaved = await flushNoteEditorPositions();
+
         if ( !positionsSaved ) {
           notify( 'Notes are saved, but document positions could not be saved', 'warning' );
         }
+
         closingAfterSave = true;
         await appWindow.destroy();
       });
@@ -532,6 +605,7 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
   async function refreshWorkspaceFromDisk(): Promise<void> {
     const path = vaultSession.path;
+
     if (
       vaultSession.backend !== 'native'
       || vaultSession.phase !== 'ready'
@@ -550,14 +624,18 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
 
     checkingExternalChanges = true;
     const generation = getSessionGeneration();
+
     return trackWorkspaceReload( ( async () => {
       try {
         const revision = await getWorkspaceRevision( path );
+
         if ( revision === vaultSession.revision ) {
           return;
         }
+
         await flushNoteEditorPositions( currentEditorPositionVaultId() );
         const workspace = await openWorkspace( path, createEmptyVault() );
+
         if (
           generation !== getSessionGeneration()
         || path !== vaultSession.path
@@ -567,9 +645,12 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
         || vaultChanges.hasChanges
         ) {
           reconcileCancelledLoad( workspace, generation );
+
           return;
         }
+
         applyWorkspace( workspace );
+
         notify( 'Reloaded changes from the vault folder', 'neutral' );
       } catch ( error ) {
         if ( generation === getSessionGeneration() && path === vaultSession.path ) {

@@ -1,9 +1,5 @@
 import { resolveMarkdownImagePath, utf8ByteLength } from '../lib/imageEmbeds';
-import {
-  formatMarkdownImage,
-  parseMarkdownImages,
-  relativeImageDestination
-} from '../lib/markdownImages';
+import { formatMarkdownImage, parseMarkdownImages, relativeImageDestination } from '../lib/markdownImages';
 import {
   formatMarkdownAttachment,
   parseMarkdownAttachments,
@@ -25,41 +21,51 @@ type MarkdownReplacement = { from: number; to: number; value: string };
 export type VaultAssetKind = 'image' | 'attachment';
 export type VaultAssetIdentity = { assetId?: string; relativePath: string };
 
-/** Find live notes embedding this image, using tracked IDs before portable paths. */
+/** find live notes embedding this image, using tracked IDs before portable paths */
 export function findVaultImageReferences( vault: VaultData, image: VaultAssetIdentity ): Note[] {
-  // Keep references inspectable even when the previewed file has gone missing.
+  // keep references inspectable even when the previewed file has gone missing
   const paths = new Set([ image.relativePath ]);
   const trackedPaths = new Map<string, string>();
   const trackedIdsByPath = new Map<string, string>();
+
   for ( const file of vault.imageFiles ) {
     paths.add( file.relativePath );
+
     if ( file.assetId ) {
       trackedPaths.set( file.assetId, file.relativePath );
       trackedIdsByPath.set( file.relativePath, file.assetId );
     }
   }
+
   for ( const file of vault.embeddedImages ) {
     trackedPaths.set( file.id, file.relativePath );
   }
+
   const portablePaths = new Map<string, string | undefined>();
+
   for ( const path of paths ) {
     const key = path.toLocaleLowerCase();
+
     portablePaths.set( key, portablePaths.has( key ) ? undefined : path );
   }
 
   return vault.notes.filter( ( note ) => parseMarkdownImages( note.content ).some( ( reference ) => {
     const trackedPath = reference.assetId ? trackedPaths.get( reference.assetId ) : undefined;
+
     if ( image.assetId && trackedPath !== undefined ) {
       return reference.assetId === image.assetId;
     }
+
     const path = trackedPath ?? resolveMarkdownImagePath( note.relativePath, reference.destination );
+
     if ( !path ) {
       return false;
     }
+
     const resolved = paths.has( path ) ? path : portablePaths.get( path.toLocaleLowerCase() );
     const resolvedAssetId = resolved ? trackedIdsByPath.get( resolved ) : undefined;
 
-    // A replacement file at the same path does not belong to a missing tracked preview.
+    // a replacement file at the same path does not belong to a missing tracked preview
     return image.assetId && resolvedAssetId
       ? resolvedAssetId === image.assetId
       : resolved === image.relativePath;
@@ -73,7 +79,7 @@ export interface VaultAssetDeletionPlan {
   recoveryUpdates: WorkspaceImageNoteUpdate[];
 }
 
-/** Use the same parsed references for the confirmation count and replacement text. */
+/** use the same parsed references for the confirmation count and replacement text */
 export function planVaultAssetDeletion(
   vault: VaultData,
   recentlyDeleted: readonly RecentlyDeletedNote[],
@@ -84,28 +90,38 @@ export function planVaultAssetDeletion(
   const embedded = kind === 'image' ? vault.embeddedImages : vault.embeddedAttachments;
   const paths = new Set( files.map( ( file ) => file.relativePath ) );
   const portablePaths = new Map<string, string | undefined>();
+
   for ( const path of paths ) {
     const key = path.toLocaleLowerCase();
+
     portablePaths.set( key, portablePaths.has( key ) ? undefined : path );
   }
+
   const tracked = new Map( files.flatMap( ( file ) =>
     file.assetId ? [ [ file.assetId, file.relativePath ] as const ] : []
   ) );
+
   for ( const file of embedded ) {
     tracked.set( file.id, file.relativePath );
   }
+
   const resolvePath = ( destination: string, notePath: string ): string | undefined => {
     const resolved = resolveMarkdownImagePath( notePath, destination );
+
     if ( !resolved || paths.has( resolved ) ) {
       return resolved;
     }
+
     return portablePaths.get( resolved.toLocaleLowerCase() );
   };
+
   const marker = 'File Deleted';
+
   const updates = (
     notes: readonly { id: string; relativePath: string; content: string }[]
   ): { count: number; updates: WorkspaceImageNoteUpdate[] } => {
     let count = 0;
+
     const updates = notes.flatMap( ( note ): WorkspaceImageNoteUpdate[] => {
       const references = kind === 'image'
         ? parseMarkdownImages( note.content )
@@ -114,13 +130,16 @@ export function planVaultAssetDeletion(
             resolvePath( destination, note.relativePath )
           )
         });
+
       const matches = references.filter( ( reference ) => {
         const trackedPath = reference.assetId ? tracked.get( reference.assetId ) : undefined;
         const resolved = trackedPath ?? resolvePath( reference.destination, note.relativePath );
 
         return resolved === asset.relativePath;
       });
+
       count += matches.length;
+
       if ( !matches.length ) {
         return [];
       }
@@ -139,7 +158,9 @@ export function planVaultAssetDeletion(
 
     return { count, updates };
   };
+
   const active = updates( vault.notes );
+
   const recovery = updates( recentlyDeleted.map( ( deleted ) => ({
     ...deleted.note,
     id: deleted.id
@@ -160,7 +181,9 @@ export function folderContainsVaultAssets(
   if ( !folderPath ) {
     return false;
   }
+
   const folderKey = folderPath.toLocaleLowerCase();
+
   const containsImage = vault.imageFiles.some( ( image ) =>
     image.relativePath.toLocaleLowerCase().startsWith( `${ folderKey }/` )
   );
@@ -180,12 +203,15 @@ export function rewriteVaultImageReferences(
   assetId: string
 ): string {
   const replacements: MarkdownReplacement[] = [];
+
   for ( const image of parseMarkdownImages( content ) ) {
     const trackedPath = trackedImagePath( vault, image.assetId );
     const resolvedPath = resolveMarkdownImagePath( noteRelativePath, image.destination );
     const matchesAsset = Boolean( previousAssetId && image.assetId === previousAssetId );
+
     const matchesPath = !trackedPath
       && resolvedPath?.toLocaleLowerCase() === sourceRelativePath.toLocaleLowerCase();
+
     if ( matchesAsset || matchesPath ) {
       replacements.push({
         from: image.start,
@@ -218,6 +244,7 @@ export function rewriteVaultAttachmentReferences(
   const replacements: MarkdownReplacement[] = [];
   const sourceName = sourceRelativePath.split( '/' ).at( -1 ) || 'Attachment';
   const targetName = targetRelativePath.split( '/' ).at( -1 ) || 'Attachment';
+
   for ( const attachment of parseVaultAttachmentReferences(
     vault,
     content,
@@ -227,11 +254,14 @@ export function rewriteVaultAttachmentReferences(
       noteRelativePath,
       attachment.destination
     );
+
     const matchesAsset = Boolean(
       previousAssetId && attachment.assetId === previousAssetId
     );
+
     const matchesPath = !attachment.assetId
       && resolvedPath?.toLocaleLowerCase() === sourceRelativePath.toLocaleLowerCase();
+
     if ( matchesAsset || matchesPath ) {
       replacements.push({
         from: attachment.start,
@@ -262,14 +292,19 @@ export function rewriteVaultAssetDestinationsForNotePath(
   if ( !sourceNotePath || !targetNotePath || sourceNotePath === targetNotePath ) {
     return content;
   }
+
   const replacements: MarkdownReplacement[] = [];
+
   for ( const image of parseMarkdownImages( content ) ) {
     const trackedPath = trackedImagePath( vault, image.assetId );
+
     const imagePath = trackedPath
       ?? resolveMarkdownImagePath( sourceNotePath, image.destination );
+
     if ( !imagePath ) {
       continue;
     }
+
     replacements.push({
       from: image.start,
       to: image.end + 1,
@@ -284,6 +319,7 @@ export function rewriteVaultAssetDestinationsForNotePath(
       })
     });
   }
+
   for ( const attachment of parseVaultAttachmentReferences(
     vault,
     content,
@@ -295,11 +331,14 @@ export function rewriteVaultAssetDestinationsForNotePath(
         ?? vault.attachmentFiles.find( ( file ) => file.assetId === attachment.assetId )
           ?.relativePath
       : undefined;
+
     const attachmentPath = trackedPath
       ?? resolveMarkdownImagePath( sourceNotePath, attachment.destination );
+
     if ( !attachmentPath ) {
       continue;
     }
+
     replacements.push({
       from: attachment.start,
       to: attachment.end + 1,
@@ -320,6 +359,7 @@ export function isSafeVaultImageFileName( value: string ): boolean {
   if ( !isSafeVaultFileName( value ) ) {
     return false;
   }
+
   const extension = value.split( '.' ).at( -1 )?.toLocaleLowerCase();
 
   return Boolean(
@@ -332,6 +372,7 @@ export function isSafeVaultAttachmentFileName( value: string ): boolean {
   if ( !isSafeVaultFileName( value ) ) {
     return false;
   }
+
   const extension = value.split( '.' ).at( -1 )?.toLocaleLowerCase();
 
   return !extension
@@ -345,15 +386,18 @@ export function upsertVaultImageFile(
   createFolderId: () => string
 ): void {
   const portablePath = image.relativePath.toLocaleLowerCase();
+
   const index = vault.imageFiles.findIndex( ( candidate ) =>
     ( image.assetId && candidate.assetId === image.assetId )
     || candidate.relativePath.toLocaleLowerCase() === portablePath
   );
+
   if ( index >= 0 ) {
     vault.imageFiles.splice( index, 1, { ...image });
   } else {
     vault.imageFiles.push({ ...image });
   }
+
   ensureVaultAssetFolders( vault, image.relativePath, createFolderId );
 }
 
@@ -363,15 +407,18 @@ export function upsertVaultAttachmentFile(
   createFolderId: () => string
 ): void {
   const portablePath = attachment.relativePath.toLocaleLowerCase();
+
   const index = vault.attachmentFiles.findIndex( ( candidate ) =>
     ( attachment.assetId && candidate.assetId === attachment.assetId )
     || candidate.relativePath.toLocaleLowerCase() === portablePath
   );
+
   if ( index >= 0 ) {
     vault.attachmentFiles.splice( index, 1, { ...attachment });
   } else {
     vault.attachmentFiles.push({ ...attachment });
   }
+
   ensureVaultAssetFolders( vault, attachment.relativePath, createFolderId );
 }
 
@@ -382,6 +429,7 @@ export function rebuildVaultAssetFolders(
   for ( const image of vault.imageFiles ) {
     ensureVaultAssetFolders( vault, image.relativePath, createFolderId );
   }
+
   for ( const attachment of vault.attachmentFiles ) {
     ensureVaultAssetFolders( vault, attachment.relativePath, createFolderId );
   }
@@ -427,6 +475,7 @@ export function applyMarkdownReplacements(
   replacements: MarkdownReplacement[]
 ): string {
   let result = content;
+
   for ( const replacement of [ ...replacements ].sort(
     ( left, right ) => right.from - left.from
   ) ) {
@@ -456,11 +505,13 @@ function ensureVaultAssetFolders(
 ): void {
   const components = relativePath.split( '/' ).slice( 0, -1 ).filter( Boolean );
   let parentId: string | null = null;
+
   for ( const name of components ) {
     let folder: Folder | undefined = vault.folders.find( ( candidate ) =>
       candidate.parentId === parentId
       && candidate.name.localeCompare( name, undefined, { sensitivity: 'base' }) === 0
     );
+
     if ( !folder ) {
       folder = {
         id: createFolderId(),
@@ -470,6 +521,7 @@ function ensureVaultAssetFolders(
       };
       vault.folders.push( folder );
     }
+
     parentId = folder.id;
   }
 }

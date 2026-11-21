@@ -139,7 +139,7 @@ export interface VaultData {
   attachmentEmbedSettings: AttachmentEmbedSettings;
 }
 
-// Omitted fields retain their saved values; note removals are always explicit.
+// omitted fields retain their saved values; note removals are always explicit
 export interface WorkspaceChanges {
   notes: Note[];
   removedNoteIds: string[];

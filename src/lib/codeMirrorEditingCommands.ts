@@ -1,11 +1,5 @@
 import { isolateHistory } from '@codemirror/commands';
-import {
-  getIndentation,
-  getIndentUnit,
-  IndentContext,
-  indentString,
-  syntaxTree
-} from '@codemirror/language';
+import { getIndentation, getIndentUnit, IndentContext, indentString, syntaxTree } from '@codemirror/language';
 import { NodeProp } from '@lezer/common';
 import { countColumn, EditorSelection, findClusterBreak } from '@codemirror/state';
 import { Direction, EditorView } from '@codemirror/view';
@@ -48,12 +42,15 @@ function enterAtSelections( view: EditorView, soft: boolean ): boolean {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
+
   const value = view.state.doc.toString();
   const tables = liveMarkdownDocumentModel( view.state ).tables;
+
   const edits = view.state.selection.ranges.map( ( range ) => {
     const tableEdit = soft
       ? insertLiveMarkdownTableLineBreak( value, tables, range.anchor, range.head )
       : insertLiveMarkdownTableRow( value, tables, range.head );
+
     return tableEdit
       ? markdownRangeEdit( value, tableEdit )
       : soft ? softLineBreakEdit( view, range )
@@ -70,47 +67,60 @@ function applyVerticalNavigation(
   const { blocks, tables } = liveMarkdownDocumentModel( view.state );
   let value: string | undefined;
   let handled = false;
+
   const edits = view.state.selection.ranges.map( ( range ) => {
     const table = tables.find( ( candidate ) =>
       range.head >= candidate.from &&
       range.head <= ( candidate.rows.at( -1 ) ?? candidate.delimiter ).to
     );
+
     if ( table ) {
-      // Only table navigation needs the complete source as a string.
+      // only table navigation needs the complete source as a string
       value ??= view.state.doc.toString();
       const edit = navigateLiveMarkdownTable( value, [ table ], range.head, down ? 'down-row' : 'up-row' );
+
       if ( edit && ( !view.state.readOnly || edit.value === value ) ) {
         handled = true;
+
         return markdownRangeEdit( value, edit );
       }
     }
+
     let target = range.empty
       ? view.moveVertically( range, down )
       : EditorSelection.cursor( down ? range.to : range.from );
-    // The document model has one block per source line.
+
+    // the document model has one block per source line
     const block = range.empty
       ? blocks[ view.state.doc.lineAt( target.head ).number - 1 ]
       : undefined;
+
     const rendered = block && ( block.type === 'list' || block.type === 'task' ) &&
       target.head < block.content.from && view.state.doc.lineAt( range.head ).from !== block.from &&
       view.state.facet( EditorView.atomicRanges ).some( ( source ) => {
         let found = false;
+
         source( view ).between( block.from, block.content.from, ( from, to ) => {
           found ||= from === block.from && to === block.content.from;
         });
+
         return found;
       });
+
     if ( rendered ) {
-      // An empty rendered item can resolve to the start of its replacement
-      // marker. Enter its text instead of landing before the indentation.
+      // an empty rendered item can resolve to the start of its replacement
+      // marker. Enter its text instead of landing before the indentation
       const origin = view.coordsAtPos( range.head, range.assoc || ( down ? 1 : -1 ) );
+
       const goal = target.goalColumn ?? range.goalColumn ??
         ( origin ? origin.left - view.contentDOM.getBoundingClientRect().left : undefined );
+
       target = EditorSelection.cursor( block.content.from, 1, undefined, goal );
       handled = true;
     } else if ( range.empty && target.head === range.head ) {
       target = view.moveToLineBoundary( range, down );
     }
+
     return { changes: [], range: target };
   });
 
@@ -124,15 +134,19 @@ function indentSelections( view: EditorView, outdent: boolean ): boolean {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
+
   const value = view.state.doc.toString();
   const tables = liveMarkdownDocumentModel( view.state ).tables;
+
   return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) => {
     const tableEdit = navigateLiveMarkdownTable(
       value, tables, range.head, outdent ? 'previous-cell' : 'next-cell'
     );
+
     if ( tableEdit ) {
       return markdownRangeEdit( value, tableEdit );
     }
+
     return selectedLineEdits( view, range, outdent ) ??
       ( outdent ? { changes: [], range } : replacementRangeEdit( range, INDENT ) );
   }), 'input.indent' );
@@ -162,27 +176,35 @@ function deleteAtTableSelections(
   if ( view.composing || view.state.readOnly ) {
     return false;
   }
+
   const value = view.state.doc.toString();
   const tables = liveMarkdownDocumentModel( view.state ).tables;
+
   if ( !view.state.selection.ranges.some( ( range ) =>
     liveMarkdownTableCellTextBounds( tables, range.head )
   ) ) {
     return false;
   }
+
   const deletedRows = !forward && unit === 'character'
     ? view.state.selection.ranges.flatMap( ( range ) => {
       const edit = range.empty ? deleteEmptyLiveMarkdownTableRow( value, tables, range.head ) : undefined;
+
       return edit?.change ? [ edit ] : [];
     }) : [];
+
   const survivingRowTarget = ( position: number ): number => {
     for ( let index = deletedRows.length - 1; index >= 0; index -= 1 ) {
       const edit = deletedRows[ index ]!;
+
       if ( edit.change!.from <= position && position < edit.change!.to ) {
         position = edit.selectionStart;
       }
     }
+
     return position;
   };
+
   const skipAtomic = ( position: number, after: boolean ): number => {
     for ( const ranges of view.state.facet( EditorView.atomicRanges ) ) {
       ranges( view ).between( position, position, ( from, to ) => {
@@ -191,53 +213,72 @@ function deleteAtTableSelections(
         }
       });
     }
+
     return position;
   };
+
   return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) => {
     if ( range.empty && !forward && unit === 'character' ) {
       const rowEdit = deleteEmptyLiveMarkdownTableRow( value, tables, range.head );
+
       if ( rowEdit ) {
         const edit = markdownRangeEdit( value, rowEdit );
+
         edit.range = EditorSelection.cursor( survivingRowTarget( rowEdit.selectionStart ), -1 );
+
         return edit;
       }
+
       const target = survivingRowTarget( range.head );
+
       if ( target !== range.head ) {
         return { changes: [], range: EditorSelection.cursor( target, -1 ) };
       }
     }
+
     let from = range.from;
     let to = range.to;
+
     if ( range.empty ) {
       const line = view.state.doc.lineAt( range.head );
       let target = range.head;
+
       if ( unit === 'line' ) {
         target = view.moveToLineBoundary( range, forward ).head;
       } else if ( unit === 'word' ) {
         const categorize = view.state.charCategorizer( range.head );
         let category: ReturnType<typeof categorize> | undefined;
+
         while ( target !== ( forward ? line.to : line.from ) ) {
           const next = line.from + findClusterBreak( line.text, target - line.from, forward );
           const text = value.slice( Math.min( target, next ), Math.max( target, next ) );
           const nextCategory = categorize( text );
+
           if ( category !== undefined && category !== nextCategory ) {
             break;
           }
+
           if ( text !== ' ' || target !== range.head ) {
             category = nextCategory;
           }
+
           target = next;
         }
       } else {
         target = line.from + findClusterBreak( line.text, range.head - line.from, forward, forward );
         const before = line.text.slice( 0, range.head - line.from );
+
+        // avoid treating unusually long whitespace-only lines as structural indentation
         if ( !forward && before.length && before.length < 200 && !/[^ \t]/.test( before ) ) {
           const unit = getIndentUnit( view.state );
           const drop = countColumn( before, view.state.tabSize ) % unit || unit;
+
           target = range.head;
+
           for ( let index = 0; index < drop && before[ before.length - 1 - index ] === ' '; index += 1 ) {
             target -= 1;
           }
+
           if ( before.endsWith( '\t' ) ) {
             target -= 1;
           }
@@ -245,10 +286,13 @@ function deleteAtTableSelections(
           target = line.from + findClusterBreak( line.text, target - line.from, false, false );
         }
       }
+
       if ( target === range.head ) {
         target = Math.max( 0, Math.min( value.length, target + ( forward ? 1 : -1 ) ) );
       }
+
       const bounds = liveMarkdownTableCellTextBounds( tables, range.head );
+
       target = bounds
         ? forward
           ? Math.max( range.head, Math.min( target, bounds.to ) )
@@ -260,6 +304,7 @@ function deleteAtTableSelections(
       from = skipAtomic( from, false );
       to = skipAtomic( to, true );
     }
+
     return {
       changes: from === to ? [] : [{ from, to, insert: '' }],
       range: from === to ? range : EditorSelection.cursor( from, forward ? 1 : -1 )
@@ -282,24 +327,33 @@ function moveHorizontal(
   if ( view.composing ) {
     return false;
   }
+
   const value = view.state.doc.toString();
   const tables = liveMarkdownDocumentModel( view.state ).tables;
   let handled = false;
+
   const ranges = view.state.selection.ranges.map( ( range ) => {
     const forward = ( direction === 'right' ) === ( view.textDirectionAt( range.head ) === Direction.LTR );
     const boundary = forward ? 'end' : 'start';
+
     if ( extend && isLiveMarkdownTableCellBoundary( tables, range.head, boundary ) ) {
       handled = true;
+
       return range;
     }
+
     const tableTarget = range.empty && !extend
       ? moveAcrossLiveMarkdownTableCellBoundary( value, tables, range.head, direction )
       : undefined;
+
     const line = view.state.doc.lineAt( range.head );
     const offset = renderedListTextOffset( line.text );
+
     const revealList = !extend && range.empty && !forward && offset !== undefined &&
       range.head === line.from + offset && offset > 0;
+
     let target: SelectionRange;
+
     if ( tableTarget ) {
       handled = true;
       target = EditorSelection.cursor( tableTarget.position, tableTarget.assoc );
@@ -311,10 +365,14 @@ function moveHorizontal(
         ? view.moveByChar( range, forward )
         : EditorSelection.cursor( forward ? range.to : range.from );
     }
+
     return extend
-      ? EditorSelection.range( range.anchor, target.head, target.goalColumn, target.bidiLevel ?? undefined, target.assoc )
+      ? EditorSelection.range(
+        range.anchor, target.head, target.goalColumn, target.bidiLevel ?? undefined, target.assoc
+      )
       : target;
   });
+
   return handled && applyRangeEdits( view, ranges.map( ( range ) => ({ changes: [], range }) ), 'select' );
 }
 
@@ -331,25 +389,32 @@ function setTextBoundary(
   if ( view.composing ) {
     return false;
   }
+
   const tables = liveMarkdownDocumentModel( view.state ).tables;
   let handled = false;
+
   const ranges = view.state.selection.ranges.map( ( range ) => {
     const forward = boundary === 'end' || ( boundary === 'left' || boundary === 'right' ) &&
       ( ( boundary === 'right' ) === ( view.textDirectionAt( range.head ) === Direction.LTR ) );
+
     const block = view.lineBlockAt( range.head );
     let target = view.moveToLineBoundary( range, forward );
+
     if ( target.head === range.head && target.head !== ( forward ? block.to : block.from ) ) {
       target = view.moveToLineBoundary( range, forward, false );
     }
+
     let position = target.head;
     let assoc = target.assoc;
     const bounds = liveMarkdownTableCellTextBounds( tables, range.head );
     const anchorBounds = extend ? liveMarkdownTableCellTextBounds( tables, range.anchor ) : bounds;
     const line = view.state.doc.lineAt( range.head );
     const offset = renderedListTextOffset( line.text );
+
     if ( bounds && anchorBounds && bounds.from === anchorBounds.from && bounds.to === anchorBounds.to ) {
       handled = true;
       position = Math.max( bounds.from, Math.min( position, bounds.to ) );
+
       if ( bounds.from === bounds.to ) {
         assoc = forward ? -1 : 1;
       } else if ( position === bounds.from ) {
@@ -360,18 +425,22 @@ function setTextBoundary(
     } else if ( !forward && offset !== undefined && position <= line.from + offset ) {
       handled = true;
       const textStart = line.from + offset;
+
       position = range.head < textStart || range.head === textStart && ( extend || range.empty )
         ? line.from : textStart;
     } else if ( !forward && position === block.from && block.length ) {
       const whitespace = view.state.sliceDoc( block.from, block.to ).match( /^\s*/ )![ 0 ].length;
+
       if ( whitespace && range.head !== block.from + whitespace ) {
         position += whitespace;
       }
     }
+
     return extend
       ? EditorSelection.range( range.anchor, position, target.goalColumn, target.bidiLevel ?? undefined, assoc )
       : EditorSelection.cursor( position, assoc );
   });
+
   return handled && applyRangeEdits( view, ranges.map( ( range ) => ({ changes: [], range }) ), 'select' );
 }
 
@@ -402,21 +471,27 @@ export const insertLiteralHyphen: Command = ( view ) => {
 
   return true;
 };
+
 export const wrapSelectionAsInlineCode: Command = ( view ) => {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
+
   const value = view.state.doc.toString();
+
   return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) =>
     range.empty ? replacementRangeEdit( range, '`' ) :
       markdownRangeEdit( value, wrapInlineCode( value, range.from, range.to ), range )
   ), 'input.format' );
 };
+
 export const wrapSelectionAsMarkdownLink: Command = ( view ) => {
   if ( view.state.readOnly || view.composing ) {
     return false;
   }
+
   const value = view.state.doc.toString();
+
   return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) =>
     markdownRangeEdit( value, wrapMarkdownLink( value, range.from, range.to ), range )
   ), 'input.format' );
@@ -432,6 +507,7 @@ function toggleSelectionFormatting(
   }
 
   const value = view.state.doc.toString();
+
   return applyRangeEdits( view, view.state.selection.ranges.map( ( range ) =>
     markdownRangeEdit( value, toggleInlineFormatting(
       value, range.from, range.to, marker, alternatives
@@ -451,6 +527,7 @@ function softLineBreakEdit( view: EditorView, range: SelectionRange ): MultiCurs
   let { from, to } = range;
   const line = state.doc.lineAt( from );
   let brackets: { from: number; to: number } | undefined;
+
   if ( range.empty ) {
     if ( /\(\)|\[\]|\{\}/.test( state.sliceDoc( Math.max( 0, from - 1 ), from + 1 ) ) ) {
       brackets = { from, to };
@@ -458,6 +535,7 @@ function softLineBreakEdit( view: EditorView, range: SelectionRange ): MultiCurs
       const context = syntaxTree( state ).resolveInner( from );
       const before = context.childBefore( from );
       const after = context.childAfter( from );
+
       if ( before && after && before.to <= from && after.from >= from &&
         before.type.prop( NodeProp.closedBy )?.includes( after.name ) &&
         state.doc.lineAt( before.to ).from === state.doc.lineAt( after.from ).from &&
@@ -466,19 +544,25 @@ function softLineBreakEdit( view: EditorView, range: SelectionRange ): MultiCurs
       }
     }
   }
+
   const context = new IndentContext( state, { simulateBreak: from, simulateDoubleBreak: Boolean( brackets ) });
+
   const indentation = getIndentation( context, from ) ??
     countColumn( line.text.match( /^\s*/ )![ 0 ], state.tabSize );
+
   while ( to < line.to && /\s/.test( line.text[ to - line.from ]! ) ) {
     to += 1;
   }
+
   if ( brackets ) {
     ({ from, to } = brackets );
   } else if ( from > line.from && !/\S/.test( state.sliceDoc( line.from, from ) ) ) {
     from = line.from;
   }
+
   const indent = indentString( state, indentation );
   const closing = brackets ? `\n${ indentString( state, context.lineIndent( line.from, -1 ) ) }` : '';
+
   return {
     changes: [{ from, to, insert: `\n${ indent }${ closing }` }],
     range: EditorSelection.cursor( from + 1 + indent.length )
@@ -504,24 +588,31 @@ function applyRangeEdits(
   userEvent: string
 ): boolean {
   const result = multiCursorChanges( view.state, edits );
+
   if ( !result ) {
     notify( 'These selections affect the same text. Adjust the selections and try again.', 'neutral' );
+
     return true;
   }
+
   if ( view.state.readOnly && !result.changes.empty ) {
     return false;
   }
+
   const docChanged = !result.changes.empty;
+
   view.dispatch( result, {
     annotations: docChanged ? isolateHistory.of( 'full' ) : undefined,
     scrollIntoView: true,
     userEvent: docChanged && userEvent.startsWith( 'select.' ) ? 'input.table' : userEvent
   });
+
   if ( docChanged ) {
-    // Record the final ranges after transaction filters (including renumbering)
-    // so redo restores the intentional caret positions in every edited range.
+    // record the final ranges after transaction filters (including renumbering)
+    // so redo restores the intentional caret positions in every edited range
     view.dispatch({ selection: view.state.selection, userEvent: 'select' });
   }
+
   return true;
 }
 
@@ -535,6 +626,7 @@ function smartEnterEdit( view: EditorView, selection: SelectionRange ): MultiCur
   const line = view.state.doc.lineAt( position );
   const source = line.text;
   const openingFence = source.match( /^([ \t]*)(`{3,}|~{3,})([^\n]*)$/ );
+
   if (
     openingFence &&
     position === line.to &&
@@ -545,12 +637,15 @@ function smartEnterEdit( view: EditorView, selection: SelectionRange ): MultiCur
     const followingLineStart = line.to < value.length ? line.to + 1 : value.length;
     const followingLine = view.state.doc.lineAt( followingLineStart ).text;
     const existingClosing = followingLine.match( /^([ \t]*)(`+|~+)\s*$/ );
+
     const closesFence = Boolean( existingClosing
       && existingClosing[ 2 ]![ 0 ] === marker[ 0 ]
       && existingClosing[ 2 ]!.length >= marker.length );
+
     const insertion = closesFence
       ? `\n${ indent }`
       : `\n${ indent }\n${ indent }${ marker }`;
+
     return {
       changes: [{ from: position, to: position, insert: insertion }],
       range: EditorSelection.cursor( position + 1 + indent.length )
@@ -562,6 +657,7 @@ function smartEnterEdit( view: EditorView, selection: SelectionRange ): MultiCur
   }
 
   const item = matchEditableListLine( source );
+
   if ( !item ) {
     return undefined;
   }
@@ -574,19 +670,23 @@ function smartEnterEdit( view: EditorView, selection: SelectionRange ): MultiCur
 
   if ( !fullBody.trim() && insertionPosition === line.to ) {
     const replacement = item.indent;
+
     return {
       changes: [{ from: line.from, to: line.to, insert: replacement }],
       range: EditorSelection.cursor( line.from + replacement.length )
     };
   }
 
+  // restart at one before exceeding the Markdown grammar's nine-digit marker limit
   const marker = item.ordered
     ? `${ item.number >= 999_999_999 ? 1 : item.number + 1 }${ item.delimiter }`
     : item.bullet;
+
   const taskPrefix = item.task ? '[ ] ' : '';
   const continuation = `${ item.indent }${ marker }${ item.spacing }${ taskPrefix }`;
   const separatorLength = bodyAfter.match( /^[ \t]+/ )?.[ 0 ].length ?? 0;
   const cursor = insertionPosition + 1 + continuation.length;
+
   return {
     changes: [{ from: insertionPosition, to: insertionPosition + separatorLength, insert: `\n${ continuation }` }],
     range: EditorSelection.cursor( cursor )
@@ -595,9 +695,11 @@ function smartEnterEdit( view: EditorView, selection: SelectionRange ): MultiCur
 
 function matchEditableListLine( line: string ): ListLine | undefined {
   const match = line.match( /^([ \t]*)(?:(\d{1,9})([.)])|([-+*]))([ \t]+)(.*)$/ );
+
   if ( !match ) {
     return undefined;
   }
+
   const ordered = Boolean( match[ 2 ]);
   const markerLength = ordered ? match[ 2 ]!.length + 1 : 1;
   const spacing = match[ 5 ]!;
@@ -618,6 +720,7 @@ function matchEditableListLine( line: string ): ListLine | undefined {
 
 function renderedListTextOffset( line: string ): number | undefined {
   const item = matchEditableListLine( line );
+
   if ( !item ) {
     return undefined;
   }
@@ -630,12 +733,14 @@ function activeFenceBefore(
   position: number
 ): { marker: string; length: number } | undefined {
   const lines = value.slice( 0, position ).split( '\n' );
+
   lines.pop();
   let active: { marker: string; length: number } | undefined;
 
   for ( const line of lines ) {
     if ( !active ) {
       const opening = line.match( /^[ \t]*(`{3,}|~{3,})[^\n]*$/ );
+
       if ( opening ) {
         active = { marker: opening[ 1 ]![ 0 ]!, length: opening[ 1 ]!.length };
       }
@@ -644,6 +749,7 @@ function activeFenceBefore(
     }
 
     const closing = line.match( /^[ \t]*(`+|~+)\s*$/ );
+
     if (
       closing &&
       closing[ 1 ]![ 0 ] === active.marker &&
@@ -676,6 +782,7 @@ function selectedLineEdits(
   const selectionEndsAtLineStart = hasSelection
     && selectionEnd > 0
     && value[ selectionEnd - 1 ] === '\n';
+
   const effectiveEnd = selectionEndsAtLineStart ? selectionEnd - 1 : selectionEnd;
   const lastLine = view.state.doc.lineAt( effectiveEnd );
   const block = value.slice( firstLine.from, lastLine.to );
@@ -692,9 +799,11 @@ function selectedLineEdits(
     }
 
     const removable = line.startsWith( '\t' ) ? 1 : line.match( /^ {1,2}/ )?.[ 0 ].length ?? 0;
+
     if ( removable ) {
       edits.push({ from: sourceOffset, to: sourceOffset + removable, insert: '' });
     }
+
     sourceOffset += line.length + 1;
   }
 

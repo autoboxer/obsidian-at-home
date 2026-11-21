@@ -1,17 +1,7 @@
-import {
-  ChangeSet,
-  EditorSelection,
-  EditorState,
-  MapMode,
-  StateEffect,
-  StateField
-} from '@codemirror/state';
+import { ChangeSet, EditorSelection, EditorState, MapMode, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, EditorView } from '@codemirror/view';
 import { isMultiCursorGesture } from './codeMirrorMultiCursor';
-import {
-  markdownHeadingSlug,
-  markdownHeadingText
-} from './headingLinks';
+import { markdownHeadingSlug, markdownHeadingText } from './headingLinks';
 import { liveMarkdownDocumentModel } from './liveMarkdownDocumentModel';
 import { LiveMarkdownWidget } from './liveMarkdownCodeMirrorWidgets';
 import type {
@@ -90,6 +80,7 @@ export function liveMarkdownHeadingFoldingExtension(
       const sections = headingSections( state );
       const persisted = collapsedHeadingsByDocument.get( documentId );
       const persistedKeys = new Set( persisted?.headings.map( ( heading ) => heading.key ) );
+
       const collapsed = normalizedCollapsedHeadings(
         sections,
         state.selection.ranges,
@@ -99,6 +90,7 @@ export function liveMarkdownHeadingFoldingExtension(
             .filter( ( section ) => persistedKeys.has( section.key ) )
             .map( ( section ) => collapsedHeading( section, foldBodyEnd( state, section ) ) )
       );
+
       persistCollapsedHeadings( documentId, state.doc, collapsed );
 
       return buildHeadingFoldState( sections, collapsed );
@@ -107,9 +99,11 @@ export function liveMarkdownHeadingFoldingExtension(
       const foldEffects = transaction.effects.filter( ( effect ) =>
         effect.is( setHeadingCollapsedEffect )
       );
+
       const selectionMayRevealFold = Boolean(
         transaction.selection && value.collapsed.length
       );
+
       if (
         !transaction.docChanged
         && !foldEffects.length
@@ -120,6 +114,7 @@ export function liveMarkdownHeadingFoldingExtension(
 
       const sections = headingSections( transaction.state );
       const sectionLookup = headingSectionLookup( sections );
+
       let requestedCollapsed = transaction.docChanged
         ? mappedCollapsedHeadings(
           sectionLookup,
@@ -128,12 +123,14 @@ export function liveMarkdownHeadingFoldingExtension(
           transaction.newDoc
         )
         : [ ...value.collapsed ];
+
       if ( foldEffects.length ) {
         for ( const effect of foldEffects ) {
           const section = headingSectionAtPosition(
             sectionLookup,
             effect.value.from
           );
+
           if ( !section ) {
             continue;
           }
@@ -141,6 +138,7 @@ export function liveMarkdownHeadingFoldingExtension(
           requestedCollapsed = requestedCollapsed.filter( ( heading ) =>
             heading.from !== section.from
           );
+
           if ( effect.value.collapsed ) {
             requestedCollapsed.push( collapsedHeading( section, foldBodyEnd( transaction.state, section ) ) );
           }
@@ -152,13 +150,16 @@ export function liveMarkdownHeadingFoldingExtension(
         transaction.state.selection.ranges,
         requestedCollapsed
       );
+
       const collapsedChanged = !sameCollapsedHeadings(
         collapsed,
         value.collapsed
       );
+
       if ( collapsedChanged || transaction.docChanged ) {
         persistCollapsedHeadings( documentId, transaction.newDoc, collapsed );
       }
+
       if ( !transaction.docChanged && !collapsedChanged ) {
         return value;
       }
@@ -201,26 +202,32 @@ function collapsedHeadingMouseSelection(
   const lineAtEvent = ( pointer: MouseEvent ) => view.state.doc.lineAt(
     view.posAtCoords({ x: pointer.clientX, y: pointer.clientY }, false )
   );
+
   const initialLine = lineAtEvent( event );
+
   const heading = view.state.field( field ).collapsed.find( ( fold ) =>
     fold.from === initialLine.from
   );
+
   if ( !heading ) {
     return null;
   }
 
-  // Use the stored end so text typed below the fold stays outside the selection.
+  // use the stored end so text typed below the fold stays outside the selection
   let start = EditorSelection.range( heading.from, heading.bodyTo );
   let startSelection = view.state.selection;
 
   return {
     get( currentEvent, extend, multiple ) {
       const line = lineAtEvent( currentEvent );
+
       const fold = view.state.field( field ).collapsed.find( ( item ) =>
         item.from === line.from
       );
+
       const end = fold?.bodyTo ?? Math.min( line.to + 1, view.state.doc.length );
       const current = EditorSelection.range( line.from, end );
+
       const range = extend ? current : current.from < start.from
         ? EditorSelection.range( start.to, current.from )
         : EditorSelection.range( start.from, Math.max( start.to, current.to ) );
@@ -230,6 +237,7 @@ function collapsedHeadingMouseSelection(
           startSelection.main.extend( range.from, range.to, range.assoc )
         );
       }
+
       if ( multiple ) {
         return startSelection.addRange( range );
       }
@@ -258,16 +266,20 @@ function separateFoldBoundaryInput(
   const changes: ChangeSpec[] = [];
   const movedCarets = new Map<number, number>();
   const sections = headingSectionLookup( headingSections( transaction.startState ) );
+
   transaction.changes.iterChanges( ( from, to, fromB, toB, inserted ) => {
     if ( from !== to || !inserted.length ) {
       return;
     }
+
     const heading = collapsed.find( ( fold ) =>
       sections.byFrom.get( fold.from )?.contentTo === from
     );
+
     if ( heading && inserted.toString() === '\n' ) {
-      // Enter on a closed heading creates a line after the hidden body.
+      // enter on a closed heading creates a line after the hidden body
       const end = transaction.changes.mapPos( heading.bodyTo, -1 );
+
       changes.push({ from: fromB, to: toB }, { from: end, insert: '\n' });
       movedCarets.set( toB, end );
     } else if (
@@ -275,13 +287,15 @@ function separateFoldBoundaryInput(
       && transaction.startState.doc.lineAt( from ).from !== from
       && inserted.sliceString( 0, 1 ) !== '\n'
     ) {
-      // A block fold can display an empty row at EOF without a source newline.
+      // a block fold can display an empty row at EOF without a source newline
       changes.push({ from: fromB, insert: '\n' });
     }
   });
+
   if ( !changes.length ) {
     return transaction;
   }
+
   const adjustment = ChangeSet.of( changes, transaction.newDoc.length );
 
   return [ transaction, {
@@ -293,8 +307,8 @@ function separateFoldBoundaryInput(
         return range.map( adjustment );
       }
 
-      // Stay on the new blank line, before any following content. At an
-      // unterminated body end, the newline must come before the caret instead.
+      // stay on the new blank line, before any following content. At an
+      // unterminated body end, the newline must come before the caret instead
       const atLineStart = transaction.newDoc.lineAt( moved ).from === moved;
 
       return EditorSelection.cursor( adjustment.mapPos( moved, atLineStart ? -1 : 1 ) );
@@ -316,12 +330,14 @@ function buildHeadingFoldState(
     if ( section.from < hiddenUntil ) {
       continue;
     }
+
     if ( !section.hasContent ) {
       continue;
     }
 
     decorations.push(
       Decoration.widget({
+        // place the fold control before other widgets sharing the heading's start
         side: -100,
         widget: new HeadingFoldWidget(
           section,
@@ -335,11 +351,13 @@ function buildHeadingFoldState(
     }
 
     const bodyTo = collapsedPositions.get( section.from )!.bodyTo;
+
     const folded = Decoration.replace({
       block: true,
       inclusiveStart: true,
       inclusiveEnd: false
     }).range( section.bodyFrom, bodyTo );
+
     decorations.push( folded );
     atomicRanges.push(
       Decoration.mark({}).range( section.contentTo, bodyTo )
@@ -364,15 +382,18 @@ function normalizedCollapsedHeadings(
       .filter( ( section ) => section.hasContent )
       .map( ( section ) => [ section.from, section ])
   );
+
   const collapsed: CollapsedHeading[] = [];
   const seenPositions = new Set<number>();
 
   for ( const heading of requested ) {
     const currentSection = collapsibleSections.get( heading.from );
+
     const section = currentSection && {
       ...currentSection,
       bodyTo: Math.min( heading.bodyTo, currentSection.bodyTo )
     };
+
     if (
       section
       && section.bodyTo > section.bodyFrom
@@ -403,14 +424,17 @@ function mappedCollapsedHeadings(
       1,
       MapMode.TrackAfter
     );
+
     const mappedTo = changes.mapPos(
       heading.headingTo,
       -1,
       MapMode.TrackBefore
     );
+
     const fromSection = mappedFrom === null
       ? undefined
       : headingSectionAtPosition( sectionLookup, mappedFrom );
+
     const toSection = mappedTo === null
       ? undefined
       : headingSectionAtPosition( sectionLookup, mappedTo );
@@ -423,6 +447,7 @@ function mappedCollapsedHeadings(
 
     let bodyTo = changes.mapPos( heading.bodyTo, -1 );
     const boundaryLine = document.lineAt( bodyTo );
+
     if ( bodyTo < document.length && boundaryLine.from < bodyTo && boundaryLine.to === bodyTo ) {
       bodyTo += 1;
     }
@@ -465,11 +490,14 @@ function collapsedHeading( section: HeadingSection, bodyTo = section.bodyTo ): C
 
 function foldBodyEnd( state: EditorState, section: HeadingSection ): number {
   let end = section.bodyTo;
+
   while ( end > section.bodyFrom ) {
     const line = state.doc.lineAt( end - 1 );
+
     if ( line.text.trim() ) {
       return Math.min( section.bodyTo, line.to + 1 );
     }
+
     end = line.from;
   }
 
@@ -491,6 +519,7 @@ function headingSections( state: EditorState ): HeadingSection[] {
     if ( block.type !== 'heading' || !block.headingLevel ) {
       if ( block.type !== 'blank' ) {
         const currentSection = openSections.at( -1 );
+
         if ( currentSection ) {
           currentSection.hasContent = true;
         }
@@ -501,6 +530,7 @@ function headingSections( state: EditorState ): HeadingSection[] {
 
     closeSectionsThroughLevel( block.headingLevel, block.from );
     const parentSection = openSections.at( -1 );
+
     if ( parentSection ) {
       parentSection.hasContent = true;
     }
@@ -509,6 +539,7 @@ function headingSections( state: EditorState ): HeadingSection[] {
     const slug = markdownHeadingSlug( source );
     const occurrenceKey = `${ block.headingLevel }:${ slug }`;
     const occurrence = ( occurrences.get( occurrenceKey ) ?? 0 ) + 1;
+
     occurrences.set( occurrenceKey, occurrence );
 
     const section: HeadingSection = {
@@ -522,6 +553,7 @@ function headingSections( state: EditorState ): HeadingSection[] {
       label: markdownHeadingText( source ) || 'heading',
       level: block.headingLevel
     };
+
     sections.push( section );
     openSections.push( section );
   }
@@ -542,6 +574,8 @@ function persistCollapsedHeadings(
       documentId,
       { document, headings: collapsed }
     );
+
+    // use the same document-count bound as the position and undo caches
     while ( collapsedHeadingsByDocument.size > 250 ) {
       collapsedHeadingsByDocument.delete( collapsedHeadingsByDocument.keys().next().value! );
     }
@@ -569,7 +603,7 @@ function selectionRevealsSectionBody(
   return selection.empty
     ? selection.head >= section.bodyFrom && selection.head < section.bodyTo
     : selection.from < section.bodyTo && selection.to > section.bodyFrom
-      // Selecting a whole section need not reveal it; targeting its body does.
+      // selecting a whole section need not reveal it; targeting its body does
       && !( selection.from <= section.from && selection.to >= section.bodyTo );
 }
 
@@ -617,9 +651,11 @@ class HeadingFoldWidget extends LiveMarkdownWidget {
     button.addEventListener( 'click', ( event ) => {
       event.preventDefault();
       event.stopPropagation();
+
       if ( isMultiCursorGesture( event ) ) {
         return;
       }
+
       const willCollapse = !this.collapsed;
 
       view.dispatch({

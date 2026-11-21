@@ -462,7 +462,7 @@
 }
 
 .source-editor.is-render-pending > * {
-  /* Retain layout so CodeMirror can measure and parse the restored viewport. */
+  /* retain layout so CodeMirror can measure and parse the restored viewport */
   opacity: 0;
   pointer-events: none;
 }
@@ -506,7 +506,7 @@
 
   position: relative;
   min-height: 100%;
-  /* Keep reading space outside the bounds used to draw text selections. */
+  /* keep reading space outside the bounds used to draw text selections */
   margin: 0 var(--reading-margin-right) 0 var(--reading-margin-left);
   padding: 32px 0 90px;
   caret-color: var(--editor-text);
@@ -516,7 +516,7 @@
 
 .source-editor .source-textarea::before,
 .source-editor .source-textarea::after {
-  /* Empty hit areas retain CodeMirror's margin clicks and selection drags. */
+  /* empty hit areas retain CodeMirror's margin clicks and selection drags */
   content: "";
   position: absolute;
   top: 0;
@@ -644,7 +644,7 @@
 }
 
 .source-editor .cm-editor.live-drawn-selection .cm-selectionLayer {
-  /* Keep highlights visible over opaque code and table backgrounds. */
+  /* keep highlights visible over opaque code and table backgrounds */
   z-index: 1 !important;
   pointer-events: none;
 }
@@ -1091,7 +1091,7 @@
 }
 
 .live-quote-control {
-  /* Keep source hit-testing inline while the bar spans the containing line. */
+  /* keep source hit-testing inline while the bar spans the containing line */
   display: inline-block;
   width: var(--live-quote-content-indent);
   margin-left: calc(-1 * var(--live-quote-content-indent));
@@ -1328,7 +1328,7 @@
 .live-code-language-button[aria-expanded="true"],
 .live-code-copy-button:hover {
   border-color: var(--border);
-  /* Keep the opaque code surface beneath the translucent hover highlight. */
+  /* keep the opaque code surface beneath the translucent hover highlight */
   background-image: linear-gradient(var(--surface-control-hover), var(--surface-control-hover));
   color: var(--text-soft);
 }

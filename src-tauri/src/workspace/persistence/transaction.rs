@@ -123,9 +123,9 @@ pub(in crate::workspace) fn validate_folder_case_renames(
     operations: &[FolderCaseRename],
 ) -> Result<(), String> {
     for (index, operation) in operations.iter().enumerate() {
-        // Nested case-only renames are expressed in the path produced by their
+        // nested case-only renames are expressed in the path produced by their
         // parent rename. Map them back to the current on-disk path while doing
-        // the preflight checks; apply_transaction performs them in order.
+        // the preflight checks; apply_transaction performs them in order
         let source_relative =
             path_before_folder_renames(&operation.from_relative_path, &operations[..index]);
         let target_relative =
@@ -260,6 +260,8 @@ pub(in crate::workspace) fn prepare_transaction(
 ) -> Result<(PathBuf, TransactionManifest), String> {
     let transaction_root = prepare_transaction_root(root, &id)?;
     let mut originals = Vec::new();
+
+    // make durable backups before any original can be replaced
     for relative_path in paths_to_replace {
         let source = resolve_workspace_file(root, relative_path, true)?;
         let metadata = match fs::symlink_metadata(&source) {
@@ -291,6 +293,7 @@ pub(in crate::workspace) fn prepare_transaction(
             fingerprint: fingerprint_bytes(&bytes),
         });
     }
+
     let targets = plans
         .iter()
         .filter(|plan| plan.needs_write)
@@ -301,6 +304,8 @@ pub(in crate::workspace) fn prepare_transaction(
         })
         .collect();
     let mut recovery_targets = Vec::with_capacity(recovery_archives.len());
+
+    // stage recovery snapshots with the same bytes verified in the original backups
     for archive in recovery_archives {
         validate_recently_deleted_id(&archive.deleted_note.id)?;
         if fingerprint_bytes(&archive.bytes) != archive.fingerprint {
@@ -335,6 +340,7 @@ pub(in crate::workspace) fn prepare_transaction(
             fingerprint: archive.fingerprint.clone(),
         });
     }
+
     let manifest = TransactionManifest {
         version: TRANSACTION_VERSION,
         id,
@@ -347,6 +353,7 @@ pub(in crate::workspace) fn prepare_transaction(
         created_directories,
     };
     write_transaction_manifest(&transaction_root, &manifest)?;
+
     Ok((transaction_root, manifest))
 }
 
@@ -359,6 +366,7 @@ pub(in crate::workspace) fn apply_transaction(
 ) -> Result<(), String> {
     apply_recovery_targets(root, transaction_root, &manifest.recovery_targets)?;
 
+    // reject outside edits before removing each backed-up source
     for original in &manifest.originals {
         let source = resolve_workspace_file(root, &original.relative_path, true)?;
         let current = fingerprint_regular_file(&source)?
@@ -383,9 +391,12 @@ pub(in crate::workspace) fn apply_transaction(
             )
         })?;
     }
+
     for relative_path in &manifest.created_directories {
         ensure_directory_path(root, relative_path)?;
     }
+
+    // directory renames must finish before installing notes at their new paths
     for plan in plans.iter().filter(|plan| plan.needs_write) {
         let target = resolve_workspace_file(root, &plan.new_relative_path, true)?;
         if fs::symlink_metadata(&target).is_ok() {

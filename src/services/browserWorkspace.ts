@@ -18,26 +18,31 @@ export function readBrowserWorkspace(
   normalizeVault: ( vault: Partial<VaultData> ) => VaultData
 ): StoredBrowserWorkspace | null {
   const raw = readCriticalStorage();
+
   if ( !raw ) {
     return null;
   }
 
   try {
     const parsed = JSON.parse( raw ) as unknown;
+
     if ( isRecord( parsed ) && 'version' in parsed ) {
       if ( parsed.version !== WORKSPACE_VERSION ) {
         throw new Error(
           `Saved browser notes use unsupported version ${ String( parsed.version ) }.`
         );
       }
+
       if ( !isRecord( parsed.vault ) ) {
         throw new Error( 'Saved browser notes contain an invalid vault.' );
       }
 
       const parsedVault = parsed.vault as Partial<VaultData>;
+
       if ( !Array.isArray( parsedVault.notes ) || !Array.isArray( parsedVault.folders ) ) {
         throw new Error( 'Saved browser notes contain an invalid vault.' );
       }
+
       const vault = normalizeVault( parsedVault );
 
       return {
@@ -60,6 +65,7 @@ export function readBrowserWorkspace(
     if ( !isRecord( parsed ) || !Array.isArray( parsed.notes ) || !Array.isArray( parsed.folders ) ) {
       throw new Error( 'Saved browser notes have an invalid format.' );
     }
+
     const vault = normalizeVault( parsed as Partial<VaultData> );
 
     return {
@@ -69,7 +75,7 @@ export function readBrowserWorkspace(
       needsRewrite: true
     };
   } catch ( error ) {
-    // Intentionally replace storage-parser details with a safe user-facing error.
+    // intentionally replace storage-parser details with a safe user-facing error
     // eslint-disable-next-line preserve-caught-error
     throw new Error(
       error instanceof Error && error.message.startsWith( 'Saved browser notes' )
@@ -104,10 +110,12 @@ function parseRecentlyDeletedNotes( value: unknown ): RecentlyDeletedNote[] {
 
   const ids = new Set<string>();
   const notes = value.map( ( entry ) => parseRecentlyDeletedNote( entry ) );
+
   for ( const entry of notes ) {
     if ( ids.has( entry.id ) ) {
       throw new Error( 'Saved browser notes contain duplicate Recently Deleted entries.' );
     }
+
     ids.add( entry.id );
   }
 
@@ -129,12 +137,14 @@ function parseRecentlyDeletedNote( value: unknown ): RecentlyDeletedNote {
   }
 
   const note = parseDeletedNote( value.note );
+
   const editorPosition = value.editorPosition === undefined
     ? undefined
     : normalizeNoteEditorPosition(
       value.editorPosition,
       note.content.replace( /\r\n|\r/g, '\n' ).length
     );
+
   if ( value.editorPosition !== undefined && !editorPosition ) {
     throw new Error( 'Saved browser notes contain an invalid editor position.' );
   }
@@ -185,6 +195,7 @@ function readCriticalStorage(): string | null {
   if ( typeof localStorage === 'undefined' ) {
     throw new Error( 'Saved browser notes are unavailable in this environment.' );
   }
+
   try {
     return localStorage.getItem( STORAGE_KEY );
   } catch {
@@ -196,6 +207,7 @@ function isSafeRelativePath( value: string, allowEmpty: boolean ): boolean {
   if ( !value ) {
     return allowEmpty;
   }
+
   if (
     value.startsWith( '/' )
     || value.includes( '\\' )
@@ -234,6 +246,7 @@ function embedSettingsMatch(
 
 function storageFingerprint( value: string ): string {
   let hash = 2_166_136_261;
+
   for ( let index = 0; index < value.length; index += 1 ) {
     hash ^= value.charCodeAt( index );
     hash = Math.imul( hash, 16_777_619 );

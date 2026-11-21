@@ -250,8 +250,8 @@ For CSS properties and examples, see the [MDN CSS reference](https://developer.m
   };
 }
 
-// Exact shipped definitions used only to migrate vaults without a stored baseline.
-// Future defaults use builtInDefaults; customized legacy snippets are left intact.
+// exact shipped definitions used only to migrate vaults without a stored baseline
+// future defaults use builtInDefaults; customized legacy snippets are left intact
 export const legacyBuiltInSnippets: readonly ( BuiltInSnippetDefaults & { id: string })[] = [
   {
     id: 'snippet-wide-page',

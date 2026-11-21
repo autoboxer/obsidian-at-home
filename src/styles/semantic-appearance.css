@@ -1,5 +1,5 @@
-/* Semantic appearance bridge
-   Keep component rules palette-neutral so light and dark themes share one UI. */
+/* semantic appearance bridge
+   keep component rules palette-neutral so light and dark themes share one UI */
 .desktop-titlebar {
   background: var(--titlebar-background);
 }

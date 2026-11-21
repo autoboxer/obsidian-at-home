@@ -73,7 +73,7 @@ export interface SnippetDraftWorkspace {
   drafts: Map<string, SnippetDraft>;
 }
 
-// Session drafts live outside persisted vault data and survive tool unmounts.
+// session drafts live outside persisted vault data and survive tool unmounts
 export const snippetDraftWorkspaces = reactive( new Map<string, SnippetDraftWorkspace>() );
 
 export const assetDeletionState = reactive<{

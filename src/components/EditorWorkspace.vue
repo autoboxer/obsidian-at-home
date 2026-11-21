@@ -1,20 +1,14 @@
 <script setup lang="ts">
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import {
-  useAssetEmbedding,
-  type AssetEmbeddingEditor
-} from '../composables/useAssetEmbedding';
+import { useAssetEmbedding, type AssetEmbeddingEditor } from '../composables/useAssetEmbedding';
 import { leadingFrontmatterEnd } from '../lib/frontmatter';
 import { findMarkdownHeading, markdownHeadingSuggestions } from '../lib/headingLinks';
 import { formatCommandShortcut } from '../lib/keyboard';
 import { parseMarkdownNoteTarget, type MarkdownNoteTarget } from '../lib/markdownLinks';
 import { previewWorkspaceImage } from '../services/native';
 import { resolveNoteLink, resolveWikiLink, wikiLinkSuggestions, type WikiLinkTarget } from '../lib/wikiLinks';
-import {
-  editorPositionVaultId,
-  setNoteEditorPosition
-} from '../stores/editorPositions';
+import { editorPositionVaultId, setNoteEditorPosition } from '../stores/editorPositions';
 import {
   canEditVault,
   activeImage,
@@ -50,9 +44,7 @@ import {
   vaultSession,
   vaultState
 } from '../stores/vault';
-import type {
-  NoteEditorPosition
-} from '../types';
+import type { NoteEditorPosition } from '../types';
 import AppIcon from './AppIcon.vue';
 import SourceEditor from './SourceEditor.vue';
 
@@ -65,19 +57,24 @@ const emptyTabOpenButton = ref<HTMLButtonElement>();
 const imagePreviewPanel = ref<HTMLElement>();
 const keepTabFocus = ref( false );
 let tabResizeObserver: ResizeObserver | undefined;
+
 const noteTabs = computed( () => {
   const notes = new Map( vaultState.notes.map( ( note ) => [ note.id, note ]) );
 
   return noteTabsState.tabs.map( ( tab ) => {
     const note = tab.noteId ? notes.get( tab.noteId ) : undefined;
     const image = tab.image ? resolveImageTarget( tab.image ) : undefined;
-    const title = image ? image.relativePath.split( '/' ).at( -1 )! : note ? note.title.trim() || 'Untitled note' : 'New tab';
+
+    const title = image
+      ? image.relativePath.split( '/' ).at( -1 )!
+      : note ? note.title.trim() || 'Untitled note' : 'New tab';
 
     return {
       id: tab.id,
       title,
       image: Boolean( image ),
-      path: image?.relativePath || note?.relativePath || ( note ? [ folderPath( note.folderId ), title ].filter( Boolean ).join( '/' ) : title )
+      path: image?.relativePath || note?.relativePath ||
+        ( note ? [ folderPath( note.folderId ), title ].filter( Boolean ).join( '/' ) : title )
     };
   });
 });
@@ -90,11 +87,14 @@ function tabButton( id: string ): HTMLButtonElement | undefined {
 function revealActiveTab(): void {
   const list = tabList.value;
   const tab = tabButton( activeNoteTab.value.id )?.parentElement;
+
   if ( !list || !tab ) {
     return;
   }
+
   const bounds = list.getBoundingClientRect();
   const item = tab.getBoundingClientRect();
+
   if ( item.left < bounds.left ) {
     list.scrollLeft += item.left - bounds.left;
   } else if ( item.right > bounds.right ) {
@@ -109,7 +109,7 @@ function focusNonNoteTab(): void {
 }
 
 function shouldFocusEditorOnMount(): boolean {
-  // Sidebar deletion owns focus even while its row is blurred or removed.
+  // sidebar deletion owns focus even while its row is blurred or removed
   return !keepTabFocus.value && !uiState.sidebarNoteDeletionPending
     && uiState.noteTitleFocusId !== activeNote.value?.id
     && !document.activeElement?.matches( '.vault-tree-note-main' );
@@ -119,27 +119,32 @@ async function selectTab( id: string, focusTab = false ): Promise<void> {
   keepTabFocus.value = focusTab;
   activateNoteTab( id );
   await nextTick();
+
   if ( activeNoteTab.value.id === id ) {
     if ( focusTab ) {
       tabButton( id )?.focus({ preventScroll: true });
     } else if ( activeNote.value ) {
-      // Selecting the already active tab does not remount its editor.
+      // selecting the already active tab does not remount its editor
       document.querySelector<HTMLElement>( '.source-editor .cm-content' )?.focus({ preventScroll: true });
     } else {
       focusNonNoteTab();
     }
   }
+
   keepTabFocus.value = false;
 }
 
 async function closeTab( id: string ): Promise<void> {
   const focusTab = Boolean( tabList.value?.contains( document.activeElement ) );
+
   keepTabFocus.value = focusTab;
   closeNoteTab( id );
   await nextTick();
+
   if ( focusTab ) {
     tabButton( activeNoteTab.value.id )?.focus({ preventScroll: true });
   }
+
   keepTabFocus.value = false;
 }
 
@@ -147,16 +152,25 @@ function handleTabKeydown( event: KeyboardEvent ): void {
   if ( event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing ) {
     return;
   }
+
   const target = event.target;
-  const id = target instanceof HTMLElement ? target.closest<HTMLElement>( '[data-note-tab-id]' )?.dataset.noteTabId : undefined;
+
+  const id = target instanceof HTMLElement
+    ? target.closest<HTMLElement>( '[data-note-tab-id]' )?.dataset.noteTabId
+    : undefined;
+
   const index = noteTabs.value.findIndex( ( tab ) => tab.id === id );
+
   if ( index < 0 ) {
     return;
   }
+
   const last = noteTabs.value.length - 1;
+
   const next = event.key === 'ArrowRight' ? ( index + 1 ) % ( last + 1 )
     : event.key === 'ArrowLeft' ? ( index + last ) % ( last + 1 )
       : event.key === 'Home' ? 0 : event.key === 'End' ? last : undefined;
+
   if ( next !== undefined ) {
     event.preventDefault();
     void selectTab( noteTabs.value[ next ]!.id, true );
@@ -168,9 +182,11 @@ function handleTabKeydown( event: KeyboardEvent ): void {
 
 function scrollTabs( event: WheelEvent ): void {
   const list = tabList.value;
+
   if ( !list || event.ctrlKey || event.shiftKey || event.deltaX || list.scrollWidth <= list.clientWidth ) {
     return;
   }
+
   event.preventDefault();
   list.scrollLeft += event.deltaY * ( event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? list.clientWidth : 1 );
 }
@@ -181,9 +197,11 @@ watch([ () => activeNoteTab.value.id, noteTabs ], () => {
 watch( () => activeNoteTab.value.id, focusNonNoteTab, { flush: 'post' });
 onMounted( () => {
   tabResizeObserver = new ResizeObserver( revealActiveTab );
+
   if ( tabList.value ) {
     tabResizeObserver.observe( tabList.value );
   }
+
   revealActiveTab();
   focusNonNoteTab();
 });
@@ -199,9 +217,11 @@ const quickFolderOpen = ref( false );
 const quickFolderName = ref( '' );
 const quickFolderField = ref<HTMLInputElement>();
 const quickFolderButton = ref<HTMLButtonElement>();
+
 const sourceEditor = ref<AssetEmbeddingEditor & {
   focusDocumentOffset: ( offset: number ) => boolean;
 }>();
+
 const {
   activateEmbeddedAttachment,
   attachmentEmbedBusy,
@@ -230,15 +250,19 @@ async function retryImagePreview(): Promise<void> {
   if ( previewRetrying.value || vaultSession.busy ) {
     return;
   }
+
   const path = vaultSession.path;
   const tab = activeNoteTab.value;
   const image = tab.image;
+
   const isCurrent = (): boolean => vaultSession.path === path
     && activeNoteTab.value === tab && tab.image === image;
+
   previewRetrying.value = true;
+
   try {
-    // The lifecycle saves document/settings edits and reconciles navigation-only
-    // changes without requiring a write against a potentially stale revision.
+    // the lifecycle saves document/settings edits and reconciles navigation-only
+    // changes without requiring a write against a potentially stale revision
     await reloadFilesystemVault({ preserveChanges: true, isCurrent });
   } finally {
     previewRetrying.value = false;
@@ -255,8 +279,10 @@ watch( () => JSON.stringify([
 ]), async ( _target, _previous, onCleanup ) => {
   let cancelled = false;
   let objectUrl: string | undefined;
+
   onCleanup( () => {
     cancelled = true;
+
     if ( objectUrl ) {
       URL.revokeObjectURL( objectUrl );
     }
@@ -265,25 +291,32 @@ watch( () => JSON.stringify([
   previewError.value = '';
   previewLoading.value = false;
   const image = activeImage.value;
+
   if ( !image ) {
     return;
   }
+
   if ( !nativeAvailable || vaultSession.backend !== 'native' || !vaultSession.path ) {
     previewError.value = 'Open this vault in the desktop app to preview its images.';
 
     return;
   }
+
   if ( !activeImageAvailable.value ) {
     previewError.value = 'This image is no longer in the vault.';
 
     return;
   }
+
   previewLoading.value = true;
+
   try {
     const bytes = await previewWorkspaceImage( vaultSession.path, image.relativePath );
+
     if ( cancelled ) {
       return;
     }
+
     objectUrl = URL.createObjectURL( new Blob([ new Uint8Array( bytes ) ], { type: image.mediaType }) );
     previewUrl.value = objectUrl;
   } catch {
@@ -298,7 +331,9 @@ function finishImagePreview( event: Event ): void {
   if ( ( event.target as HTMLImageElement ).src !== previewUrl.value ) {
     return;
   }
+
   previewLoading.value = false;
+
   if ( event.type === 'error' ) {
     previewError.value = 'This image format could not be displayed.';
   }
@@ -316,11 +351,13 @@ function noteLinkHeadings( target: string ): string[] {
 
 function noteLinkForId( noteId: string ): string | undefined {
   const path = noteLinkPaths.value.get( noteId );
+
   if ( !path ) {
     return undefined;
   }
-  // A dropped file identifies an exact note, even among duplicate names
-  // or notes whose only difference is their Markdown extension.
+
+  // a dropped file identifies an exact note, even among duplicate names
+  // or notes whose only difference is their Markdown extension
   return '[[/' + path.replace( /[\\|#[\]]/g, '\\$&' ) + ']]';
 }
 
@@ -329,27 +366,36 @@ const wikiLinkIsResolved = computed( () => {
   const sourceNote = activeNote.value;
   const resolvedTargets = new Map<string, boolean>();
 
-  // Render updates reuse results until the source note or vault paths change.
+  // render updates reuse results until the source note or vault paths change
   return ( target: string ): boolean => {
     const cached = resolvedTargets.get( target );
+
     if ( cached !== undefined ) {
       return cached;
     }
+
     const resolved = Boolean( resolveWikiLink({ target }, vaultState.notes, sourceNote, paths ) );
+
     resolvedTargets.set( target, resolved );
 
     return resolved;
   };
 });
+
 const positionVaultId = computed( () => editorPositionVaultId( vaultSession.backend, vaultSession.path ) );
-// Access changes rebuild the editor and its widget controls.
+
+// access changes rebuild the editor and its widget controls
 const editorKey = computed( () => JSON.stringify([
   positionVaultId.value,
   activeNoteTab.value.id,
   canEditVault.value,
   activeNote.value?.id ?? null
 ]) );
-const sortedFolders = computed( () => [ ...vaultState.folders ].sort( ( a, b ) => folderPath( a.id ).localeCompare( folderPath( b.id ) ) ) );
+
+const sortedFolders = computed( () =>
+  [ ...vaultState.folders ].sort( ( a, b ) => folderPath( a.id ).localeCompare( folderPath( b.id ) ) )
+);
+
 const tagSuggestions = computed( () => {
   const query = normalizeTag( tagInput.value ).toLocaleLowerCase();
   const appliedTags = new Set( activeNote.value?.tags.map( ( tag ) => tag.toLocaleLowerCase() ) ?? []);
@@ -374,20 +420,25 @@ const tagSuggestions = computed( () => {
     })
     .slice( 0, 7 );
 });
+
 const wordCount = computed( () => {
   const content = activeNote.value?.content ?? '';
 
   return content.trim() ? content.trim().split( /\s+/ ).length : 0;
 });
+
 const characterCount = computed( () => activeNote.value?.content.length ?? 0 );
+
 const hasFrontmatter = computed( () => (
   activeNote.value
     ? leadingFrontmatterEnd( activeNote.value.content ) !== undefined
     : false
 ) );
+
 const backNavigationLabel = computed( () => backNavigationTitle.value
   ? `Back to “${ backNavigationTitle.value }”`
   : 'No previous item' );
+
 const forwardNavigationLabel = computed( () => forwardNavigationTitle.value
   ? `Forward to “${ forwardNavigationTitle.value }”`
   : 'No next item' );
@@ -396,12 +447,13 @@ function setTitle( event: Event ): void {
   if ( !activeNote.value ) {
     return;
   }
+
   updateNote( activeNote.value.id, { title: ( event.target as HTMLInputElement ).value });
 }
 
 function resetTitle( event: FocusEvent ): void {
-  // A colliding draft can be completed while typing; leaving the field shows
-  // the last accepted name instead of implying that a rejected rename saved.
+  // a colliding draft can be completed while typing; leaving the field shows
+  // the last accepted name instead of implying that a rejected rename saved
   ( event.target as HTMLInputElement ).value = activeNote.value?.title ?? '';
 }
 
@@ -439,11 +491,13 @@ function rememberEditorPosition(
 
 async function openRenderedLink( href: string ): Promise<void> {
   const target = parseMarkdownNoteTarget( href );
+
   if ( target ) {
     await openNoteLink( target );
 
     return;
   }
+
   if ( !/^(?:https?|mailto):/i.test( href ) ) {
     return;
   }
@@ -458,6 +512,7 @@ async function openRenderedLink( href: string ): Promise<void> {
 async function openWikiLink( target: string, heading?: string ): Promise<void> {
   if ( !heading ) {
     const note = createLinkedNote({ target });
+
     if ( note ) {
       await focusLinkedNote( note.id, 0 );
     }
@@ -470,13 +525,16 @@ async function openWikiLink( target: string, heading?: string ): Promise<void> {
 
 async function openNoteLink( link: WikiLinkTarget | MarkdownNoteTarget ): Promise<void> {
   const note = resolveNoteLink( link, vaultState.notes, activeNote.value, noteLinkPaths.value );
+
   if ( !note ) {
     notify( `Could not find note “${ linkedNoteLabel( link.target ) }”`, 'warning' );
 
     return;
   }
+
   const heading = link.heading;
   const match = heading ? findMarkdownHeading( note.content, heading ) : undefined;
+
   if ( heading && !match ) {
     notify( `Could not find heading “${ heading }” in “${ note.title }”`, 'warning' );
 
@@ -489,12 +547,15 @@ async function openNoteLink( link: WikiLinkTarget | MarkdownNoteTarget ): Promis
 async function focusLinkedNote( noteId: string, offset: number ): Promise<void> {
   const vaultId = positionVaultId.value;
   const tabId = activeNoteTab.value.id;
+
   if ( noteId !== activeNote.value?.id ) {
     selectNote( noteId );
   }
-  // Link destinations override the restored position after the editor mounts,
-  // including self-links and notes just selected by createLinkedNote.
+
+  // link destinations override the restored position after the editor mounts,
+  // including self-links and notes just selected by createLinkedNote
   await nextTick();
+
   if ( positionVaultId.value !== vaultId || activeNoteTab.value.id !== tabId || activeNote.value?.id !== noteId ) {
     return;
   }
@@ -512,7 +573,9 @@ async function setFolder( event: Event ): Promise<void> {
   if ( !activeNote.value ) {
     return;
   }
+
   const value = ( event.target as HTMLSelectElement ).value;
+
   await moveNoteToFolder( activeNote.value.id, value || null );
 }
 
@@ -520,6 +583,7 @@ function openTagInput(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   tagInput.value = '';
   tagSuggestionIndex.value = -1;
   tagInputOpen.value = true;
@@ -537,14 +601,17 @@ function addTag( suggestedTag?: string ): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   if ( !activeNote.value ) {
     return;
   }
 
   const tag = normalizeTag( suggestedTag ?? tagInput.value );
+
   const alreadyApplied = activeNote.value.tags.some(
     ( candidate ) => candidate.toLocaleLowerCase() === tag.toLocaleLowerCase()
   );
+
   if ( tag && !alreadyApplied ) {
     if ( !updateNote( activeNote.value.id, { tags: [ ...activeNote.value.tags, tag ] }) ) {
       return;
@@ -560,6 +627,7 @@ function submitTag(): void {
   const suggestion = tagSuggestionIndex.value >= 0
     ? tagSuggestions.value[ tagSuggestionIndex.value ]
     : undefined;
+
   addTag( suggestion );
 }
 
@@ -591,11 +659,16 @@ function requestDelete(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   if ( !activeNote.value ) {
     return;
   }
+
   noteMenuOpen.value = false;
-  if ( window.confirm( `Delete “${ activeNote.value.title || 'Untitled note' }”? It will remain in Recently Deleted for seven days.` ) ) {
+
+  if ( window.confirm(
+    `Delete “${ activeNote.value.title || 'Untitled note' }”? It will remain in Recently Deleted for seven days.`
+  ) ) {
     void deleteNote( activeNote.value.id );
   }
 }
@@ -608,6 +681,7 @@ function openQuickFolder(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   quickFolderOpen.value = true;
   nextTick( () => quickFolderField.value?.focus() );
 }
@@ -615,6 +689,7 @@ function openQuickFolder(): void {
 function closeQuickFolder( restoreFocus = false ): void {
   quickFolderOpen.value = false;
   quickFolderName.value = '';
+
   if ( restoreFocus ) {
     nextTick( () => quickFolderButton.value?.focus() );
   }
@@ -622,15 +697,18 @@ function closeQuickFolder( restoreFocus = false ): void {
 
 function submitQuickFolder(): void {
   const name = quickFolderName.value.trim();
+
   if ( name ) {
     createFolder( name );
   }
+
   closeQuickFolder( true );
 }
 
 function handleQuickFolderFocusOut( event: FocusEvent ): void {
   const form = event.currentTarget as HTMLElement;
   const next = event.relatedTarget;
+
   if ( !( next instanceof Node ) || !form.contains( next ) ) {
     closeQuickFolder();
   }

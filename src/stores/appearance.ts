@@ -219,6 +219,7 @@ const DEFAULT_FONT_ID: FontId = 'inter';
 const DEFAULT_NOTE_FONT_SIZE = 16;
 const themeIds = new Set<ThemeId>( themes.map( ( theme ) => theme.id ) );
 const bundledFontIds = new Set<FontId>( fontOptions.map( ( font ) => font.id ) );
+
 const bundledFontFamilies = new Set(
   [ 'Inter', 'Inter Variable', 'System UI', 'IBM Plex Sans', 'Source Serif 4', 'JetBrains Mono' ]
     .map( normalizeFontFamily )
@@ -288,6 +289,7 @@ export function setExplorerWidth( width: number | null ): void {
   if ( width !== null && !Number.isFinite( width ) ) {
     return;
   }
+
   appearanceState.explorerWidth = width === null
     ? null
     : clampExplorerWidth( width );
@@ -298,9 +300,11 @@ export function loadInstalledFonts(): Promise<void> {
   if ( installedFontsLoaded ) {
     return Promise.resolve();
   }
+
   if ( installedFontsRequest ) {
     return installedFontsRequest;
   }
+
   if ( typeof window === 'undefined' || !window.__TAURI__?.core?.invoke ) {
     installedFontsUnavailable.value = true;
 
@@ -309,6 +313,7 @@ export function loadInstalledFonts(): Promise<void> {
 
   installedFontsLoading.value = true;
   installedFontsUnavailable.value = false;
+
   const request = listSystemFonts()
     .then( ( systemFonts: Array<{ family: string; monospaced: boolean }> ) => {
       const seen = new Set<string>();
@@ -316,11 +321,13 @@ export function loadInstalledFonts(): Promise<void> {
 
       for ( const systemFont of systemFonts ) {
         const family = sanitizeFontFamily( systemFont.family );
+
         if ( !family ) {
           continue;
         }
 
         const normalized = normalizeFontFamily( family );
+
         if ( seen.has( normalized ) || bundledFontFamilies.has( normalized ) ) {
           continue;
         }
@@ -383,6 +390,7 @@ function readStoredAppearance(): AppearanceState {
     noteFontSize: DEFAULT_NOTE_FONT_SIZE,
     explorerWidth: null
   };
+
   const raw = readStorage();
 
   if ( !raw ) {
@@ -423,7 +431,7 @@ function persistAppearance(): void {
   try {
     window.localStorage.setItem( APPEARANCE_STORAGE_KEY, JSON.stringify( stored ) );
   } catch {
-    // Appearance preferences are non-critical when browser storage is unavailable.
+    // appearance preferences are non-critical when browser storage is unavailable
   }
 }
 
@@ -447,7 +455,7 @@ function removeStoredAppearance(): void {
   try {
     window.localStorage.removeItem( APPEARANCE_STORAGE_KEY );
   } catch {
-    // Appearance preferences are non-critical when browser storage is unavailable.
+    // appearance preferences are non-critical when browser storage is unavailable
   }
 }
 
@@ -473,16 +481,19 @@ function clampExplorerWidth( width: number ): number {
 
 function resolveFontOption( fontId: FontId ): FontOption {
   const bundled = fontOptions.find( ( option ) => option.id === fontId );
+
   if ( bundled ) {
     return bundled;
   }
 
   const installed = installedFontOptions.value.find( ( option ) => option.id === fontId );
+
   if ( installed ) {
     return installed;
   }
 
   const family = systemFontFamily( fontId );
+
   if ( family ) {
     return {
       id: fontId,
@@ -505,6 +516,7 @@ function systemFontFamily( value: string ): string | null {
   }
 
   const encodedFamily = value.slice( 'system:'.length );
+
   if ( !encodedFamily ) {
     return null;
   }
@@ -524,6 +536,7 @@ function sanitizeFontFamily( family: unknown ): string | null {
   }
 
   const trimmed = family.trim();
+
   if ( !trimmed || trimmed.length > 160 || /[\u0000-\u001f\u007f]/u.test( trimmed ) ) {
     return null;
   }
@@ -584,6 +597,6 @@ function synchronizeNativeTheme( scheme: ColorScheme ): void {
       synchronizedNativeTheme = null;
     }
 
-    // Browser previews and older webviews continue using the CSS color scheme.
+    // browser previews and older webviews continue using the CSS color scheme
   });
 }

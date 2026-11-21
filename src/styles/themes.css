@@ -6,7 +6,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 
-  /* Aubergine is the default palette. */
+  /* aubergine is the default palette */
   --bg-deep: #09080d;
   --bg: #0d0c12;
   --bg-raised: #121017;
@@ -29,7 +29,7 @@
   --red: #ee8d9c;
   --blue: #83b8e8;
 
-  /* Derived colors keep every built-in palette internally consistent. */
+  /* derived colors keep every built-in palette internally consistent */
   --border-faint: color-mix(in srgb, var(--text) 5.5%, transparent);
   --border: color-mix(in srgb, var(--text) 9.5%, transparent);
   --border-strong: color-mix(in srgb, var(--text) 17%, transparent);
@@ -132,7 +132,7 @@
   --inspector-width: 286px;
 }
 
-/* Engineer-favorite dark palettes */
+/* engineer-favorite dark palettes */
 :where(html[data-theme="dracula"]) {
   color-scheme: dark;
   --bg-deep: #191a21;
@@ -308,7 +308,7 @@
   --blue: #268bd2;
 }
 
-/* Engineer-favorite light palettes */
+/* engineer-favorite light palettes */
 :where(html[data-theme="github-light"]) {
   color-scheme: light;
   --bg-deep: #eef1f4;

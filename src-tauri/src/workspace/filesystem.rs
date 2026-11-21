@@ -340,6 +340,7 @@ pub(super) fn validate_relative_path(relative_path: &str, file: bool) -> Result<
                 "App settings, Obsidian settings, trash, and Git folders are reserved.".to_owned(),
             );
         }
+        // enforce the common filesystem limit in bytes rather than Unicode character count
         if component.len() > 255 || component.chars().any(char::is_control) {
             return Err("A path segment is too long or contains control characters.".to_owned());
         }
@@ -362,6 +363,7 @@ pub(super) fn validate_component_name(name: &str, kind: &str) -> Result<(), Stri
     if name.is_empty() || name == "." || name == ".." {
         return Err(format!("Enter a valid {kind} name."));
     }
+    // leave room for extensions and collision suffixes within a filesystem path component
     if name.len() > 180
         || name.ends_with('.')
         || name.ends_with(' ')
@@ -579,6 +581,7 @@ pub(super) fn safe_file_stem(input: &str, fallback: &str) -> String {
             result.push(character);
             previous_was_replacement = false;
         }
+        // keep generated names shorter than editable names to leave space for suffixes
         if result.len() >= 120 {
             break;
         }
@@ -727,6 +730,7 @@ pub(super) fn atomic_write_with_precondition(
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file has no parent"))?;
     fs::create_dir_all(parent)?;
+
     let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let file_name = path
         .file_name()
@@ -737,6 +741,7 @@ pub(super) fn atomic_write_with_precondition(
         std::process::id(),
         counter
     ));
+
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -747,20 +752,22 @@ pub(super) fn atomic_write_with_precondition(
         file.sync_all()?;
         drop(file);
 
-        // Check after preparing and syncing the temporary file, immediately
+        // check after preparing and syncing the temporary file, immediately
         // before replacement. This is optimistic validation, not an atomic CAS
-        // against external writers that do not honor the workspace lock.
+        // against external writers that do not honor the workspace lock
         precondition()?;
 
-        // std::fs::rename replaces an existing file on Windows as well as Unix.
-        // Keep the destination in place until that operation: moving it to a
-        // backup first leaves metadata missing if the process exits in between.
+        // std::fs::rename replaces an existing file on Windows as well as Unix
+        // keep the destination in place until that operation: moving it to a
+        // backup first leaves metadata missing if the process exits in between
         fs::rename(&temporary, path)?;
         sync_directory(parent)
     })();
+
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
+
     result
 }
 
@@ -989,8 +996,8 @@ pub(super) fn lock_storage_file(
     })
 }
 
-// Only bound acquisition, never the operation holding the lock. In particular,
-// a timeout must not leave a detached waiter that can write after reporting failure.
+// only bound acquisition, never the operation holding the lock. In particular,
+// a timeout must not leave a detached waiter that can write after reporting failure
 pub(super) fn wait_for_storage_lock<T>(
     timeout: Duration,
     busy: &str,
@@ -1006,7 +1013,7 @@ pub(super) fn wait_for_storage_lock<T>(
             return Err(busy.to_owned());
         }
         std::thread::sleep(remaining.min(STORAGE_LOCK_POLL_INTERVAL));
-        // Do not acquire after the deadline, even if the owner just released it.
+        // do not acquire after the deadline, even if the owner just released it
         if started.elapsed() >= timeout {
             return Err(busy.to_owned());
         }

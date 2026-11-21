@@ -31,13 +31,17 @@ export function createVaultChangeTracker(
     if ( !pendingNotes.size && !pendingFields.size ) {
       return;
     }
+
     version += 1;
+
     for ( const id of pendingNotes ) {
       notes.set( id, version );
     }
+
     for ( const field of pendingFields ) {
       fields.set( field, version );
     }
+
     pendingNotes.clear();
     pendingFields.clear();
     onChange();
@@ -45,10 +49,12 @@ export function createVaultChangeTracker(
 
   function batch<T>( mutation: () => T ): T {
     batchDepth += 1;
+
     try {
       return mutation();
     } finally {
       batchDepth -= 1;
+
       if ( !batchDepth ) {
         publish();
       }
@@ -57,34 +63,42 @@ export function createVaultChangeTracker(
 
   function reconcileNotes(): void {
     const currentNotes = new Set( vault.notes );
+
     for ( const [ note, watcher ] of noteWatchers ) {
       if ( !currentNotes.has( note ) ) {
         watcher.stop();
         noteWatchers.delete( note );
+
         if ( canTrack() ) {
           pendingNotes.add( watcher.id );
         }
       }
     }
+
     for ( const note of currentNotes ) {
       if ( noteWatchers.has( note ) ) {
         continue;
       }
+
       const watcher = {
         id: note.id,
         stop: watch( note, () => {
           if ( canTrack() ) {
-            // Retain the old identity too if a caller replaces an ID in place.
+            // retain the old identity too if a caller replaces an ID in place
             pendingNotes.add( watcher.id );
             pendingNotes.add( note.id );
+
             if ( !batchDepth ) {
               publish();
             }
           }
+
           watcher.id = note.id;
         }, { deep: true, flush: 'sync' })
       };
+
       noteWatchers.set( note, watcher );
+
       if ( canTrack() ) {
         pendingNotes.add( note.id );
       }
@@ -93,27 +107,33 @@ export function createVaultChangeTracker(
 
   reconcileNotes();
   pendingNotes.clear();
+
   const stopNotes = watch( () => vault.notes, () => batch( () => {
     if ( canTrack() ) {
       pendingFields.add( 'notes' );
     }
-    // Observe membership only here; a body edit traverses just its own note.
-    // Reconcile even during hydration so old objects cannot dirty the new vault.
+
+    // observe membership only here; a body edit traverses just its own note
+    // reconcile even during hydration so old objects cannot dirty the new vault
     reconcileNotes();
   }), { deep: 1, flush: 'sync' });
+
   const stopFields = ( Object.keys( vault ) as ( keyof VaultData )[])
     .filter( ( field ) => field !== 'notes' )
     .map( ( field ) => watch( () => vault[ field ], () => {
       if ( !canTrack() ) {
         return;
       }
+
       pendingFields.add( field );
-      // Folder edits can change descendant paths without changing note objects.
+
+      // folder edits can change descendant paths without changing note objects
       if ( field === 'folders' ) {
         for ( const note of vault.notes ) {
           pendingNotes.add( note.id );
         }
       }
+
       if ( !batchDepth ) {
         publish();
       }
@@ -135,18 +155,20 @@ export function createVaultChangeTracker(
         || [ ...fields.keys(), ...pendingFields ].some( ( field ) => !NAVIGATION_FIELDS.has( field ) );
     },
     capture() {
-      // An explicit save inside a batch must include changes already made.
+      // an explicit save inside a batch must include changes already made
       publish();
 
       return { version, noteIds: [ ...notes.keys() ], fields: [ ...fields.keys() ] };
     },
     acknowledge( targetVersion: number ): void {
       savedVersion = Math.max( savedVersion, targetVersion );
+
       for ( const [ id, changedAt ] of notes ) {
         if ( changedAt <= targetVersion ) {
           notes.delete( id );
         }
       }
+
       for ( const [ field, changedAt ] of fields ) {
         if ( changedAt <= targetVersion ) {
           fields.delete( field );
@@ -173,13 +195,14 @@ export function createVaultChangeTracker(
 export function normalizeNote( note: Note ): Note {
   let content = note.content;
   const storedTags = normalizeTags( Array.isArray( note.tags ) ? note.tags : []);
-  // Older browser notes and seed data stored control edits only in the tag array.
-  // An explicit source field, including an empty one, takes precedence.
+
+  // older browser notes and seed data stored control edits only in the tag array
+  // an explicit source field, including an empty one, takes precedence
   if ( storedTags.length && !hasFrontmatterTags( content ) ) {
     try {
       content = updateFrontmatterTags( content, storedTags );
     } catch {
-      // Preserve legacy metadata when unfinished frontmatter cannot be migrated.
+      // preserve legacy metadata when unfinished frontmatter cannot be migrated
       return { ...note, relativePath: note.relativePath ?? '', tags: storedTags };
     }
   }
@@ -203,15 +226,17 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       .filter( ( snippet ) => snippet.builtIn )
       .map( ( snippet ) => [ snippet.id, snippet ])
   );
+
   const snippets = ( Array.isArray( input.snippets )
     ? input.snippets
     : fallback.snippets
   ).map( ( snippet ) => {
     const current = currentBuiltInSnippets.get( snippet.id );
+
     if ( snippet.builtIn && current ) {
-      // Only fields still matching their bundled baseline receive app updates.
-      // For older vaults, recognize exact shipped definitions; preserve anything
-      // else rather than guessing which parts the user changed.
+      // only fields still matching their bundled baseline receive app updates
+      // for older vaults, recognize exact shipped definitions; preserve anything
+      // else rather than guessing which parts the user changed
       const baseline = validSnippetDefaults( snippet.builtInDefaults )
         ? snippet.builtInDefaults
         : [ current, ...legacyBuiltInSnippets ].find( ( candidate ) =>
@@ -220,10 +245,13 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
           && candidate.description === snippet.description
           && candidate.css === snippet.css
         );
+
       return {
         ...snippet,
         name: baseline && snippet.name === baseline.name ? current.name : snippet.name,
-        description: baseline && snippet.description === baseline.description ? current.description : snippet.description,
+        description: baseline && snippet.description === baseline.description
+          ? current.description
+          : snippet.description,
         css: baseline && snippet.css === baseline.css ? current.css : snippet.css,
         builtInDefaults: {
           name: current.name,
@@ -240,16 +268,19 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
     && notes.some( ( note ) => note.id === input.activeNoteId )
     ? input.activeNoteId
     : notes[ 0 ]?.id ?? null;
+
   const recentNoteIds = normalizeRecentNoteIds(
     input.recentNoteIds,
     notes,
     activeNoteId
   );
+
   const selectedFolderId = normalizeFolderSelection(
     input.selectedFolderId,
     notes,
     recentNoteIds
   );
+
   const embeddedImages = Array.isArray( input.embeddedImages )
     ? input.embeddedImages.filter( ( image ) =>
       image
@@ -258,6 +289,7 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       && typeof image.mediaType === 'string'
     )
     : [];
+
   const imageFiles = Array.isArray( input.imageFiles )
     ? input.imageFiles.filter( ( image ) =>
       image
@@ -266,7 +298,9 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       && typeof image.mediaType === 'string'
     )
     : [];
+
   const imageEmbedSettings = normalizeAssetEmbedSettings( input.imageEmbedSettings );
+
   const embeddedAttachments = Array.isArray( input.embeddedAttachments )
     ? input.embeddedAttachments.filter( ( attachment ) =>
       attachment
@@ -279,6 +313,7 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       && typeof attachment.openingDisabled === 'boolean'
     )
     : [];
+
   const attachmentFiles = Array.isArray( input.attachmentFiles )
     ? input.attachmentFiles.filter( ( attachment ) =>
       attachment
@@ -291,6 +326,7 @@ export function normalizeVault( input: Partial<VaultData> ): VaultData {
       && typeof attachment.openingDisabled === 'boolean'
     )
     : [];
+
   const attachmentEmbedSettings = normalizeAssetEmbedSettings(
     input.attachmentEmbedSettings
   );
@@ -321,6 +357,7 @@ function validSnippetDefaults( value: unknown ): value is BuiltInSnippetDefaults
   if ( !value || typeof value !== 'object' ) {
     return false;
   }
+
   const defaults = value as Partial<BuiltInSnippetDefaults>;
 
   return typeof defaults.name === 'string'
@@ -348,6 +385,7 @@ export function errorMessage( error: unknown, fallback: string ): string {
   if ( typeof error === 'string' && error.trim() ) {
     return error;
   }
+
   if ( error instanceof Error && error.message.trim() ) {
     return error.message;
   }
@@ -370,6 +408,7 @@ export function safeStorageGet( key: string ): string | null {
   if ( typeof localStorage === 'undefined' ) {
     return null;
   }
+
   try {
     return localStorage.getItem( key );
   } catch {
@@ -381,10 +420,11 @@ export function safeStorageSet( key: string, value: string ): void {
   if ( typeof localStorage === 'undefined' ) {
     return;
   }
+
   try {
     localStorage.setItem( key, value );
   } catch {
-    // Local preferences are non-critical when browser storage is unavailable.
+    // local preferences are non-critical when browser storage is unavailable
   }
 }
 
@@ -417,6 +457,7 @@ function normalizeAssetEmbedSettings(
     folderPath?: unknown;
     location?: string;
   } | undefined;
+
   if ( legacySettings?.location === 'specified-folder-mirrored' ) {
     return {
       location: 'specified-folder',
@@ -425,6 +466,7 @@ function normalizeAssetEmbedSettings(
         : ''
     };
   }
+
   if (
     value?.location === 'note-folder'
     || value?.location === 'specified-folder'
@@ -446,6 +488,7 @@ export function normalizeFolderSelection(
   if ( selection === 'recent' && recentNoteIds.length ) {
     return 'recent';
   }
+
   if ( selection === 'favorites' && notes.some( ( note ) => note.pinned ) ) {
     return 'favorites';
   }
@@ -460,6 +503,7 @@ export function normalizeRecentNoteIds(
 ): string[] {
   const noteIds = new Set( notes.map( ( note ) => note.id ) );
   const recentNoteIds: string[] = [];
+
   const addNote = ( id: unknown ): void => {
     if (
       typeof id === 'string'
@@ -472,6 +516,7 @@ export function normalizeRecentNoteIds(
   };
 
   addNote( activeNoteId );
+
   if ( Array.isArray( value ) ) {
     value.forEach( addNote );
   }

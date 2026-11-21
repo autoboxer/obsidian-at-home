@@ -15,6 +15,7 @@ export function splitLeadingFrontmatter(
   markdown: string
 ): EditableMarkdownDocument {
   const bodyStart = leadingFrontmatterEnd( markdown );
+
   if ( bodyStart === undefined ) {
     return {
       body: markdown,
@@ -51,20 +52,25 @@ export function markdownBodyStart( prefix: string, body: string ): number {
 export function leadingFrontmatterEnd( markdown: string ): number | undefined {
   const opening = readSourceLine( markdown, 0 );
   const openingSource = opening.source.replace( /^\u{feff}/u, '' ).trimEnd();
+
   if ( openingSource !== '---' || !opening.terminated ) {
     return undefined;
   }
 
   let lineStart = opening.end;
+
   while ( lineStart <= markdown.length ) {
     const line = readSourceLine( markdown, lineStart );
     const source = line.source.trimEnd();
+
     if ( source === '---' || source === '...' ) {
       return line.end;
     }
+
     if ( !line.terminated ) {
       return undefined;
     }
+
     lineStart = line.end;
   }
 
@@ -74,6 +80,7 @@ export function leadingFrontmatterEnd( markdown: string ): number | undefined {
 function readSourceLine( markdown: string, from: number ): SourceLine {
   for ( let index = from; index < markdown.length; index += 1 ) {
     const character = markdown[ index ];
+
     if ( character === '\n' ) {
       return {
         end: index + 1,
@@ -81,6 +88,7 @@ function readSourceLine( markdown: string, from: number ): SourceLine {
         terminated: true
       };
     }
+
     if ( character === '\r' ) {
       return {
         end: markdown[ index + 1 ] === '\n' ? index + 2 : index + 1,

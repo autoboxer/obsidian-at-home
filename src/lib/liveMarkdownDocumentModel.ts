@@ -35,6 +35,7 @@ export function liveMarkdownDocumentModelForText(
   document: Text
 ): LiveMarkdownDocumentModel {
   const cached = documentModelCache.get( document );
+
   if ( cached ) {
     return cached;
   }
@@ -42,6 +43,7 @@ export function liveMarkdownDocumentModelForText(
   const value = document.toString();
   const blocks = parseLiveMarkdownBlocks( value );
   const tables = parseLiveMarkdownTables( value, blocks );
+
   const model: LiveMarkdownDocumentModel = {
     blocks,
     tableCellCaretEnds: new Set( tables.flatMap( ( table ) =>
@@ -53,6 +55,7 @@ export function liveMarkdownDocumentModelForText(
     ) ),
     tables
   };
+
   documentModelCache.set( document, model );
 
   return model;

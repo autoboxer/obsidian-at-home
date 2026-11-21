@@ -63,6 +63,7 @@ export function addConstruct(
   options: LiveConstructOptions = {}
 ): void {
   const nonemptySyntax = syntax.filter( ( range ) => range.from < range.to );
+
   if ( !nonemptySyntax.length ) {
     return;
   }

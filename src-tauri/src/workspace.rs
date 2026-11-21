@@ -49,6 +49,8 @@ const STATE_VERSION: u32 = 4;
 const EDITOR_POSITIONS_VERSION: u32 = 1;
 const REGISTRY_VERSION: u32 = 1;
 const TRANSACTION_VERSION: u32 = 6;
+
+// cap individual reads and total loaded text before allocating document contents
 const MAX_NOTE_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const MAX_ATTACHMENT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -59,21 +61,25 @@ const MAX_WARNINGS: usize = 200;
 const MAX_PATH_COMPONENTS: usize = 120;
 const MAX_TRANSACTION_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EDITOR_POSITIONS_BYTES: u64 = 32 * 1024 * 1024;
+
+// allow six bytes per JSON-escaped content byte, plus space for metadata
 const MAX_RECENTLY_DELETED_SNAPSHOT_BYTES: u64 = MAX_NOTE_BYTES * 6 + 1024 * 1024;
 const MAX_RECENTLY_DELETED_BYTES: u64 = MAX_TOTAL_NOTE_BYTES;
 const MAX_RECENTLY_DELETED_NOTES: usize = MAX_NOTES;
+
+// revisions cross the JavaScript bridge and must remain exactly representable
 const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
 const RECENTLY_DELETED_RETENTION_MILLIS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+// bound lock acquisition while leaving an acquired transaction free to finish safely
 const STORAGE_LOCK_WAIT: Duration = Duration::from_secs(5);
 const STORAGE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 static WORKSPACE_IO_LOCK: Mutex<()> = Mutex::new(());
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-// Keep filesystem work and lock waits off both the native event loop and the
-// async executor. Each operation retains its existing lock/transaction scopes;
-// no lock guard crosses an await, and dropping the caller does not cancel a
-// started write partway through its recovery protocol.
+// run filesystem work off event loops, with all locks owned by the blocking task
+// started writes finish their recovery protocol even if the caller drops
 pub(crate) async fn run_vault_io<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -325,7 +331,7 @@ pub struct WorkspaceLoad {
     pub editor_positions_revision: Option<String>,
     pub editor_positions_writable: bool,
     pub warnings: Vec<String>,
-    // Verified disk snapshot before the loader's metadata reconciliation.
+    // verified disk snapshot before the loader's metadata reconciliation
     pub source_revision: u64,
     pub revision: u64,
 }

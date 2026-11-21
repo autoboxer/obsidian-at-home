@@ -1,11 +1,11 @@
 use super::*;
 use std::io::Read;
 
-/// Reads an Obsidian vault without modifying it.
+/// reads an Obsidian vault without modifying it
 ///
-/// Markdown is returned byte-for-byte as UTF-8 text, and safe asset paths are
+/// markdown is returned byte-for-byte as UTF-8 text, and safe asset paths are
 /// inventoried for a later confirmed copy. Frontmatter is only inspected to infer a
-/// display title and tags; the caller receives the original content unchanged.
+/// display title and tags; the caller receives the original content unchanged
 #[tauri::command]
 pub async fn import_obsidian_vault(path: String) -> Result<ImportResult, String> {
     run_vault_io(move || {

@@ -4,6 +4,7 @@ const RESERVED_WORKSPACE_FOLDERS = new Set([
   '.obsidian-at-home',
   '.trash'
 ]);
+
 const WINDOWS_RESERVED_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 
 export const VAULT_IMAGE_DRAG_MIME = 'application/x-obsidian-at-home-image';
@@ -22,12 +23,14 @@ export function utf8ByteLength( value: string ): number {
 
 export function validateAssetFolderPath( input: string ): ValidatedAssetFolderPath {
   const value = input.trim().replace( /^\/+|\/+$/g, '' );
+
   if ( !value ) {
     return {
       error: 'Enter a folder inside the vault.',
       value
     };
   }
+
   if ( value.includes( '\\' ) ) {
     return {
       error: 'Use forward slashes between folders.',
@@ -36,14 +39,18 @@ export function validateAssetFolderPath( input: string ): ValidatedAssetFolderPa
   }
 
   const components = value.split( '/' );
+
   if ( components.length > 120 ) {
     return { error: 'The folder path has too many levels.', value };
   }
+
   for ( const component of components ) {
     const normalized = component.trim();
+
     if ( !normalized || normalized === '.' || normalized === '..' ) {
       return { error: 'The folder path cannot contain empty, . or .. segments.', value };
     }
+
     if (
       utf8ByteLength( normalized ) > 180
       || normalized.endsWith( '.' )
@@ -76,7 +83,9 @@ export function resolveMarkdownImagePath(
   if ( !destination || destination.includes( '#' ) || destination.includes( '?' ) ) {
     return undefined;
   }
+
   const decoded = decodeMarkdownImageDestination( destination );
+
   if (
     !decoded
     || decoded.startsWith( '//' )
@@ -87,13 +96,16 @@ export function resolveMarkdownImagePath(
   ) {
     return undefined;
   }
+
   const parts = decoded.startsWith( '/' )
     ? []
     : noteRelativePath.split( '/' ).slice( 0, -1 );
+
   for ( const component of decoded.replace( /^\/+/, '' ).split( '/' ) ) {
     if ( !component || component === '.' ) {
       continue;
     }
+
     if ( component === '..' ) {
       if ( !parts.pop() ) {
         return undefined;
@@ -122,6 +134,7 @@ export function isSupportedImageFileName( fileName: string ): boolean {
 
 export function imageMediaTypeForPath( path: string ): string {
   const extension = path.split( /[?#]/, 1 )[ 0 ]?.split( '.' ).at( -1 )?.toLocaleLowerCase();
+
   switch ( extension ) {
     case 'avif': return 'image/avif';
     case 'bmp': return 'image/bmp';

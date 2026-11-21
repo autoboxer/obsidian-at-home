@@ -11,8 +11,8 @@ pub(in crate::workspace) fn read_workspace_image(
     if stored_state.is_none() && state_file_was_present && asset_id.is_some() {
         return Err("Workspace metadata is unreadable or newer than this app.".to_owned());
     }
-    // Reading an explicit Markdown path needs no metadata write or stable-ID
-    // lookup. Keep those images visible in a read-only vault as well.
+    // reading an explicit Markdown path needs no metadata write or stable-ID
+    // lookup. Keep those images visible in a read-only vault as well
     let mut state = stored_state.unwrap_or_default();
     let valid_asset_id = asset_id.filter(|id| is_valid_asset_id(id));
     let tracked_asset_id = valid_asset_id.filter(|id| {

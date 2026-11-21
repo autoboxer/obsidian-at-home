@@ -1,7 +1,4 @@
-import {
-  relocateWorkspaceAttachment,
-  relocateWorkspaceImage
-} from '../services/native';
+import { relocateWorkspaceAttachment, relocateWorkspaceImage } from '../services/native';
 import type {
   VaultAttachmentFile,
   VaultImageFile,
@@ -73,18 +70,23 @@ export function createVaultAssetOperations(
     requestedFileName: string
   ): Promise<boolean> {
     const fileName = requestedFileName.trim();
+
     if ( !isSafeVaultImageFileName( fileName ) ) {
       notify( 'Enter a safe image file name with a supported extension', 'warning' );
 
       return false;
     }
+
     const targetRelativePath = targetFolderPath
       ? `${ targetFolderPath }/${ fileName }`
       : fileName;
+
     if ( targetRelativePath === image.relativePath ) {
       return false;
     }
+
     const targetKey = targetRelativePath.toLocaleLowerCase();
+
     if ( vaultState.imageFiles.some( ( candidate ) =>
       candidate.relativePath.toLocaleLowerCase() === targetKey
       && candidate.relativePath.toLocaleLowerCase() !== image.relativePath.toLocaleLowerCase()
@@ -93,6 +95,7 @@ export function createVaultAssetOperations(
 
       return false;
     }
+
     if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
       notify( 'Image files can be reorganized in the desktop app', 'warning' );
 
@@ -103,10 +106,12 @@ export function createVaultAssetOperations(
       if ( !( await flushVault() ) ) {
         return false;
       }
+
       const currentImage = vaultState.imageFiles.find( ( candidate ) =>
         ( image.assetId && candidate.assetId === image.assetId )
         || candidate.relativePath.toLocaleLowerCase() === image.relativePath.toLocaleLowerCase()
       );
+
       if ( !currentImage ) {
         notify( 'That image can no longer be moved', 'warning' );
 
@@ -114,6 +119,7 @@ export function createVaultAssetOperations(
       }
 
       const assetId = currentImage.assetId || createId( 'image' );
+
       const noteUpdates = vaultState.notes.flatMap( ( note ): WorkspaceImageNoteUpdate[] => {
         const content = rewriteVaultImageReferences(
           vaultState,
@@ -142,8 +148,10 @@ export function createVaultAssetOperations(
           noteUpdates,
           vaultSession.revision
         );
+
         applyRelocatedImageResult( result, noteUpdates );
         uiState.imageRefreshToken += 1;
+
         notify(
           targetFolderPath
             ? `Moved image to ${ targetFolderPath }`
@@ -154,8 +162,10 @@ export function createVaultAssetOperations(
         return true;
       } catch ( error ) {
         const message = errorMessage( error, 'The image could not be moved.' );
+
         vaultSession.error = message;
         vaultSession.conflict = isRevisionConflict( message );
+
         notify( message, 'warning' );
 
         return false;
@@ -168,29 +178,37 @@ export function createVaultAssetOperations(
     noteUpdates: WorkspaceImageNoteUpdate[]
   ): void {
     const updatesById = new Map( noteUpdates.map( ( update ) => [ update.noteId, update.content ]) );
+
     applyVaultMutation( () => {
       for ( const note of vaultState.notes ) {
         const content = updatesById.get( note.id );
+
         if ( content !== undefined ) {
           note.content = content;
           note.updatedAt = Date.now();
         }
       }
+
       const oldPathKey = result.previousRelativePath.toLocaleLowerCase();
+
       const oldFileIndex = vaultState.imageFiles.findIndex( ( candidate ) =>
         candidate.assetId === result.image.id
         || candidate.relativePath.toLocaleLowerCase() === oldPathKey
       );
+
       if ( oldFileIndex >= 0 ) {
         vaultState.imageFiles.splice( oldFileIndex, 1 );
       }
+
       const oldEmbeddedIndex = vaultState.embeddedImages.findIndex( ( candidate ) =>
         candidate.id === result.image.id
         || candidate.relativePath.toLocaleLowerCase() === oldPathKey
       );
+
       if ( oldEmbeddedIndex >= 0 ) {
         vaultState.embeddedImages.splice( oldEmbeddedIndex, 1 );
       }
+
       vaultState.embeddedImages.push( result.image );
       upsertWorkspaceImageFile({
         assetId: result.image.id,
@@ -246,6 +264,7 @@ export function createVaultAssetOperations(
 
       return false;
     }
+
     if ( vaultSession.backend !== 'native' || !vaultSession.path ) {
       notify( 'Attachment files can be reorganized in the desktop app', 'warning' );
 
@@ -256,35 +275,46 @@ export function createVaultAssetOperations(
       if ( !( await flushVault() ) ) {
         return false;
       }
+
       const currentAttachment = resolveCurrentVaultAttachment( attachment );
+
       if ( !currentAttachment ) {
         notify( 'That attachment could not be uniquely found in the vault', 'warning' );
 
         return false;
       }
+
       const currentFileName = currentAttachment.relativePath.split( '/' ).at( -1 )
         || 'Attachment';
+
       const fileName = relocation.kind === 'rename'
         ? relocation.fileName
         : currentFileName;
+
       const targetFolder = relocation.kind === 'move' && relocation.targetFolderId
         ? vaultState.folders.find( ( folder ) => folder.id === relocation.targetFolderId )
         : null;
+
       if ( relocation.kind === 'move' && relocation.targetFolderId && !targetFolder ) {
         notify( 'That destination folder could not be found', 'warning' );
 
         return false;
       }
+
       const targetFolderPath = relocation.kind === 'rename'
         ? currentAttachment.relativePath.split( '/' ).slice( 0, -1 ).join( '/' )
         : folderPath( targetFolder?.id ?? null );
+
       const targetRelativePath = targetFolderPath
         ? `${ targetFolderPath }/${ fileName }`
         : fileName;
+
       if ( targetRelativePath === currentAttachment.relativePath ) {
         return false;
       }
+
       const targetKey = targetRelativePath.toLocaleLowerCase();
+
       if ( vaultState.attachmentFiles.some( ( candidate ) =>
         candidate.relativePath.toLocaleLowerCase() === targetKey
         && candidate.relativePath.toLocaleLowerCase()
@@ -296,6 +326,7 @@ export function createVaultAssetOperations(
       }
 
       const assetId = currentAttachment.assetId || createId( 'attachment' );
+
       const noteUpdates = vaultState.notes.flatMap( ( note ): WorkspaceAttachmentNoteUpdate[] => {
         const content = rewriteVaultAttachmentReferences(
           vaultState,
@@ -324,8 +355,10 @@ export function createVaultAssetOperations(
           noteUpdates,
           vaultSession.revision
         );
+
         applyRelocatedAttachmentResult( result, noteUpdates );
         uiState.attachmentRefreshToken += 1;
+
         notify(
           relocation.kind === 'rename'
             ? `Renamed attachment to ${ fileName }`
@@ -338,8 +371,10 @@ export function createVaultAssetOperations(
         return true;
       } catch ( error ) {
         const message = errorMessage( error, 'The attachment could not be renamed or moved.' );
+
         vaultSession.error = message;
         vaultSession.conflict = isRevisionConflict( message );
+
         notify( message, 'warning' );
 
         return false;
@@ -367,29 +402,37 @@ export function createVaultAssetOperations(
     noteUpdates: WorkspaceAttachmentNoteUpdate[]
   ): void {
     const updatesById = new Map( noteUpdates.map( ( update ) => [ update.noteId, update.content ]) );
+
     applyVaultMutation( () => {
       for ( const note of vaultState.notes ) {
         const content = updatesById.get( note.id );
+
         if ( content !== undefined ) {
           note.content = content;
           note.updatedAt = Date.now();
         }
       }
+
       const oldPathKey = result.previousRelativePath.toLocaleLowerCase();
+
       const oldFileIndex = vaultState.attachmentFiles.findIndex( ( candidate ) =>
         candidate.assetId === result.attachment.id
         || candidate.relativePath.toLocaleLowerCase() === oldPathKey
       );
+
       if ( oldFileIndex >= 0 ) {
         vaultState.attachmentFiles.splice( oldFileIndex, 1 );
       }
+
       const oldEmbeddedIndex = vaultState.embeddedAttachments.findIndex( ( candidate ) =>
         candidate.id === result.attachment.id
         || candidate.relativePath.toLocaleLowerCase() === oldPathKey
       );
+
       if ( oldEmbeddedIndex >= 0 ) {
         vaultState.embeddedAttachments.splice( oldEmbeddedIndex, 1 );
       }
+
       vaultState.embeddedAttachments.push( result.attachment );
       upsertWorkspaceAttachmentFile({
         assetId: result.attachment.id,
@@ -406,13 +449,16 @@ export function createVaultAssetOperations(
     if ( !canEditVault.value ) {
       return;
     }
+
     applyVaultMutation( () => {
       const index = vaultState.embeddedImages.findIndex( ( image ) => image.id === result.image.id );
+
       if ( index >= 0 ) {
         vaultState.embeddedImages.splice( index, 1, result.image );
       } else {
         vaultState.embeddedImages.push( result.image );
       }
+
       upsertWorkspaceImageFile({
         assetId: result.image.id,
         relativePath: result.image.relativePath,
@@ -429,15 +475,18 @@ export function createVaultAssetOperations(
     if ( !canEditVault.value ) {
       return;
     }
+
     applyVaultMutation( () => {
       const index = vaultState.embeddedAttachments.findIndex(
         ( attachment ) => attachment.id === result.attachment.id
       );
+
       if ( index >= 0 ) {
         vaultState.embeddedAttachments.splice( index, 1, result.attachment );
       } else {
         vaultState.embeddedAttachments.push( result.attachment );
       }
+
       upsertWorkspaceAttachmentFile({
         assetId: result.attachment.id,
         relativePath: result.attachment.relativePath,

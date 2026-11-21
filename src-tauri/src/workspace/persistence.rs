@@ -405,7 +405,7 @@ pub(super) fn persist_loaded_workspace(
     baseline: &[RevisionEntry],
     warnings: &mut WarningCollector,
 ) -> Result<u64, String> {
-    // Check before writing so reconciled metadata cannot replace an external edit.
+    // check before writing so reconciled metadata cannot replace an external edit
     let revision = verify_workspace_load_revision(root, baseline, None)?;
     let mut written_state = None;
     let mut state_is_current = false;
@@ -443,11 +443,11 @@ pub(super) fn persist_loaded_workspace(
     }
 
     if state_is_current && written_state.is_none() {
-        // Recovery snapshots are outside the vault revision. Without a metadata
-        // write, the already verified revision still describes the loaded bytes.
+        // recovery snapshots are outside the vault revision. Without a metadata
+        // write, the already verified revision still describes the loaded bytes
         return Ok(revision);
     }
-    // Only the metadata bytes we wrote may differ from the loaded snapshot.
+    // only the metadata bytes we wrote may differ from the loaded snapshot
     verify_workspace_load_revision(root, baseline, written_state.as_ref())
 }
 
@@ -464,7 +464,7 @@ struct WorkspaceSaveOutcome {
 }
 
 impl WorkspaceChanges {
-    // Only changed bodies are materialized. Omitted fields retain stored values.
+    // only changed bodies are materialized. Omitted fields retain stored values
     fn as_vault(&self, state: &WorkspaceState) -> VaultData {
         VaultData {
             name: self.name.clone().unwrap_or_else(|| state.name.clone()),
@@ -519,12 +519,12 @@ pub(super) fn save_workspace_changes(
         None,
         None,
     )
-    // Return the effective persisted name for Recents without rereading the vault.
+    // return the effective persisted name for Recents without rereading the vault
     .map(|outcome| (outcome.result, outcome.name))
 }
 
-// Preferences/navigation have no note plans, backups, or document transactions.
-// Keep content-based revision checks: a same-size external edit is still a conflict.
+// preferences/navigation have no note plans, backups, or document transactions
+// keep content-based revision checks: a same-size external edit is still a conflict
 fn save_workspace_metadata(
     root: &Path,
     vault: &VaultData,
@@ -1135,9 +1135,9 @@ fn save_workspace_update(
                 "The vault was saved, but its recovery snapshot could not be finalized. Reopen the vault before editing again. {error}"
             )
         })?;
-        // The state file is the commit boundary. Persist the same fact in the
+        // the state file is the commit boundary. Persist the same fact in the
         // manifest before cleanup so an undeletable old transaction can never
-        // be mistaken for an uncommitted save after a later transaction.
+        // be mistaken for an uncommitted save after a later transaction
         manifest.phase = TransactionPhase::Committed;
         let transaction_was_finalized =
             match write_transaction_manifest(&transaction_root, &manifest) {
@@ -1308,8 +1308,8 @@ pub(super) fn build_note_write_plans(
             None => "",
         };
         let old_relative_path = old_state.note_paths.get(&note.id).cloned();
-        // New imports may retain either Markdown extension. Only the extension
-        // is a hint: the validated folder and title still determine the path.
+        // new imports may retain either Markdown extension. Only the extension
+        // is a hint: the validated folder and title still determine the path
         let extension = old_relative_path
             .as_deref()
             .or(Some(note.relative_path.as_str()))
@@ -1387,7 +1387,7 @@ pub(super) fn build_note_write_plans(
             }
             None => None,
         };
-        // Restored snapshots must retain their source even though their files are new.
+        // restored snapshots must retain their source even though their files are new
         let allow_tag_initialization = old_relative_path.is_none() && preferred_new_path.is_none();
         let content = content_with_requested_tags(note, allow_tag_initialization)?;
         if content.len() as u64 > MAX_NOTE_BYTES {
@@ -1575,8 +1575,8 @@ pub(super) fn scan_workspace_files_with_limits(
         let fingerprint = if let Some(bytes) = &note_bytes {
             Some(fingerprint_bytes(bytes))
         } else if markdown {
-            // Skipped notes still belong to the snapshot. Hash them without
-            // retaining their bytes or exceeding the editor's loading limits.
+            // skipped notes still belong to the snapshot. Hash them without
+            // retaining their bytes or exceeding the editor's loading limits
             Some(fingerprint_regular_file(entry.path())?.ok_or_else(workspace_load_changed)?)
         } else {
             None
@@ -1725,8 +1725,8 @@ impl WorkspaceStateRead {
 }
 
 pub(super) fn require_workspace_write_access(root: &Path) -> Result<(), String> {
-    // Re-read native metadata rather than trusting a previously loaded access
-    // mode: another app may have changed it since this window opened.
+    // re-read native metadata rather than trusting a previously loaded access
+    // mode: another app may have changed it since this window opened
     match read_workspace_state_snapshot(root, &mut WarningCollector::default()).access() {
         WorkspaceAccess::ReadWrite => Ok(()),
         WorkspaceAccess::ReadOnly { reason } => Err(format!("This vault is read-only. {reason}")),
@@ -1830,9 +1830,9 @@ pub(super) fn write_loaded_workspace_state_bytes(
     .map_err(|error| format!("Could not write workspace metadata: {error}"))
 }
 
-// Keep this guard alive across loading, revision checks, writes, and recovery.
-// The separate lock file survives metadata replacement and coordinates app
-// processes; it cannot prevent other tools from directly changing private metadata.
+// keep this guard alive across loading, revision checks, writes, and recovery
+// the separate lock file survives metadata replacement and coordinates app
+// processes; it cannot prevent other tools from directly changing private metadata
 pub(super) fn lock_workspace_files(root: &Path) -> Result<File, String> {
     let file = open_workspace_lock_file(root)?;
     lock_storage_file(

@@ -3,6 +3,7 @@ import { leadingFrontmatterEnd } from './frontmatter';
 import { parseInlineMarkdownLinkAt } from './markdownLinks';
 
 const ASSET_FRAGMENT_PREFIX = 'oah-asset=';
+
 const IMAGE_EXTENSIONS = new Set([
   'avif',
   'bmp',
@@ -12,7 +13,9 @@ const IMAGE_EXTENSIONS = new Set([
   'png',
   'webp'
 ]);
+
 const MARKDOWN_EXTENSIONS = new Set([ 'markdown', 'md' ]);
+
 const EXECUTABLE_EXTENSIONS = new Set([
   'app',
   'appimage',
@@ -104,22 +107,24 @@ export interface FormatMarkdownAttachmentOptions {
 }
 
 export interface ParseMarkdownAttachmentsOptions {
-  /** Accept an extensionless link only when the caller can identify its destination as a file. */
+  /** accept an extensionless link only when the caller can identify its destination as a file */
   acceptExtensionless?: ( destination: string ) => boolean;
 }
 
-/** Parse a portable local, non-image attachment link. */
+/** parse a portable local, non-image attachment link */
 export function parseMarkdownAttachmentAt(
   source: string,
   start: number,
   options: ParseMarkdownAttachmentsOptions = {}
 ): ParsedMarkdownAttachment | undefined {
   const link = parseInlineMarkdownLinkAt( source, start );
+
   if ( !link ) {
     return undefined;
   }
 
   const asset = splitAssetFragment( link.destination );
+
   if ( !isPortableAttachmentDestination(
     asset.destination,
     Boolean( asset.assetId ),
@@ -135,23 +140,26 @@ export function parseMarkdownAttachmentAt(
   };
 }
 
-/** Return only attachment links recognized by the editor's Markdown parser. */
+/** return only attachment links recognized by the editor's Markdown parser */
 export function parseMarkdownAttachments(
   source: string,
   options: ParseMarkdownAttachmentsOptions = {}
 ): ParsedMarkdownAttachment[] {
   const bodyStart = leadingFrontmatterEnd( source ) ?? 0;
   const attachments: ParsedMarkdownAttachment[] = [];
+
   markdownLanguage.parser.parse( source ).iterate({
     enter( node ) {
       if ( node.name !== 'Link' || node.from < bodyStart ) {
         return;
       }
+
       const attachment = parseMarkdownAttachmentAt(
         source,
         node.from,
         options
       );
+
       if ( attachment && attachment.end + 1 === node.to ) {
         attachments.push( attachment );
       }
@@ -161,15 +169,17 @@ export function parseMarkdownAttachments(
   return attachments;
 }
 
-/** Format an ordinary Markdown link with optional stable attachment identity. */
+/** format an ordinary Markdown link with optional stable attachment identity */
 export function formatMarkdownAttachment(
   options: FormatMarkdownAttachmentOptions
 ): string {
   const label = escapeAttachmentLabel( options.label, Boolean( options.inTable ) );
   const path = encodeMarkdownDestination( options.destination );
+
   const destination = options.assetId
     ? `${ path }#${ ASSET_FRAGMENT_PREFIX }${ encodeURIComponent( options.assetId ) }`
     : path;
+
   const title = options.title
     ? ` "${ escapeMarkdownTitle( options.title ) }"`
     : '';
@@ -177,16 +187,18 @@ export function formatMarkdownAttachment(
   return `[${ label }](${ destination }${ title })`;
 }
 
-/** Resolve an attachment path relative to the Markdown file that contains it. */
+/** resolve an attachment path relative to the Markdown file that contains it */
 export function relativeAttachmentDestination(
   noteRelativePath: string,
   attachmentRelativePath: string
 ): string {
   const noteParts = splitPortablePath( noteRelativePath );
   const attachmentParts = splitPortablePath( attachmentRelativePath );
+
   noteParts.pop();
 
   let shared = 0;
+
   while (
     shared < noteParts.length
     && shared < attachmentParts.length
@@ -250,11 +262,13 @@ function isPortableAttachmentDestination(
   }
 
   let decoded: string;
+
   try {
     decoded = decodeURIComponent( destination );
   } catch {
     return false;
   }
+
   if (
     !decoded
     || decoded.startsWith( '//' )
@@ -267,6 +281,7 @@ function isPortableAttachmentDestination(
   }
 
   const extension = attachmentExtension( destination );
+
   if ( IMAGE_EXTENSIONS.has( extension ) || MARKDOWN_EXTENSIONS.has( extension ) ) {
     return false;
   }
@@ -282,17 +297,20 @@ function splitAssetFragment( destination: string ): {
 } {
   const marker = `#${ ASSET_FRAGMENT_PREFIX }`;
   const markerIndex = destination.lastIndexOf( marker );
+
   if ( markerIndex < 0 ) {
     return { destination };
   }
 
   const encodedId = destination.slice( markerIndex + marker.length );
   let assetId: string;
+
   try {
     assetId = decodeURIComponent( encodedId );
   } catch {
     return { destination };
   }
+
   if ( !/^[A-Za-z0-9_-]{1,180}$/.test( assetId ) ) {
     return { destination };
   }
@@ -306,6 +324,7 @@ function splitAssetFragment( destination: string ): {
 function attachmentFileName( destination: string ): string {
   const path = destination.split( /[?#]/u, 1 )[ 0 ] ?? '';
   const encodedName = path.split( '/' ).filter( Boolean ).at( -1 ) ?? '';
+
   try {
     return decodeURIComponent( encodedName );
   } catch {
@@ -316,6 +335,7 @@ function attachmentFileName( destination: string ): string {
 function attachmentExtension( destination: string ): string {
   const fileName = attachmentFileName( destination );
   const extension = fileName.match( /\.([^.]+)$/u )?.[ 1 ] ?? '';
+
   return extension.toLocaleLowerCase();
 }
 
@@ -323,18 +343,23 @@ function attachmentIconLabel( extension: string, mediaType?: string ): string {
   if ( mediaType === 'application/pdf' || extension === 'pdf' ) {
     return 'PDF';
   }
+
   if ( isArchive( extension, mediaType ) ) {
     return extension === 'zip' || mediaType === 'application/zip' ? 'ZIP' : 'ARC';
   }
+
   if ( isWordDocument( extension, mediaType ) ) {
     return 'DOC';
   }
+
   if ( isSpreadsheet( extension, mediaType ) ) {
     return 'XLS';
   }
+
   if ( isPresentation( extension, mediaType ) ) {
     return 'PPT';
   }
+
   if ( mediaType?.startsWith( 'audio/' ) || mediaType?.startsWith( 'video/' ) ) {
     return mediaType.startsWith( 'audio/' ) ? 'AUD' : 'VID';
   }
@@ -352,30 +377,39 @@ function attachmentTypeLabel(
       ? `${ extension.toLocaleUpperCase() } executable · Opening disabled`
       : 'Executable file · Opening disabled';
   }
+
   if ( mediaType === 'application/pdf' || extension === 'pdf' ) {
     return 'PDF document';
   }
+
   if ( isArchive( extension, mediaType ) ) {
     return 'Archive';
   }
+
   if ( isWordDocument( extension, mediaType ) ) {
     return 'Word document';
   }
+
   if ( isSpreadsheet( extension, mediaType ) ) {
     return 'Spreadsheet';
   }
+
   if ( isPresentation( extension, mediaType ) ) {
     return 'Presentation';
   }
+
   if ( mediaType?.startsWith( 'audio/' ) ) {
     return 'Audio';
   }
+
   if ( mediaType?.startsWith( 'video/' ) ) {
     return 'Video';
   }
+
   if ( mediaType?.startsWith( 'text/' ) ) {
     return 'Text file';
   }
+
   if ( extension === 'json' || mediaType === 'application/json' ) {
     return 'JSON file';
   }
@@ -389,6 +423,7 @@ function formatAttachmentSize( value: number | undefined ): string {
   if ( !Number.isSafeInteger( value ) || value === undefined || value < 0 ) {
     return 'Size unavailable';
   }
+
   if ( value < 1_024 ) {
     return `${ value } B`;
   }
@@ -396,10 +431,12 @@ function formatAttachmentSize( value: number | undefined ): string {
   const units = [ 'KB', 'MB', 'GB', 'TB' ];
   let size = value / 1_024;
   let unit = units[ 0 ]!;
+
   for ( let index = 1; index < units.length && size >= 1_024; index += 1 ) {
     size /= 1_024;
     unit = units[ index ]!;
   }
+
   const precision = size < 10 ? 1 : 0;
 
   return `${ size.toFixed( precision ) } ${ unit }`;

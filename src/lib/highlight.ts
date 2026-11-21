@@ -120,6 +120,7 @@ for ( const option of CODE_LANGUAGE_OPTIONS ) {
   }
 
   LANGUAGE_ALIASES.set( option.value, option.highlightAs );
+
   for ( const alias of option.aliases ) {
     LANGUAGE_ALIASES.set( alias, option.highlightAs );
   }
@@ -135,7 +136,7 @@ export function findCodeLanguageOption(
   );
 }
 
-/** Highlight only explicitly supported top-level fence languages */
+/** highlight only explicitly supported top-level fence languages */
 export function highlightCode(
   code: string,
   language: string
@@ -143,10 +144,13 @@ export function highlightCode(
   if ( code.length > MAX_HIGHLIGHT_CHARS ) {
     return undefined;
   }
+
   const normalized = LANGUAGE_ALIASES.get( language.toLowerCase() );
+
   if ( !normalized ) {
     return undefined;
   }
+
   try {
     return hljs.highlight( code, { language: normalized, ignoreIllegals: true }).value;
   } catch {
@@ -161,7 +165,9 @@ export function highlightCodeRanges(
   if ( code.length > MAX_HIGHLIGHT_CHARS ) {
     return [];
   }
+
   const normalized = LANGUAGE_ALIASES.get( language.toLowerCase() );
+
   if ( !normalized ) {
     return [];
   }
@@ -171,6 +177,7 @@ export function highlightCodeRanges(
       language: normalized,
       ignoreIllegals: true
     });
+
     return parseHighlightRanges( result.value, code );
   } catch {
     return [];
@@ -192,6 +199,7 @@ function parseHighlightRanges(
       openRanges.push({ className: match[ 1 ], from: plainText.length });
     } else if ( match[ 0 ] === '</span>' ) {
       const range = openRanges.pop();
+
       if ( range && range.from < plainText.length ) {
         ranges.push({ ...range, to: plainText.length });
       }

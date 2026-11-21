@@ -3,12 +3,7 @@ import { EditorState, Transaction } from '@codemirror/state';
 import { liveMarkdownListGroups, nextOrderedListNumber } from './liveMarkdown';
 import { liveMarkdownDocumentModelForText } from './liveMarkdownDocumentModel';
 import type { Extension, Text } from '@codemirror/state';
-import type {
-  LiveMarkdownBlock,
-  LiveMarkdownListGroup,
-  LiveMarkdownRange,
-  LiveMarkdownTextEdit
-} from './liveMarkdown';
+import type { LiveMarkdownBlock, LiveMarkdownListGroup, LiveMarkdownRange, LiveMarkdownTextEdit } from './liveMarkdown';
 
 interface PreviousOrderedItem {
   block: LiveMarkdownBlock;
@@ -30,8 +25,8 @@ export function orderedListRenumberingExtension(
 
     const edits = orderedListRenumberingEdits( transaction );
 
-    // Compose the repair with the original edit, mapping every selection and
-    // effect through it and retaining one history entry.
+    // compose the repair with the original edit, mapping every selection and
+    // effect through it and retaining one history entry
     return edits.length
       ? [ transaction, { changes: edits, sequential: true }]
       : transaction;
@@ -40,11 +35,13 @@ export function orderedListRenumberingExtension(
 
 function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTextEdit[] {
   const ranges: { fromA: number; toA: number; fromB: number; toB: number }[] = [];
+
   transaction.changes.iterChangedRanges( ( fromA, toA, fromB, toB ) => {
     ranges.push({ fromA, toA, fromB, toB });
   });
   const before = transaction.startState.doc;
   const after = transaction.newDoc;
+
   if ( !ranges.some( ( range ) =>
     before.lineAt( range.fromA ).number !== before.lineAt( range.toA ).number ||
     after.lineAt( range.fromB ).number !== after.lineAt( range.toB ).number ||
@@ -57,20 +54,24 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
   const { groups: previousGroups } = orderedListModelForText( before );
   const { blocks: nextBlocks, groups: nextGroups } = orderedListModelForText( after );
   const previousByLine = new Map<number, PreviousOrderedItem>();
+
   for ( const group of previousGroups ) {
     for ( const [ index, block ] of group.items.entries() ) {
-      // Include exact line boundaries: a removed item must not become the
-      // identity of the following line when its former position maps there.
+      // include exact line boundaries: a removed item must not become the
+      // identity of the following line when its former position maps there
       if ( ranges.some( ( range ) => range.fromA <= block.from && range.toA >= block.to ) ) {
         continue;
       }
+
       const position = transaction.changes.mapPos( block.content.from, 1 );
       const line = after.lineAt( position );
+
       if ( !previousByLine.has( line.from ) ) {
         previousByLine.set( line.from, { block, group, index });
       }
     }
   }
+
   const survivors = new Set( nextGroups.flatMap( ( group ) =>
     group.items.flatMap( ( block ) => {
       const previous = previousByLine.get( block.from );
@@ -78,21 +79,26 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
       return previous ? [ previous.block ] : [];
     })
   ) );
+
   const edits: LiveMarkdownTextEdit[] = [];
+
   for ( const group of nextGroups ) {
     const previousItems = group.items.map( ( block ) => previousByLine.get( block.from ) );
     const previousGroup = previousItems.find( ( item ) => item )?.group;
-    // A newly pasted, independent list has no existing siblings to repair.
+
+    // a newly pasted, independent list has no existing siblings to repair
     if ( !previousGroup ) {
       continue;
     }
+
     const first = group.items[ 0 ]!;
     const previousFirst = previousItems[ 0 ];
     const parent = listGroupParentItem( group );
     const previousParent = listGroupParentItem( previousGroup );
-    // A sibling can become the new parent without changing the remaining
+
+    // a sibling can become the new parent without changing the remaining
     // children's indentation. Moving their existing parent with them keeps
-    // the same list, even when the whole subtree changes indentation.
+    // the same list, even when the whole subtree changes indentation
     const newlyNested = Boolean( parent && previousFirst && (
       !previousParent ||
       ranges.some( ( range ) =>
@@ -100,6 +106,7 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
       ) ||
       after.lineAt( transaction.changes.mapPos( previousParent.content.from, 1 ) ).from !== parent.from
     ) );
+
     const affected = previousGroup.items.length !== group.items.length ||
       newlyNested ||
       previousItems.some( ( previous, index ) => !previous ||
@@ -107,17 +114,20 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
         sourceListNumber( previous.block ) !== sourceListNumber( group.items[ index ]! ) ||
         previous.block.list!.indentation !== group.indentation
       );
+
     if ( !affected ) {
       continue;
     }
 
-    // Removing an item can leave a blank separator before its old siblings.
-    // Close that gap before treating the remainder as an independent list.
-    // Merely inserting a blank, or editing an already separate list, keeps its
-    // chosen starting number.
+    // removing an item can leave a blank separator before its old siblings
+    // close that gap before treating the remainder as an independent list
+    // merely inserting a blank, or editing an already separate list, keeps its
+    // chosen starting number
     let removedBeforeFirst: number | undefined;
+
     for ( let index = ( previousFirst?.index ?? 0 ) - 1; index >= 0; index -= 1 ) {
       const item = previousGroup.items[ index ]!;
+
       if (
         survivors.has( item ) ||
         !ranges.some( ( range ) => range.fromA <= item.list!.marker.from && range.toA >= item.to ) ||
@@ -125,23 +135,27 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
       ) {
         break;
       }
+
       removedBeforeFirst = index;
     }
+
     const oldFirstIndex = removedBeforeFirst ?? 0;
     const oldFirst = previousGroup.items[ oldFirstIndex ]!;
     const oldStart = transaction.changes.mapPos( oldFirst.from, -1 );
+
     const deletedStart = ( removedBeforeFirst !== undefined || previousFirst && previousFirst.index > 0 ) &&
       !survivors.has( oldFirst ) && oldStart <= first.from &&
       nextBlocks
         .filter( ( block ) => block.from >= oldStart && block.from < first.from )
         .every( ( block ) => block.type === 'text' ||
-          // Only a genuinely empty line can be left by removing an item;
-          // tables and standalone literal blocks also use the blank type.
+          // only a genuinely empty line can be left by removing an item;
+          // tables and standalone literal blocks also use the blank type
           ( removedBeforeFirst !== undefined && block.type === 'blank' && !block.source.trim() ) ||
           ( block.list && block.list.indentation > group.indentation )
         );
+
     const repeatedOnes = previousGroup.items.every( ( block ) => sourceListNumber( block ) === 1 );
-    // Repeated `1.` markers represent successive ordinals in this sibling group.
+    // repeated `1.` markers represent successive ordinals in this sibling group
     const oldNumber = repeatedOnes ? oldFirstIndex + 1 : sourceListNumber( oldFirst );
     let number = newlyNested ? 1 : deletedStart ? oldNumber : sourceListNumber( first );
     let repairing = Boolean( deletedStart || newlyNested );
@@ -152,11 +166,13 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
       const marker = block.list!.marker;
       const sourceNumber = sourceListNumber( block );
       const numberChanged = previous && sourceListNumber( previous.block ) !== sourceNumber;
+
       const numberTyped = !previous && ranges.some( ( range ) =>
         range.fromB <= marker.to && range.toB >= marker.from &&
         before.lineAt( range.fromA ).number === before.lineAt( range.toA ).number &&
         after.lineAt( range.fromB ).number === after.lineAt( range.toB ).number
       );
+
       if ( numberChanged || numberTyped ) {
         number = sourceNumber;
         repairing = true;
@@ -164,13 +180,17 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
         previous.index !== previousIndex || previous.block.list!.indentation !== group.indentation ) {
         repairing = true;
       }
+
       if ( !repairing ) {
         number = repeatedOnes ? index + 1 : sourceNumber;
       }
+
       if ( sourceNumber !== number ) {
         edits.push({ from: marker.from, to: marker.to - 1, insert: String( number ) });
       }
+
       number = nextOrderedListNumber( number );
+
       if ( previous?.group === previousGroup ) {
         previousIndex = previous.index + 1;
       }
@@ -182,6 +202,7 @@ function orderedListRenumberingEdits( transaction: Transaction ): LiveMarkdownTe
 
 function listGroupParentItem( group: LiveMarkdownListGroup ): LiveMarkdownBlock | undefined {
   const items = group.parent?.items ?? [];
+
   for ( let index = items.length - 1; index >= 0; index -= 1 ) {
     if ( items[ index ]!.from < group.items[ 0 ]!.from ) {
       return items[ index ];
@@ -194,10 +215,11 @@ function listGroupParentItem( group: LiveMarkdownListGroup ): LiveMarkdownBlock 
 function orderedListModelForText( document: Text ): { blocks: LiveMarkdownBlock[]; groups: LiveMarkdownListGroup[] } {
   const { blocks, tables } = liveMarkdownDocumentModelForText( document );
   const tableLines = new Set( tables.flatMap( ( table ) => table.lineNumbers ) );
-  // The line model intentionally accepts loose list indentation. The Markdown
-  // grammar distinguishes literal examples in nested fences and indented code.
-  // It also recognizes underline-style headings that separate sibling groups.
+  // the line model intentionally accepts loose list indentation. The Markdown
+  // grammar distinguishes literal examples in nested fences and indented code
+  // it also recognizes underline-style headings that separate sibling groups
   const protectedRanges: ( LiveMarkdownRange & { insideList: boolean })[] = [];
+
   markdownLanguage.parser.parse( document.toString() ).iterate({
     enter( node ) {
       if ( node.name === 'FencedCode' || node.name === 'CodeBlock' ||
@@ -205,9 +227,11 @@ function orderedListModelForText( document: Text ): { blocks: LiveMarkdownBlock[
         node.name === 'ProcessingInstructionBlock' ||
         node.name === 'SetextHeading1' || node.name === 'SetextHeading2' ) {
         let parent = node.node.parent;
+
         while ( parent && parent.name !== 'ListItem' ) {
           parent = parent.parent;
         }
+
         protectedRanges.push({ from: node.from, to: node.to, insideList: Boolean( parent ) });
 
         return false;
@@ -215,17 +239,20 @@ function orderedListModelForText( document: Text ): { blocks: LiveMarkdownBlock[
     }
   });
   let protectedIndex = 0;
+
   const editableBlocks = blocks.map( ( block ) => {
     if ( tableLines.has( block.lineNumber ) ) {
       return { ...block, list: undefined, type: 'blank' as const };
     }
+
     while ( protectedIndex < protectedRanges.length && protectedRanges[ protectedIndex ]!.to <= block.from ) {
       protectedIndex += 1;
     }
+
     const range = protectedRanges[ protectedIndex ];
 
-    // Standalone blocks separate lists. Blocks belonging to a list item keep
-    // its sequence intact, including blank lines inside the literal content.
+    // standalone blocks separate lists. Blocks belonging to a list item keep
+    // its sequence intact, including blank lines inside the literal content
     return range && range.from < block.to && block.from < range.to
       ? { ...block, list: undefined, type: range.insideList ? 'text' as const : 'blank' as const }
       : block;

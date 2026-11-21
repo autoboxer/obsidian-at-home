@@ -70,7 +70,7 @@ pub(in crate::workspace) fn delete_workspace_asset_with_hook(
     if recovery_updates.len() > MAX_RECENTLY_DELETED_NOTES {
         return Err("Too many recovery snapshots were included in the deletion.".to_owned());
     }
-    // Refuse to discard files if a recovery snapshot could not be inspected.
+    // refuse to discard files if a recovery snapshot could not be inspected
     for (id, entry) in &old_state.recently_deleted_notes {
         read_indexed_recently_deleted_note(root, id, entry)?;
     }
@@ -267,7 +267,7 @@ pub(in crate::workspace) fn delete_workspace_asset_with_hook(
             &next_bytes,
             workspace_state_revision_fingerprint(&baseline).as_ref(),
         ) {
-            // A directory-sync failure can follow a successful metadata replacement.
+            // a directory-sync failure can follow a successful metadata replacement
             if fingerprint_regular_file(&workspace_state_path(root))?
                 != Some(next_fingerprint.clone())
             {
@@ -297,7 +297,7 @@ pub(in crate::workspace) fn delete_workspace_asset_with_hook(
             ));
         }
     };
-    // Metadata is the commit point. Later failures must never undo committed data.
+    // metadata is the commit point. Later failures must never undo committed data
     if let Err(error) = checkpoint("committed") {
         warnings.push(error);
     }

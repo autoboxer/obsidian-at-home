@@ -334,8 +334,8 @@ pub(in crate::workspace) fn cancel_external_file_upload(upload_id: &str) -> Resu
     Ok(uploads.remove(upload_id).is_some())
 }
 
-// Read the destination without consuming the transfer or holding its map lock
-// while waiting for the vault. Cancellation remains available during that wait.
+// read the destination without consuming the transfer or holding its map lock
+// while waiting for the vault. Cancellation remains available during that wait
 pub(in crate::workspace) fn external_file_upload_root(upload_id: &str) -> Result<PathBuf, String> {
     lock_external_file_uploads()?
         .get(upload_id)

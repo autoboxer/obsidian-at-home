@@ -801,7 +801,7 @@ fn parse_yaml_scalar(value: &str) -> String {
         return output;
     }
 
-    // In an unquoted YAML scalar, a hash preceded by whitespace starts a comment.
+    // in an unquoted YAML scalar, a hash preceded by whitespace starts a comment
     let without_comment = value
         .find(" #")
         .map(|index| &value[..index])

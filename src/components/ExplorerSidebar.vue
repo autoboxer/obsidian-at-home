@@ -53,6 +53,7 @@ const sidebarWidth = ref( MIN_EXPLORER_WIDTH );
 const maximumSidebarWidth = ref( MAX_EXPLORER_WIDTH );
 const minimumSidebarWidth = computed( () => Math.min( MIN_EXPLORER_WIDTH, maximumSidebarWidth.value ) );
 const resizePreview = ref<number>();
+
 const sidebarStyle = computed( () => {
   const width = resizePreview.value ?? appearanceState.explorerWidth;
 
@@ -62,33 +63,43 @@ const sidebarStyle = computed( () => {
     ...( width === null ? {} : { '--explorer-width': `${ width }px` })
   };
 });
+
 let sidebarObserver: ResizeObserver | undefined;
 let resizeDrag: { pointerId: number; startX: number; startWidth: number; scale: number } | undefined;
 let revealFrame: number | undefined;
 
 const vaultMonogram = computed( () => {
   const words = vaultState.name.trim().split( /\s+/ ).filter( Boolean );
+
   if ( !words.length ) {
     return 'VA';
   }
+
   if ( words.length === 1 ) {
     return Array.from( words[ 0 ]).slice( 0, 2 ).join( '' ).toLocaleUpperCase();
   }
 
-  return `${ Array.from( words[ 0 ])[ 0 ] ?? '' }${ Array.from( words.at( -1 ) ?? '' )[ 0 ] ?? '' }`.toLocaleUpperCase();
+  return `${ Array.from( words[ 0 ])[ 0 ] ?? '' }${
+    Array.from( words.at( -1 ) ?? '' )[ 0 ] ?? ''
+  }`.toLocaleUpperCase();
 });
 
 const topTags = computed( () => {
   const counts = new Map<string, { tag: string; count: number }>();
+
   for ( const note of vaultState.notes ) {
     const noteTags = new Set<string>();
+
     for ( const tag of note.tags ) {
       const key = normalizeTagKey( tag );
+
       if ( noteTags.has( key ) ) {
         continue;
       }
+
       noteTags.add( key );
       const existing = counts.get( key );
+
       if ( existing ) {
         existing.count += 1;
       } else {
@@ -127,6 +138,7 @@ const visibleImages = computed( () => {
   if ( vaultState.selectedFolderId !== 'all' ) {
     return [];
   }
+
   const filter = uiState.noteFilter.trim().toLocaleLowerCase();
 
   return [ ...vaultState.imageFiles ]
@@ -142,6 +154,7 @@ const visibleAttachments = computed( () => {
   if ( vaultState.selectedFolderId !== 'all' ) {
     return [];
   }
+
   const filter = uiState.noteFilter.trim().toLocaleLowerCase();
 
   return [ ...vaultState.attachmentFiles ]
@@ -159,9 +172,11 @@ const emptyTreeMessage = computed( () => {
   if ( vaultState.selectedFolderId === 'recent' ) {
     return 'No recent notes';
   }
+
   if ( vaultState.selectedFolderId === 'favorites' ) {
     return 'No favorite notes';
   }
+
   if ( uiState.noteFilter.trim() ) {
     return 'No matching notes';
   }
@@ -173,6 +188,7 @@ const treeAriaLabel = computed( () => {
   if ( vaultState.selectedFolderId === 'recent' ) {
     return 'Recent files';
   }
+
   if ( vaultState.selectedFolderId === 'favorites' ) {
     return 'Favorite files';
   }
@@ -184,6 +200,7 @@ const emptyTreeIcon = computed( () => {
   if ( vaultState.selectedFolderId === 'recent' ) {
     return 'clock';
   }
+
   if ( vaultState.selectedFolderId === 'favorites' ) {
     return 'star';
   }
@@ -217,6 +234,7 @@ watch(
     if ( !requestId ) {
       return;
     }
+
     rootExpanded.value = true;
     scheduleRevealTarget( requestId );
   },
@@ -237,6 +255,7 @@ onBeforeUnmount( () => {
   sidebarObserver?.disconnect();
   window.removeEventListener( 'resize', updateSidebarLayout );
   window.removeEventListener( 'blur', cancelSidebarResize );
+
   if ( revealFrame !== undefined ) {
     window.cancelAnimationFrame( revealFrame );
   }
@@ -245,42 +264,54 @@ onBeforeUnmount( () => {
 function observeSidebarLayout(): void {
   sidebarObserver?.disconnect();
   const workspace = sidebar.value?.parentElement;
+
   if ( !workspace ) {
     return;
   }
+
   sidebarObserver?.observe( workspace );
+
   for ( const panel of workspace.children ) {
     sidebarObserver?.observe( panel );
   }
+
   updateSidebarLayout();
 }
 
 function updateSidebarLayout(): void {
   const panel = sidebar.value;
   const workspace = panel?.parentElement;
+
   if ( !panel || !workspace ) {
     return;
   }
+
   sidebarWidth.value = panel.offsetWidth;
+
   if ( resizeHandle.value && getComputedStyle( resizeHandle.value ).display === 'none' ) {
     cancelSidebarResize();
   }
 
-  // Measure the actual layout so snippets and context-panel visibility participate
-  // in the limit. Temporary constraints must not overwrite the preferred width.
+  // measure the actual layout so snippets and context-panel visibility participate
+  // in the limit. Temporary constraints must not overwrite the preferred width
   let available = workspace.clientWidth;
+
   for ( const sibling of workspace.children ) {
     if ( !( sibling instanceof HTMLElement ) || sibling === panel ) {
       continue;
     }
+
     const style = getComputedStyle( sibling );
+
     if ( style.display === 'none' || style.position === 'absolute' || style.position === 'fixed' ) {
       continue;
     }
+
     available -= sibling.matches( '.editor-workspace, .recently-deleted-workspace' )
       ? Math.max( 320, parseFloat( style.minWidth ) || 0 )
       : sibling.offsetWidth;
   }
+
   maximumSidebarWidth.value = Math.max( 0, Math.min( MAX_EXPLORER_WIDTH, Math.floor( available ) ) );
 }
 
@@ -292,6 +323,7 @@ function startSidebarResize( event: PointerEvent ): void {
   if ( event.button !== 0 || !event.isPrimary || resizeDrag || !resizeHandle.value || !sidebar.value ) {
     return;
   }
+
   event.preventDefault();
   resizeHandle.value.setPointerCapture( event.pointerId );
   resizeDrag = {
@@ -308,23 +340,32 @@ function moveSidebarResize( event: PointerEvent ): void {
   if ( resizeDrag?.pointerId !== event.pointerId ) {
     return;
   }
+
   event.preventDefault();
+
   if ( event.clientX !== resizeDrag.startX || resizePreview.value !== undefined ) {
-    resizePreview.value = constrainSidebarWidth( resizeDrag.startWidth + ( event.clientX - resizeDrag.startX ) / resizeDrag.scale );
+    resizePreview.value = constrainSidebarWidth(
+      resizeDrag.startWidth + ( event.clientX - resizeDrag.startX ) / resizeDrag.scale
+    );
   }
 }
 
 function stopSidebarResize( cancel: boolean ): void {
   const drag = resizeDrag;
+
   if ( !drag ) {
     return;
   }
+
   resizeDrag = undefined;
+
   if ( !cancel && resizePreview.value !== undefined ) {
     setExplorerWidth( resizePreview.value );
   }
+
   resizePreview.value = undefined;
   document.documentElement.classList.remove( 'is-resizing-vault-panel' );
+
   if ( resizeHandle.value?.hasPointerCapture( drag.pointerId ) ) {
     resizeHandle.value.releasePointerCapture( drag.pointerId );
   }
@@ -354,10 +395,14 @@ function handleResizeKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( resizeDrag || event.altKey || event.ctrlKey || event.metaKey || event.isComposing ) {
     return;
   }
+
+  // hold Shift for coarser resizing; ordinary arrows allow fine adjustment
   const step = event.shiftKey ? 50 : 10;
+
   if ( event.key === 'Enter' ) {
     event.preventDefault();
     resetSidebarWidth();
@@ -373,14 +418,19 @@ function scheduleRevealTarget( requestId: number, attempt = 0 ): void {
   if ( revealFrame !== undefined ) {
     window.cancelAnimationFrame( revealFrame );
   }
+
   void nextTick( () => {
     revealFrame = window.requestAnimationFrame( () => {
       revealFrame = undefined;
+
       if ( requestId !== vaultTreeRevealTarget.requestId || !currentRevealTargetIsValid() ) {
         return;
       }
+
       const row = findRevealTargetRow();
+
       if ( !row ) {
+        // allow bounded layout frames for expanded ancestor folders to mount their rows
         if ( attempt < 12 ) {
           scheduleRevealTarget( requestId, attempt + 1 );
         } else {
@@ -389,7 +439,9 @@ function scheduleRevealTarget( requestId: number, attempt = 0 ): void {
 
         return;
       }
+
       const primary = row.querySelector<HTMLButtonElement>( '[data-vault-item-primary]' );
+
       primary?.focus({ preventScroll: true });
       row.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
     });
@@ -398,6 +450,7 @@ function scheduleRevealTarget( requestId: number, attempt = 0 ): void {
 
 function currentRevealTargetIsValid(): boolean {
   const kind = vaultTreeRevealTarget.kind;
+
   if ( !kind ) {
     return false;
   }
@@ -418,6 +471,7 @@ function findRevealTargetRow(): HTMLElement | undefined {
     if ( candidate.dataset.vaultItemKind !== vaultTreeRevealTarget.kind ) {
       return false;
     }
+
     if ( vaultTreeRevealTarget.assetId ) {
       return candidate.dataset.vaultItemAssetId === vaultTreeRevealTarget.assetId;
     }
@@ -430,6 +484,7 @@ function openFolderInput(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   folderInputOpen.value = true;
   nextTick( () => {
     folderField.value?.focus();
@@ -448,6 +503,7 @@ function submitFolder(): void {
     selectFolder( 'all' );
     rootExpanded.value = true;
   }
+
   folderName.value = '';
   folderInputOpen.value = false;
 }
@@ -465,6 +521,7 @@ function isTreeDrag( event: DragEvent ): boolean {
   if ( !canEditVault.value ) {
     return false;
   }
+
   const types = Array.from( event.dataTransfer?.types ?? []);
 
   return Boolean(
@@ -481,6 +538,7 @@ function isTreeDrag( event: DragEvent ): boolean {
 
 function isRootDropTarget( target: EventTarget | null, clientY: number ): boolean {
   const tree = fileTree.value;
+
   if ( !tree || vaultState.selectedFolderId === 'recent' || !( target instanceof Element )
     || target.closest( '.vault-tree-folder' ) ) {
     return false;
@@ -498,12 +556,15 @@ function handleRootDragOver( event: DragEvent ): void {
 
     return;
   }
+
   event.preventDefault();
   event.stopPropagation();
   rootDropInvalid.value = isInvalidRootFolderDrop();
+
   if ( event.dataTransfer ) {
     event.dataTransfer.dropEffect = rootDropInvalid.value ? 'none' : 'move';
   }
+
   rootDropActive.value = !rootDropInvalid.value;
 }
 
@@ -511,6 +572,7 @@ function handleRootDragLeave( event: DragEvent ): void {
   if ( isRootDropTarget( event.relatedTarget, event.clientY ) ) {
     return;
   }
+
   rootDropActive.value = false;
   rootDropInvalid.value = false;
 }
@@ -518,12 +580,16 @@ function handleRootDragLeave( event: DragEvent ): void {
 async function handleRootDrop( event: DragEvent ): Promise<void> {
   rootDropActive.value = false;
   const invalid = rootDropInvalid.value || isInvalidRootFolderDrop();
+
   rootDropInvalid.value = false;
+
   if ( !isRootDropTarget( event.target, event.clientY ) || !isTreeDrag( event ) ) {
     return;
   }
+
   event.preventDefault();
   event.stopPropagation();
+
   if ( invalid ) {
     treeDragState.noteId = null;
     treeDragState.folderId = null;
@@ -532,20 +598,26 @@ async function handleRootDrop( event: DragEvent ): Promise<void> {
 
     return;
   }
+
   const noteId = event.dataTransfer?.getData( NOTE_DRAG_MIME ).trim() || treeDragState.noteId;
   const folderId = event.dataTransfer?.getData( FOLDER_DRAG_MIME ).trim() || treeDragState.folderId;
+
   const imagePath = event.dataTransfer?.getData( VAULT_IMAGE_DRAG_MIME ).trim()
     || treeDragState.imagePath;
+
   const attachmentPath = event.dataTransfer?.getData( VAULT_ATTACHMENT_DRAG_MIME ).trim()
     || treeDragState.attachmentPath;
+
   const image = imagePath
     ? vaultState.imageFiles.find( ( candidate ) => candidate.relativePath === imagePath )
     : undefined;
+
   const attachment = attachmentPath
     ? vaultState.attachmentFiles.find( ( candidate ) =>
       candidate.relativePath === attachmentPath
     )
     : undefined;
+
   if ( attachment ) {
     await moveVaultAttachmentToFolder( attachment, null );
   } else if ( image ) {
@@ -555,6 +627,7 @@ async function handleRootDrop( event: DragEvent ): Promise<void> {
   } else if ( folderId ) {
     moveFolder( folderId, null );
   }
+
   treeDragState.noteId = null;
   treeDragState.folderId = null;
   treeDragState.imagePath = null;
@@ -566,22 +639,27 @@ function isInvalidRootFolderDrop(): boolean {
   if ( !canEditVault.value ) {
     return true;
   }
+
   if ( treeDragState.attachmentPath ) {
     const attachment = vaultState.attachmentFiles.find( ( candidate ) =>
       candidate.relativePath === treeDragState.attachmentPath
     );
+
     if ( attachment ) {
       return !attachment.relativePath.includes( '/' );
     }
   }
+
   if ( treeDragState.imagePath ) {
     const image = vaultState.imageFiles.find( ( candidate ) =>
       candidate.relativePath === treeDragState.imagePath
     );
+
     if ( image ) {
       return !image.relativePath.includes( '/' );
     }
   }
+
   if ( !treeDragState.folderId ) {
     return false;
   }
@@ -598,6 +676,7 @@ function openRootMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void {
     if ( !rootMenu.value || !rootMenuPosition.value ) {
       return;
     }
+
     rootMenuPosition.value = {
       x: Math.max( 8, Math.min( rootMenuPosition.value.x, window.innerWidth - rootMenu.value.offsetWidth - 8 ) ),
       y: Math.max( 8, Math.min( rootMenuPosition.value.y, window.innerHeight - rootMenu.value.offsetHeight - 8 ) )
@@ -608,6 +687,7 @@ function openRootMenu( event: Pick<MouseEvent, 'clientX' | 'clientY'> ): void {
 
 function closeRootMenu( restoreFocus = false ): void {
   rootMenuPosition.value = undefined;
+
   if ( restoreFocus ) {
     nextTick( () => rootButton.value?.focus() );
   }
@@ -617,6 +697,7 @@ function handleRootMenuFocusOut( event: FocusEvent ): void {
   if ( event.relatedTarget instanceof Node && rootMenu.value?.contains( event.relatedTarget ) ) {
     return;
   }
+
   closeRootMenu();
 }
 
@@ -628,8 +709,13 @@ function handleRootMenuKeydown( event: KeyboardEvent ): void {
 
     return;
   }
-  const items = Array.from( rootMenu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []);
+
+  const items = Array.from(
+    rootMenu.value?.querySelectorAll<HTMLButtonElement>( '[role="menuitem"]:not(:disabled)' ) ?? []
+  );
+
   const currentIndex = items.indexOf( document.activeElement as HTMLButtonElement );
+
   if (
     ( event.key === 'Tab' || ( event.key === 'Unidentified' && event.code === 'Tab' ) )
     && event.shiftKey
@@ -640,11 +726,14 @@ function handleRootMenuKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( !items.length || ![ 'ArrowDown', 'ArrowUp', 'Home', 'End' ].includes( event.key ) ) {
     return;
   }
+
   event.preventDefault();
   let nextIndex: number;
+
   if ( event.key === 'Home' ) {
     nextIndex = 0;
   } else if ( event.key === 'End' || ( event.key === 'ArrowUp' && currentIndex < 0 ) ) {
@@ -654,11 +743,13 @@ function handleRootMenuKeydown( event: KeyboardEvent ): void {
   } else {
     nextIndex = ( currentIndex - 1 + items.length ) % items.length;
   }
+
   items[ nextIndex ]?.focus();
 }
 
 function addRootNote(): void {
   closeRootMenu();
+
   if ( createNote( null ) ) {
     rootExpanded.value = true;
   }
@@ -671,6 +762,7 @@ function addRootFolder(): void {
 
 async function showRootInFolder(): Promise<void> {
   closeRootMenu( true );
+
   try {
     await showCurrentVaultInFolder();
   } catch {
@@ -682,12 +774,14 @@ function handleRootKeydown( event: KeyboardEvent ): void {
   if ( event.key === 'ContextMenu' || ( event.key === 'F10' && event.shiftKey ) ) {
     event.preventDefault();
     const bounds = rootButton.value?.getBoundingClientRect();
+
     if ( bounds ) {
       openRootMenu({ clientX: bounds.left, clientY: bounds.bottom });
     }
 
     return;
   }
+
   if ( event.key === 'ArrowRight' && !rootExpanded.value ) {
     event.preventDefault();
     rootExpanded.value = true;
@@ -705,13 +799,14 @@ function handleTreeKeydown( event: KeyboardEvent ): void {
       '.vault-tree-root-main, .vault-tree-folder-main, .vault-tree-note-main, .vault-tree-image-main, .vault-tree-attachment-main'
     )
   ) {
-    // Enter on a row is inert. Keep pointer focus from gaining an outline
-    // that resembles the filename input; actual keyboard navigation restores it.
+    // enter on a row is inert. Keep pointer focus from gaining an outline
+    // that resembles the filename input; actual keyboard navigation restores it
     event.preventDefault();
     event.stopPropagation();
 
     return;
   }
+
   treePointerFocus.value = false;
 }
 

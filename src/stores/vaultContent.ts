@@ -1,10 +1,5 @@
 import { computed, watch } from 'vue';
-import {
-  createNoteLinkRewriter,
-  normalizeWikiTarget,
-  wikiLinkCandidates,
-  type WikiLinkTarget
-} from '../lib/wikiLinks';
+import { createNoteLinkRewriter, normalizeWikiTarget, wikiLinkCandidates, type WikiLinkTarget } from '../lib/wikiLinks';
 import { parseFrontmatterTags, updateFrontmatterTags } from '../lib/frontmatterTags';
 import type { BuiltInSnippetDefaults, CssSnippet, Folder, Note, NoteTemplate } from '../types';
 import { cloneValue } from './vaultPersistence';
@@ -57,11 +52,14 @@ export function createVaultContent(
   const snippetVaultKey = computed( () => vaultSession.phase === 'ready'
     ? editorPositionVaultId( vaultSession.backend, vaultSession.path )
     : null );
+
   const snippetWorkspace = computed( () => snippetVaultKey.value
     ? snippetDraftWorkspaces.get( snippetVaultKey.value )
     : undefined );
+
   const notesById = computed( () => new Map( vaultState.notes.map( ( note ) => [ note.id, note ]) ) );
   const snippetsById = computed( () => new Map( vaultState.snippets.map( ( snippet ) => [ snippet.id, snippet ]) ) );
+
   const snippetLibrary = computed( () => [
     ...vaultState.snippets,
     ...Array.from( snippetWorkspace.value?.drafts.values() ?? [])
@@ -73,12 +71,15 @@ export function createVaultContent(
     [ snippetVaultKey, () => vaultState.snippets ],
     () => {
       const key = snippetVaultKey.value;
+
       if ( !key ) {
         return;
       }
+
       if ( !snippetDraftWorkspaces.has( key ) ) {
         snippetDraftWorkspaces.set( key, { activeId: null, drafts: new Map() });
       }
+
       reconcileSnippetDrafts( snippetDraftWorkspaces.get( key )! );
     },
     { immediate: true, deep: true }
@@ -108,10 +109,13 @@ export function createVaultContent(
 
   function snippetDraftConflict( id: string ): 'changed' | 'deleted' | null {
     const draft = snippetWorkspace.value?.drafts.get( id );
+
     if ( !draft || !draftIsDirty( draft ) ) {
       return null;
     }
+
     const saved = snippetsById.value.get( id );
+
     if ( !saved ) {
       return 'deleted';
     }
@@ -126,7 +130,9 @@ export function createVaultContent(
       if ( draft.saving ) {
         continue;
       }
+
       const saved = snippetsById.value.get( id );
+
       if ( saved && ( !draftIsDirty( draft ) || sameSnippetValues( draft.values, saved ) ) ) {
         draft.base = cloneValue( saved );
         Object.assign( draft.values, snippetValues( saved ) );
@@ -135,10 +141,16 @@ export function createVaultContent(
         workspace.drafts.delete( id );
       }
     }
-    if ( !workspace.activeId || ( !snippetsById.value.has( workspace.activeId ) && !workspace.drafts.has( workspace.activeId ) ) ) {
+
+    if (
+      !workspace.activeId ||
+      ( !snippetsById.value.has( workspace.activeId ) && !workspace.drafts.has( workspace.activeId ) )
+    ) {
       workspace.activeId = vaultState.snippets[ 0 ]?.id ?? workspace.drafts.keys().next().value ?? null;
     }
+
     const active = workspace.activeId ? snippetsById.value.get( workspace.activeId ) : undefined;
+
     if ( active && !workspace.drafts.has( active.id ) ) {
       workspace.drafts.set( active.id, newSnippetDraft( active ) );
     }
@@ -147,21 +159,26 @@ export function createVaultContent(
   function selectSnippet( id: string ): void {
     const workspace = snippetWorkspace.value;
     const saved = snippetsById.value.get( id );
+
     if ( !workspace || ( !saved && !workspace.drafts.has( id ) ) ) {
       return;
     }
+
     if ( saved && !workspace.drafts.has( id ) ) {
       workspace.drafts.set( id, newSnippetDraft( saved ) );
     }
+
     workspace.activeId = id;
   }
 
   function updateSnippetDraft( id: string, field: keyof BuiltInSnippetDefaults, value: string ): void {
     const workspace = snippetWorkspace.value;
     const draft = workspace?.drafts.get( id );
+
     if ( !workspace || !draft || !canEditVault.value || vaultSession.busy || draft.saving ) {
       return;
     }
+
     draft.values[ field ] = value;
     draft.error = null;
     reconcileSnippetDrafts( workspace );
@@ -169,21 +186,27 @@ export function createVaultContent(
 
   function discardSnippetDraft( id: string ): void {
     const workspace = snippetWorkspace.value;
+
     if ( !workspace || workspace.drafts.get( id )?.saving ) {
       return;
     }
+
     workspace.drafts.delete( id );
     reconcileSnippetDrafts( workspace );
   }
 
   function preserveNoteLinks( previousPaths: ReadonlyMap<string, string> ): void {
     const nextPaths = dependencies.noteLinkPaths();
+
     if ( vaultState.notes.every( ( note ) => previousPaths.get( note.id ) === nextPaths.get( note.id ) ) ) {
       return;
     }
+
     const rewrite = createNoteLinkRewriter( vaultState.notes, previousPaths, nextPaths );
+
     for ( const note of vaultState.notes ) {
       const content = rewrite( note );
+
       if ( content !== note.content ) {
         note.content = content;
         note.updatedAt = Date.now();
@@ -199,7 +222,9 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return undefined;
     }
+
     const now = Date.now();
+
     const note: Note = {
       id: createId( 'note' ),
       title: uniqueNoteTitle( vaultState, title?.trim() || 'Untitled note' ),
@@ -211,6 +236,7 @@ export function createVaultContent(
       createdAt: now,
       updatedAt: now
     };
+
     note.tags = parseFrontmatterTags( note.content );
     dependencies.batchChanges( () => {
       vaultState.notes.unshift( note );
@@ -219,8 +245,8 @@ export function createVaultContent(
       uiState.tool = 'notes';
       uiState.notesView = 'editor';
       uiState.noteFilter = '';
-      // Only unnamed blank-note creation asks for a title. Linked notes and
-      // templates already supply their own names and content.
+      // only unnamed blank-note creation asks for a title. Linked notes and
+      // templates already supply their own names and content
       uiState.noteTitleFocusId = title === undefined && content === undefined ? note.id : null;
     });
     dependencies.notify( 'New note created', 'success' );
@@ -230,23 +256,28 @@ export function createVaultContent(
 
   function createLinkedNote( link: WikiLinkTarget | string ): Note | undefined {
     const target = typeof link === 'string' ? normalizeWikiTarget( link ) : link.target;
+
     const candidates = wikiLinkCandidates(
       { target },
       vaultState.notes,
       dependencies.activeNote(),
       dependencies.noteLinkPaths()
     );
+
     if ( candidates.length === 1 ) {
       const existing = candidates[ 0 ]!;
+
       dependencies.selectNote( existing.id );
 
       return existing;
     }
+
     if ( candidates.length > 1 ) {
       dependencies.notify( `More than one note matches “${ target }”. Use the full file path in the link.`, 'warning' );
 
       return undefined;
     }
+
     if ( !canEditVault.value ) {
       dependencies.notify( `Could not find note “${ target }” in this read-only vault`, 'warning' );
 
@@ -254,7 +285,8 @@ export function createVaultContent(
     }
 
     const title = target.replace( /\.md$/i, '' );
-    // Creating a basename-only note would silently change an explicit destination.
+
+    // creating a basename-only note would silently change an explicit destination
     if (
       !title || target.includes( '/' ) || /\.markdown$/i.test( target )
       || safeNoteStem( title ) !== title
@@ -275,68 +307,87 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return false;
     }
+
     const note = notesById.value.get( id );
+
     if ( !note ) {
       return false;
     }
+
     let content = patch.content ?? note.content;
+
     if ( patch.tags !== undefined ) {
       try {
         content = updateFrontmatterTags( content, patch.tags );
       } catch ( error ) {
         const reason = error instanceof Error ? error.message : 'The tags could not be updated.';
+
         dependencies.notify( `${ reason } Edit the tags in Markdown source instead.`, 'warning' );
 
         return false;
       }
     }
+
     const locationChanged = (
       patch.title !== undefined && patch.title !== note.title
     ) || (
       patch.folderId !== undefined && patch.folderId !== note.folderId
     );
+
     const previousPaths = locationChanged ? dependencies.noteLinkPaths() : undefined;
+
     if ( previousPaths ) {
       const destination = projectedNoteRelativePath({
         ...note,
         title: patch.title ?? note.title,
         folderId: patch.folderId === undefined ? note.folderId : patch.folderId
       }, vaultState.folders, note.relativePath ).toLowerCase();
+
       const duplicateNote = vaultState.notes.some( ( candidate ) =>
         candidate.id !== id && previousPaths.get( candidate.id )?.toLowerCase() === destination
       );
+
       const duplicateFolder = vaultState.folders.some( ( folder ) =>
         folderPathFromFolders( folder.id, vaultState.folders ).toLowerCase() === destination
       );
+
       if ( duplicateNote || duplicateFolder ) {
         dependencies.notify( 'A file or folder with that name already exists there', 'warning' );
 
         return false;
       }
     }
+
     dependencies.batchChanges( () => {
       if ( locationChanged ) {
         dependencies.rememberNoteOriginalPath( note );
       }
+
       if ( patch.title !== undefined ) {
         note.title = patch.title;
       }
+
       if ( patch.content !== undefined || patch.tags !== undefined ) {
         note.content = content;
         const tags = parseFrontmatterTags( content );
+
         if ( tags.length !== note.tags.length || tags.some( ( tag, index ) => tag !== note.tags[ index ]) ) {
           note.tags = tags;
         }
       }
+
       if ( patch.folderId !== undefined ) {
         note.folderId = patch.folderId;
       }
+
       if ( patch.pinned !== undefined ) {
         note.pinned = patch.pinned;
       }
+
       if ( previousPaths ) {
         preserveNoteLinks( previousPaths );
       }
+
       note.updatedAt = Date.now();
     });
 
@@ -350,7 +401,9 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return false;
     }
+
     let note = vaultState.notes.find( ( candidate ) => candidate.id === noteId );
+
     if ( !note ) {
       dependencies.notify( 'Could not move that note', 'warning' );
 
@@ -360,25 +413,32 @@ export function createVaultContent(
     const folder = folderId === null
       ? null
       : vaultState.folders.find( ( candidate ) => candidate.id === folderId );
+
     if ( folderId !== null && !folder ) {
       dependencies.notify( 'That folder is no longer available', 'warning' );
 
       return false;
     }
+
     if ( note.folderId === folderId ) {
       return false;
     }
+
     const movingNoteStem = noteStemKey( note );
+
     const duplicateNote = vaultState.notes.some(
       ( candidate ) => candidate.id !== noteId
         && candidate.folderId === folderId
         && noteStemKey( candidate ) === movingNoteStem
     );
+
     const noteFileNames = noteFileNameKeys( note );
+
     const duplicateFolder = vaultState.folders.some(
       ( candidate ) => candidate.parentId === folderId
         && noteFileNames.has( folderNameKey( candidate.name ) )
     );
+
     if ( duplicateNote || duplicateFolder ) {
       dependencies.notify( 'A file with that name already exists there', 'warning' );
 
@@ -389,7 +449,9 @@ export function createVaultContent(
       if ( !( await dependencies.flushVault() ) ) {
         return false;
       }
+
       note = vaultState.notes.find( ( candidate ) => candidate.id === noteId );
+
       if ( !note?.relativePath ) {
         dependencies.notify( 'Save the note before moving it', 'warning' );
 
@@ -400,6 +462,7 @@ export function createVaultContent(
     if ( !updateNote( noteId, { folderId }) ) {
       return false;
     }
+
     if ( vaultSession.backend === 'native' && !( await dependencies.flushVault() ) ) {
       return false;
     }
@@ -411,6 +474,7 @@ export function createVaultContent(
 
   function togglePinned( id: string ): void {
     const note = notesById.value.get( id );
+
     if ( note ) {
       updateNote( id, { pinned: !note.pinned });
     }
@@ -423,10 +487,13 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return undefined;
     }
+
     const cleanName = name.trim().replace( /[\\/]/g, ' ' );
+
     if ( !cleanName ) {
       return undefined;
     }
+
     const duplicate = vaultState.folders.some(
       ( folder ) => folder.parentId === parentId
         && folderNameKey( folder.name ) === folderNameKey( cleanName )
@@ -434,6 +501,7 @@ export function createVaultContent(
       ( note ) => note.folderId === parentId
         && folderConflictsWithNote( cleanName, note )
     );
+
     if ( duplicate ) {
       dependencies.notify(
         'A file or folder with that name already exists here',
@@ -442,14 +510,17 @@ export function createVaultContent(
 
       return undefined;
     }
+
     const folder: Folder = {
       id: createId( 'folder' ),
       name: cleanName,
       parentId,
       createdAt: Date.now()
     };
+
     dependencies.batchChanges( () => {
       vaultState.folders.push( folder );
+
       if ( !isSmartFolderSelection( vaultState.selectedFolderId ) ) {
         vaultState.selectedFolderId = 'all';
       }
@@ -463,8 +534,10 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return;
     }
+
     const folder = vaultState.folders.find( ( candidate ) => candidate.id === id );
     const cleanName = name.trim().replace( /[\\/]/g, ' ' );
+
     if ( !folder || !cleanName || folder.name === cleanName ) {
       return;
     }
@@ -477,6 +550,7 @@ export function createVaultContent(
       ( note ) => note.folderId === folder.parentId
         && folderConflictsWithNote( cleanName, note )
     );
+
     if ( duplicate ) {
       dependencies.notify(
         'A file or folder with that name already exists here',
@@ -497,11 +571,13 @@ export function createVaultContent(
 
     const affectedFolders = new Set([ id, ...descendantFolderIds( vaultState, id ) ]);
     const previousPaths = dependencies.noteLinkPaths();
+
     for ( const note of vaultState.notes ) {
       if ( note.folderId && affectedFolders.has( note.folderId ) ) {
         dependencies.rememberNoteOriginalPath( note );
       }
     }
+
     dependencies.batchChanges( () => {
       folder.name = cleanName;
       preserveNoteLinks( previousPaths );
@@ -512,7 +588,9 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return false;
     }
+
     const folder = vaultState.folders.find( ( candidate ) => candidate.id === folderId );
+
     if ( !folder ) {
       dependencies.notify( 'Could not move that folder', 'warning' );
 
@@ -522,11 +600,13 @@ export function createVaultContent(
     const parent = parentId === null
       ? null
       : vaultState.folders.find( ( candidate ) => candidate.id === parentId );
+
     if ( parentId !== null && !parent ) {
       dependencies.notify( 'That folder is no longer available', 'warning' );
 
       return false;
     }
+
     if ( folder.parentId === parentId ) {
       return false;
     }
@@ -535,6 +615,7 @@ export function createVaultContent(
       folderId,
       ...descendantFolderIds( vaultState, folderId )
     ]);
+
     if ( parentId !== null && affectedFolders.has( parentId ) ) {
       dependencies.notify( 'A folder cannot be moved inside itself', 'warning' );
 
@@ -549,6 +630,7 @@ export function createVaultContent(
       ( note ) => note.folderId === parentId
         && folderConflictsWithNote( folder.name, note )
     );
+
     if ( duplicate ) {
       dependencies.notify(
         'A file or folder with that name already exists there',
@@ -568,11 +650,13 @@ export function createVaultContent(
     }
 
     const previousPaths = dependencies.noteLinkPaths();
+
     for ( const note of vaultState.notes ) {
       if ( note.folderId && affectedFolders.has( note.folderId ) ) {
         dependencies.rememberNoteOriginalPath( note );
       }
     }
+
     dependencies.batchChanges( () => {
       folder.parentId = parentId;
       preserveNoteLinks( previousPaths );
@@ -589,10 +673,13 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return;
     }
+
     const folder = vaultState.folders.find( ( candidate ) => candidate.id === id );
+
     if ( !folder ) {
       return;
     }
+
     if ( dependencies.folderContainsAssets( id ) ) {
       dependencies.notify(
         'Move contained assets before removing this folder',
@@ -601,17 +688,22 @@ export function createVaultContent(
 
       return;
     }
+
     const affectedFolders = new Set([ id, ...descendantFolderIds( vaultState, id ) ]);
+
     const children = vaultState.folders.filter(
       ( candidate ) => candidate.parentId === id
     );
+
     const destinationFolders = vaultState.folders.filter(
       ( candidate ) => candidate.id !== id
         && candidate.parentId === folder.parentId
     );
+
     const destinationNotes = vaultState.notes.filter(
       ( note ) => note.folderId === folder.parentId
     );
+
     const folderCollision = children.some( ( child ) => (
       destinationFolders.some(
         ( candidate ) => folderNameKey( candidate.name ) === folderNameKey( child.name )
@@ -619,6 +711,7 @@ export function createVaultContent(
         ( note ) => folderConflictsWithNote( child.name, note )
       )
     ) );
+
     const noteCollision = vaultState.notes
       .filter( ( note ) => note.folderId === id )
       .some( ( note ) => (
@@ -628,6 +721,7 @@ export function createVaultContent(
           ( candidate ) => folderConflictsWithNote( candidate.name, note )
         )
       ) );
+
     if ( folderCollision || noteCollision ) {
       dependencies.notify(
         'Move or rename conflicting items before removing this folder',
@@ -636,22 +730,29 @@ export function createVaultContent(
 
       return;
     }
+
     const previousPaths = dependencies.noteLinkPaths();
+
     dependencies.batchChanges( () => {
       for ( const child of children ) {
         child.parentId = folder.parentId;
       }
+
       for ( const note of vaultState.notes ) {
         if ( !note.folderId || !affectedFolders.has( note.folderId ) ) {
           continue;
         }
+
         dependencies.rememberNoteOriginalPath( note );
+
         if ( note.folderId === id ) {
           note.folderId = folder.parentId;
         }
       }
+
       vaultState.folders.splice( vaultState.folders.indexOf( folder ), 1 );
       preserveNoteLinks( previousPaths );
+
       if ( vaultState.selectedFolderId === id ) {
         vaultState.selectedFolderId = 'all';
       }
@@ -669,24 +770,31 @@ export function createVaultContent(
     const template = vaultState.templates.find(
       ( candidate ) => candidate.id === templateId
     );
+
     if ( !template ) {
       return undefined;
     }
+
     const now = new Date();
+
     const date = new Intl.DateTimeFormat( 'en', {
       month: 'long',
       day: 'numeric',
       year: 'numeric'
     }).format( now );
+
     const time = new Intl.DateTimeFormat( 'en', {
       hour: 'numeric',
       minute: '2-digit'
     }).format( now );
+
     const title = requestedTitle?.trim() || replaceTemplateTokens(
       template.titlePattern,
       { date, time, title: template.name }
     );
+
     const uniqueTitle = uniqueNoteTitle( vaultState, title || template.name );
+
     const content = replaceTemplateTokens(
       template.content,
       { date, time, title: uniqueTitle }
@@ -701,14 +809,17 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return undefined;
     }
+
     const existing = template.id
       ? vaultState.templates.find( ( candidate ) => candidate.id === template.id )
       : undefined;
+
     if ( existing ) {
       dependencies.batchChanges( () => Object.assign( existing, template ) );
 
       return existing;
     }
+
     const created: NoteTemplate = {
       id: createId( 'template' ),
       name: template.name.trim() || 'Untitled template',
@@ -718,6 +829,7 @@ export function createVaultContent(
       glyph: template.glyph || 'file-text',
       createdAt: Date.now()
     };
+
     vaultState.templates.push( created );
 
     return created;
@@ -729,14 +841,17 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return undefined;
     }
+
     const existing = snippet.id
       ? vaultState.snippets.find( ( candidate ) => candidate.id === snippet.id )
       : undefined;
+
     if ( existing ) {
       dependencies.batchChanges( () => Object.assign( existing, snippet ) );
 
       return existing;
     }
+
     const created: CssSnippet = {
       id: createId( 'snippet' ),
       name: snippet.name.trim() || 'Untitled snippet',
@@ -745,6 +860,7 @@ export function createVaultContent(
       enabled: snippet.enabled ?? true,
       createdAt: Date.now()
     };
+
     vaultState.snippets.push( created );
 
     return created;
@@ -754,9 +870,11 @@ export function createVaultContent(
     if ( !canEditVault.value ) {
       return;
     }
+
     const index = vaultState.snippets.findIndex(
       ( snippet ) => snippet.id === id
     );
+
     if ( index >= 0 ) {
       vaultState.snippets.splice( index, 1 );
     }

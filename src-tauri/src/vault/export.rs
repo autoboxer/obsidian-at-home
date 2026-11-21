@@ -1,8 +1,8 @@
 use super::*;
 
-/// Writes a portable Obsidian vault, including supported asset files, into a
+/// writes a portable Obsidian vault, including supported asset files, into a
 /// newly-created child of `parent_path`. Existing files and directories are
-/// never reused or overwritten.
+/// never reused or overwritten
 #[tauri::command(rename_all = "camelCase")]
 pub async fn export_obsidian_vault(
     parent_path: String,

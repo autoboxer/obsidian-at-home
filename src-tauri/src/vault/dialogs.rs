@@ -1,6 +1,6 @@
 use super::*;
 
-/// Opens the system's native directory picker and returns a normal filesystem path.
+/// opens the system's native directory picker and returns a normal filesystem path
 #[tauri::command]
 pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     run_vault_io(move || {
@@ -18,7 +18,7 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     .await
 }
 
-/// Opens the native picker for a raster image that can be copied into a vault.
+/// opens the native picker for a raster image that can be copied into a vault
 #[tauri::command]
 pub async fn pick_image_file(app: AppHandle) -> Result<Option<String>, String> {
     run_vault_io(move || {
@@ -43,7 +43,7 @@ pub async fn pick_image_file(app: AppHandle) -> Result<Option<String>, String> {
     .await
 }
 
-/// Opens the native picker for a regular file that can be copied into a vault.
+/// opens the native picker for a regular file that can be copied into a vault
 #[tauri::command]
 pub async fn pick_attachment_file(app: AppHandle) -> Result<Option<String>, String> {
     run_vault_io(move || {

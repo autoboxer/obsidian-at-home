@@ -51,6 +51,7 @@ export function parsePairedInlineMarkup(
     }
 
     const marker = inlineMarkupMarkerAt( value, index );
+
     if ( !marker ) {
       index += 1;
 
@@ -59,12 +60,14 @@ export function parsePairedInlineMarkup(
 
     const markerTo = index + marker.length;
     const markerRange = { from: index, to: markerTo };
+
     while (
       exclusionIndex < exclusions.length &&
       exclusions[ exclusionIndex ]!.to <= markerRange.from
     ) {
       exclusionIndex += 1;
     }
+
     if (
       exclusionIndex < exclusions.length &&
       rangesOverlap( markerRange, exclusions[ exclusionIndex ]! )
@@ -76,10 +79,12 @@ export function parsePairedInlineMarkup(
 
     const roles = inlineMarkupDelimiterRoles( value, marker, index );
     const opening = openings.get( marker );
+
     if ( opening === undefined ) {
       if ( roles.canOpen ) {
         openings.set( marker, index );
       }
+
       index = markerTo;
 
       continue;
@@ -118,9 +123,11 @@ export function findClosingInlineMarkupDelimiter(
 
   while ( cursor < value.length ) {
     const index = value.indexOf( marker, cursor );
+
     if ( index < 0 ) {
       return -1;
     }
+
     if ( characterIsEscaped( value, index ) ) {
       cursor = index + marker.length;
 
@@ -128,12 +135,14 @@ export function findClosingInlineMarkupDelimiter(
     }
 
     const roles = inlineMarkupDelimiterRoles( value, marker, index );
+
     if (
       roles.canClose &&
       inlineMarkupPairCanFormat( value, marker, openingFrom, index )
     ) {
       return index;
     }
+
     if ( roles.canOpen ) {
       return -1;
     }
@@ -152,6 +161,7 @@ export function inlineMarkupPairCanFormat(
 ): boolean {
   const contentFrom = openingFrom + marker.length;
   const content = value.slice( contentFrom, closingFrom );
+
   if ( !content.trim() ) {
     return false;
   }
@@ -198,6 +208,7 @@ function inlineMarkupMarkerAt(
   index: number
 ): InlineMarkupMarker | undefined {
   const character = value[ index ];
+
   if (
     ( character !== '*' && character !== '_' && character !== '~' ) ||
     (
@@ -209,6 +220,7 @@ function inlineMarkupMarkerAt(
   }
 
   let runEnd = index + 1;
+
   while (
     value[ runEnd ] === character &&
     !characterIsEscaped( value, runEnd )
@@ -217,9 +229,11 @@ function inlineMarkupMarkerAt(
   }
 
   const length = runEnd - index;
+
   if ( character === '~' ) {
     return length === 2 ? '~~' : undefined;
   }
+
   if ( length !== 1 && length !== 2 ) {
     return undefined;
   }
@@ -274,6 +288,7 @@ function nearestNonWhitespace(
 
 export function characterIsEscaped( value: string, index: number ): boolean {
   let backslashes = 0;
+
   for (
     let cursor = index - 1;
     cursor >= 0 && value[ cursor ] === '\\';
@@ -292,10 +307,12 @@ function mergeRanges(
     .filter( ( range ) => range.from < range.to )
     .map( ( range ) => ({ ...range }) )
     .sort( ( left, right ) => left.from - right.from || left.to - right.to );
+
   const merged: InlineMarkupRange[] = [];
 
   for ( const range of ordered ) {
     const previous = merged.at( -1 );
+
     if ( !previous || range.from > previous.to ) {
       merged.push( range );
     } else {
@@ -310,6 +327,7 @@ function removeCrossingSpans(
   spans: readonly PairedInlineMarkup[]
 ): PairedInlineMarkup[] {
   const accepted: PairedInlineMarkup[] = [];
+
   const ordered = [ ...spans ].sort( ( left, right ) =>
     left.from - right.from || right.to - left.to
   );

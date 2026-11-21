@@ -1,4 +1,4 @@
-/* Responsive desktop compression */
+/* responsive desktop compression */
 @media (max-width: 1380px) {
   :root {
     --explorer-width: 270px;

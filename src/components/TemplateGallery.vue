@@ -1,13 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref } from 'vue';
-import {
-  canEditVault,
-  createFromTemplate,
-  notify,
-  saveTemplate,
-  uiState,
-  vaultState
-} from '../stores/vault';
+import { canEditVault, createFromTemplate, notify, saveTemplate, uiState, vaultState } from '../stores/vault';
 import type { NoteTemplate } from '../types';
 import AppIcon from './AppIcon.vue';
 
@@ -21,6 +14,7 @@ let returnFocus: HTMLElement | null = null;
 
 const filteredTemplates = computed( () => {
   const query = filter.value.toLocaleLowerCase().trim();
+
   if ( !query ) {
     return vaultState.templates;
   }
@@ -32,6 +26,7 @@ const filteredTemplates = computed( () => {
 
 function useTemplate( id: string ): void {
   const note = createFromTemplate( id );
+
   if ( note ) {
     uiState.tool = 'notes';
   }
@@ -43,6 +38,7 @@ async function showModal(): Promise<void> {
     : null;
   modalOpen.value = true;
   await nextTick();
+
   if ( nameField.value ) {
     nameField.value.focus({ preventScroll: true });
     nameField.value.setSelectionRange( 0, nameField.value.value.length );
@@ -57,9 +53,11 @@ function restoreFocus(): void {
   if ( modalOpen.value ) {
     return;
   }
+
   if ( returnFocus?.isConnected ) {
     returnFocus.focus({ preventScroll: true });
   }
+
   returnFocus = null;
 }
 
@@ -67,6 +65,7 @@ async function openCreate(): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   editingId.value = null;
   Object.assign( draft, {
     name: '',
@@ -81,6 +80,7 @@ async function openEdit( template: NoteTemplate ): Promise<void> {
   if ( !canEditVault.value ) {
     return;
   }
+
   editingId.value = template.builtIn ? null : template.id;
   Object.assign( draft, {
     name: template.builtIn ? `${ template.name } copy` : template.name,
@@ -95,9 +95,11 @@ function submitTemplate(): void {
   if ( !canEditVault.value ) {
     return;
   }
+
   if ( !draft.name.trim() || !draft.content.trim() ) {
     return;
   }
+
   saveTemplate({
     id: editingId.value ?? undefined,
     name: draft.name,
@@ -105,7 +107,9 @@ function submitTemplate(): void {
     titlePattern: draft.titlePattern,
     content: draft.content
   });
+
   notify( editingId.value ? 'Template updated' : 'Template saved', 'success' );
+
   closeModal();
 }
 
@@ -116,14 +120,18 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
 
     return;
   }
+
   if ( event.key !== 'Tab' || !modal.value ) {
     return;
   }
+
   const focusable = Array.from( modal.value.querySelectorAll<HTMLElement>(
     "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex='-1'])"
   ) ).filter( ( element ) => !element.hasAttribute( 'hidden' ) );
+
   const first = focusable[ 0 ];
   const last = focusable[ focusable.length - 1 ];
+
   if ( !first || !last ) {
     event.preventDefault();
     modal.value.focus();
@@ -144,7 +152,8 @@ function handleDialogKeydown( event: KeyboardEvent ): void {
         <div class="utility-hero compact">
           <span class="utility-eyebrow">Templates</span>
           <h1>Create notes from templates</h1>
-          <p>Templates can use <code v-pre>{{date}}</code>, <code v-pre>{{time}}</code>, and <code v-pre>{{title}}</code>.</p>
+          <p>Templates can use <code v-pre>{{date}}</code>, <code v-pre>{{time}}</code>,
+            and <code v-pre>{{title}}</code>.</p>
         </div>
         <button
           :disabled="!canEditVault"

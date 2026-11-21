@@ -608,7 +608,7 @@ pub async fn workspace_finish_external_image_upload(
         let root = validate_workspace_root_path(&external_file_upload_root(&upload_id)?)?;
         reject_home_vault(&app, &root)?;
         let _workspace_guard = lock_workspace_files(&root)?;
-        // Consume only after acquiring the vault locks, so a timeout is retryable.
+        // consume only after acquiring the vault locks, so a timeout is retryable
         let staged = finish_external_file_upload(&upload_id, ExternalFileUploadKind::Image)?;
         validate_external_file_drop_note(&root, &staged.note_relative_path)?;
         let source = validate_image_source_path(&staged.path)?;
@@ -966,8 +966,8 @@ pub async fn workspace_preview_image(
         let root = validate_workspace_root(&path)?;
         reject_home_vault(&app, &root)?;
         let _workspace_guard = lock_workspace_files(&root)?;
-        // Sidebar filenames are literal vault paths, not Markdown destinations.
-        // Reuse the same containment, symlink, format and byte-limit checks.
+        // sidebar filenames are literal vault paths, not Markdown destinations
+        // reuse the same containment, symlink, format and byte-limit checks
         read_relative_workspace_image(&root, &relative_path).map(tauri::ipc::Response::new)
     })
     .await

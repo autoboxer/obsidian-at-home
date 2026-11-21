@@ -1,24 +1,14 @@
 <script setup lang="ts">
 import appIcon from '../assets/app-icon.png';
 import { computed, ref } from 'vue';
-import {
-  formatCommandShortcut,
-  shortcutCommandKey
-} from '../lib/keyboard';
-import {
-  MAX_ZOOM,
-  MIN_ZOOM,
-  openSearchWorkspace,
-  resetZoom,
-  uiState,
-  zoomIn,
-  zoomOut
-} from '../stores/vault';
+import { formatCommandShortcut, shortcutCommandKey } from '../lib/keyboard';
+import { MAX_ZOOM, MIN_ZOOM, openSearchWorkspace, resetZoom, uiState, zoomIn, zoomOut } from '../stores/vault';
 import type { ToolView } from '../types';
 import AppIcon from './AppIcon.vue';
 import KeyboardShortcutsReference from './KeyboardShortcutsReference.vue';
 
 const commandKey = shortcutCommandKey();
+
 const primaryTools: Array<{ id: ToolView; label: string; icon: string; shortcut?: string }> = [
   { id: 'notes', label: 'Notes', icon: 'notes' },
   { id: 'search', label: 'Search', icon: 'search', shortcut: `${ commandKey } Shift F` },
@@ -38,7 +28,9 @@ function selectTool( tool: ToolView ): void {
 
     return;
   }
+
   uiState.tool = tool;
+
   if ( tool === 'notes' ) {
     uiState.notesView = 'editor';
   }
@@ -46,6 +38,7 @@ function selectTool( tool: ToolView ): void {
 
 function handleZoomFocusOut( event: FocusEvent ): void {
   const zoomControl = event.currentTarget as HTMLElement;
+
   if ( !( event.relatedTarget instanceof Node ) || !zoomControl.contains( event.relatedTarget ) ) {
     zoomMenuOpen.value = false;
   }

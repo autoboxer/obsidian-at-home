@@ -1,35 +1,32 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { searchNotes, shortcutCommandKey } from '../lib';
-import {
-  folderNameMap,
-  folderPath,
-  searchState,
-  selectNote,
-  uiState,
-  vaultState
-} from '../stores/vault';
+import { folderNameMap, folderPath, searchState, selectNote, uiState, vaultState } from '../stores/vault';
 import type { SearchScope } from '../types';
 import AppIcon from './AppIcon.vue';
 
 const input = ref<HTMLInputElement>();
 const commandKey = shortcutCommandKey();
+
 const searchScopes: Array<{ id: SearchScope; label: string }> = [
   { id: 'all', label: 'Everywhere' },
   { id: 'titles', label: 'Titles' },
   { id: 'content', label: 'Content' },
   { id: 'tags', label: 'Tags' }
 ];
+
 const query = computed({
   get: () => searchState.query,
   set: ( value: string ) => {
     searchState.query = value;
     searchState.exactTag = null;
+
     if ( !value.trim() ) {
       searchState.scope = 'all';
     }
   }
 });
+
 const scope = computed( () => searchState.scope );
 
 const results = computed( () => {
@@ -51,12 +48,15 @@ const emptyHint = computed( () => {
   if ( searchState.exactTag ) {
     return 'No notes use this tag yet.';
   }
+
   if ( scope.value === 'tags' ) {
     return 'Try another tag or fewer characters.';
   }
+
   if ( scope.value === 'titles' ) {
     return 'Try fewer words or search everywhere.';
   }
+
   if ( scope.value === 'content' ) {
     return 'Try a shorter phrase or search everywhere.';
   }
@@ -95,6 +95,7 @@ function setScope( nextScope: SearchScope ): void {
 
     return;
   }
+
   searchState.scope = nextScope;
   searchState.exactTag = null;
   void focusInput();
@@ -209,7 +210,13 @@ function formatDate( timestamp: number ): string {
             <span>{{ formatDate( result.note.updatedAt ) }}</span>
           </span>
           <strong>{{ result.note.title || "Untitled note" }}</strong>
-          <p>{{ result.snippet || result.note.content.replace( /[#*_>`\[\]]/g, " " ).replace( /\s+/g, " " ).trim().slice( 0, 180 ) || "No content yet" }}</p>
+          <p>
+            {{
+              result.snippet ||
+                result.note.content.replace( /[#*_>`\[\]]/g, " " ).replace( /\s+/g, " " ).trim().slice( 0, 180 ) ||
+                "No content yet"
+            }}
+          </p>
           <span class="search-card-footer">
             <span v-if="result.note.tags.length" class="search-tags">
               <em
