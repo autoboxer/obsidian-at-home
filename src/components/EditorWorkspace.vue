@@ -13,7 +13,6 @@ import { previewWorkspaceImage } from '../services/native';
 import { resolveNoteLink, resolveWikiLink, wikiLinkSuggestions, type WikiLinkTarget } from '../lib/wikiLinks';
 import {
   editorPositionVaultId,
-  getNoteEditorPosition,
   setNoteEditorPosition
 } from '../stores/editorPositions';
 import {
@@ -421,10 +420,6 @@ function setContent( content: string ): void {
   if ( activeNote.value ) {
     updateNote( activeNote.value.id, { content });
   }
-}
-
-function savedEditorPosition( noteId: string, content: string ): NoteEditorPosition | undefined {
-  return getNoteEditorPosition( positionVaultId.value, noteId, content );
 }
 
 function rememberEditorPosition(
@@ -1058,7 +1053,6 @@ watch( tagInput, () => {
             ref="sourceEditor"
             :tab-id="activeNoteTab.id"
             :focus-on-mount="shouldFocusEditorOnMount()"
-            :initial-position="savedEditorPosition( activeNote.id, activeNote.content )"
             :attachment-files="vaultState.attachmentFiles"
             :attachment-refresh-token="uiState.attachmentRefreshToken"
             :embedded-attachments="vaultState.embeddedAttachments"

@@ -83,7 +83,6 @@ import AppIcon from './AppIcon.vue';
 const props = defineProps<{
   tabId: string;
   focusOnMount?: boolean;
-  initialPosition?: NoteEditorPosition;
   attachmentFiles: VaultAttachmentFile[];
   attachmentRefreshToken: number;
   embeddedAttachments: EmbeddedAttachment[];
@@ -348,7 +347,7 @@ onMounted( () => {
   frontmatterPrefix = editableDocument.prefix;
   const viewPosition: NoteEditorViewPosition | undefined = getNoteTabEditorPosition(
     props.vaultId, props.tabId, props.noteId, props.modelValue
-  ) ?? props.initialPosition;
+  );
   const initialPosition = normalizeInitialPosition(
     viewPosition,
     editableDocument.body.length,
@@ -594,11 +593,11 @@ onMounted( () => {
   };
   let state = EditorState.create({
     doc: restoredState?.doc ?? editableDocument.body,
-    selection: initialSelection( initialBodyStart, initialDocumentLength ) ?? restoredState?.selection,
+    // Undo history is shared by the note, but a fresh tab owns a fresh caret.
+    selection: initialSelection( initialBodyStart, initialDocumentLength ) ?? EditorSelection.cursor( 0 ),
     extensions
   });
   if ( savedState && savedState.doc !== editableDocument.body ) {
-    const currentBodyStart = markdownBodyStart( savedState.prefix, savedState.doc );
     state = state.update({
       annotations: [
         externalUpdate.of( true ),
@@ -607,11 +606,7 @@ onMounted( () => {
       changes: minimalDocumentChange( savedState.doc, editableDocument.body ),
       // The shared undo snapshot may hide metadata selected in this tab.
       // Restore from full-document offsets instead of the clamped old projection.
-      selection: initialSelection( editableDocument.bodyStart, editableDocument.body.length ) ?? frontmatterVisibilitySelection(
-        state.selection,
-        currentBodyStart,
-        editableDocument
-      )
+      selection: initialSelection( editableDocument.bodyStart, editableDocument.body.length ) ?? EditorSelection.cursor( 0 )
     }).state;
   }
   frontmatterHistoryChanged = savedState?.frontmatterHistoryChanged ?? false;

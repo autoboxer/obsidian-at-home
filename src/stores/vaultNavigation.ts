@@ -1,5 +1,6 @@
 import { computed, reactive, watch } from 'vue';
 import { createId } from './vaultModel';
+import { restoreNoteTabEditorPositions } from './editorPositions';
 import type { Note, SearchScope, VaultImageFile } from '../types';
 import {
   recentlyDeletedState,
@@ -481,11 +482,14 @@ export function createVaultNavigation(
     }
   }
 
-  function resetNoteNavigation(): void {
+  function resetNoteNavigation( restoredPositionVaultId?: string ): void {
     const tab = newTab( vaultState.activeNoteId );
     noteTabsState.tabs = [ tab ];
     noteTabsState.activeTabId = tab.id;
     uiState.frontmatterVisible = tab.frontmatterVisible;
+    if ( restoredPositionVaultId ) {
+      restoreNoteTabEditorPositions( restoredPositionVaultId, tab.id, vaultState.notes );
+    }
   }
 
   function snapshotNoteNavigation(): NoteNavigationState {

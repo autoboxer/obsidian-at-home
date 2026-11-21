@@ -15,6 +15,7 @@ import {
   captureNoteEditorPosition,
   deleteNoteEditorPosition,
   flushNoteEditorPositions,
+  restoreNoteTabEditorPositions,
   setNoteEditorPosition
 } from './editorPositions';
 import { deleteNoteEditorHistory } from './editorHistories';
@@ -35,6 +36,7 @@ const RECENTLY_DELETED_RETRY_INITIAL_DELAY = 5_000;
 const RECENTLY_DELETED_RETRY_MAX_DELAY = 5 * 60_000;
 
 type RecoveryNavigation = Pick<ReturnType<typeof createVaultNavigation>,
+  | 'activeNoteTab'
   | 'activateNote'
   | 'activateNoteAfterDeletion'
   | 'noteDeletionFallback'
@@ -264,6 +266,7 @@ export function createVaultRecovery( dependencies: VaultRecoveryDependencies ) {
           return false;
         }
 
+        restoreNoteTabEditorPositions( vaultId, navigation.activeNoteTab.value.id, [ restoredNote ]);
         applyVaultMutation( () => applyRestoredNote( restoredNote, previousActiveNoteId ) );
         hydrateRecentlyDeletedNotes( candidateDeletedNotes );
         acknowledgeVaultChanges();
@@ -290,6 +293,7 @@ export function createVaultRecovery( dependencies: VaultRecoveryDependencies ) {
           removeRecentlyDeletedEntries([ id ]);
           if ( result.editorPosition ) {
             setNoteEditorPosition( vaultId, result.restoredNote.id, result.editorPosition );
+            restoreNoteTabEditorPositions( vaultId, navigation.activeNoteTab.value.id, [ result.restoredNote ]);
           }
         },
         async () => Boolean( await reconcileNativeWorkspace( path ) ),

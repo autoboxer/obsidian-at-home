@@ -50,7 +50,7 @@ interface VaultLifecycleDependencies {
     | 'scheduleRecentlyDeletedExpiry'
     | 'snapshotRecentlyDeletedNotes'
   >;
-  resetNoteNavigation: () => void;
+  resetNoteNavigation: ( restoredPositionVaultId?: string ) => void;
   snapshotVault: () => VaultData;
   vaultChanges: Pick<ReturnType<typeof createVaultChangeTracker>,
     'acknowledge' | 'hasChanges' | 'hasNonNavigationChanges' | 'reset' | 'version'
@@ -141,8 +141,8 @@ export function createVaultLifecycle( dependencies: VaultLifecycleDependencies )
       const browserVault = storedVault?.vault ?? createSeedVault();
       hydrateVault( browserVault );
       hydrateRecentlyDeletedNotes( storedVault?.recentlyDeletedNotes ?? []);
-      initializeNoteEditorPositions( 'browser', null, vaultState.notes );
-      resetNoteNavigation();
+      const positionVaultId = initializeNoteEditorPositions( 'browser', null, vaultState.notes );
+      resetNoteNavigation( positionVaultId );
       vaultSession.backend = 'browser';
       vaultSession.phase = 'ready';
       vaultSession.path = null;

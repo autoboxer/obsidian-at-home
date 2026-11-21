@@ -12,19 +12,38 @@ export interface NoteEditorViewPosition extends NoteEditorPosition {
   mainIndex?: number;
 }
 
-// Tab views are session-only. The existing per-note position remains the restart
-// fallback, and no additional editor instances or persisted document copies exist.
-const tabPositions = new Map<string, {
+// Tab views are session-only. Vault opening explicitly seeds the restored tab
+// from per-note positions; newly created tabs never inherit those positions.
+interface TabPosition {
   vaultId: string;
   noteId: string;
   content: string;
   position: NoteEditorViewPosition;
+}
+
+const tabPositions = new Map<string, TabPosition>();
+// Keep unvisited startup positions outside the bounded live-view cache. They
+// belong only to the restored tab and are consumed when that tab opens a note.
+const restoredTabPositions = new Map<string, {
+  vaultId: string;
+  tabId: string;
+  positions: Map<string, TabPosition>;
 }>();
 
 export function pruneNoteTabEditorPositions( keepDocument: ( documentId: string ) => boolean ): void {
   for ( const key of tabPositions.keys() ) {
     if ( !keepDocument( key ) ) {
       tabPositions.delete( key );
+    }
+  }
+  for ( const [ key, tab ] of restoredTabPositions ) {
+    for ( const noteId of tab.positions.keys() ) {
+      if ( !keepDocument( JSON.stringify([ tab.vaultId, tab.tabId, noteId ]) ) ) {
+        tab.positions.delete( noteId );
+      }
+    }
+    if ( !tab.positions.size ) {
+      restoredTabPositions.delete( key );
     }
   }
 }
@@ -36,7 +55,8 @@ export function getNoteTabEditorPosition(
   content: string
 ): NoteEditorViewPosition | undefined {
   const key = JSON.stringify([ vaultId, tabId, noteId ]);
-  const saved = tabPositions.get( key );
+  const saved = tabPositions.get( key )
+    ?? restoredTabPositions.get( JSON.stringify([ vaultId, tabId ]) )?.positions.get( noteId );
   if ( !saved ) {
     return undefined;
   }
@@ -46,8 +66,7 @@ export function getNoteTabEditorPosition(
     saved.position = mapTabPosition( saved.position, changes );
     saved.content = current;
   }
-  tabPositions.delete( key );
-  tabPositions.set( key, saved );
+  setNoteTabEditorPosition( vaultId, tabId, noteId, saved.content, saved.position );
 
   return saved.position;
 }
@@ -59,12 +78,40 @@ export function setNoteTabEditorPosition(
   content: string,
   position: NoteEditorViewPosition
 ): void {
+  const tabKey = JSON.stringify([ vaultId, tabId ]);
+  const restored = restoredTabPositions.get( tabKey );
+  restored?.positions.delete( noteId );
+  if ( restored && !restored.positions.size ) {
+    restoredTabPositions.delete( tabKey );
+  }
   const key = JSON.stringify([ vaultId, tabId, noteId ]);
   tabPositions.delete( key );
   tabPositions.set( key, { vaultId, noteId, content, position });
   // Bound retained view snapshots just as the note undo cache is bounded.
   while ( tabPositions.size > 250 ) {
     tabPositions.delete( tabPositions.keys().next().value! );
+  }
+}
+
+export function restoreNoteTabEditorPositions(
+  vaultId: string,
+  tabId: string,
+  notes: Note[]
+): void {
+  const tabKey = JSON.stringify([ vaultId, tabId ]);
+  const restored = restoredTabPositions.get( tabKey )
+    ?? { vaultId, tabId, positions: new Map<string, TabPosition>() };
+  for ( const note of notes ) {
+    const position = getNoteEditorPosition( vaultId, note.id, note.content );
+    if ( position ) {
+      tabPositions.delete( JSON.stringify([ vaultId, tabId, note.id ]) );
+      restored.positions.set( note.id, {
+        vaultId, noteId: note.id, content: normalizeDocumentText( note.content ), position
+      });
+    }
+  }
+  if ( restored.positions.size ) {
+    restoredTabPositions.set( tabKey, restored );
   }
 }
 
@@ -75,10 +122,7 @@ export function mapNoteTabEditorPositions(
   content: string,
   changes: ChangeSet
 ): void {
-  for ( const saved of tabPositions.values() ) {
-    if ( saved.vaultId !== vaultId || saved.noteId !== noteId ) {
-      continue;
-    }
+  const mapSaved = ( saved: TabPosition ): void => {
     if ( saved.content !== previous ) {
       saved.position = mapTabPosition( saved.position, ChangeSet.of(
         minimalDocumentChange( saved.content, previous ), saved.content.length
@@ -86,6 +130,17 @@ export function mapNoteTabEditorPositions(
     }
     saved.position = mapTabPosition( saved.position, changes );
     saved.content = content;
+  };
+  for ( const saved of tabPositions.values() ) {
+    if ( saved.vaultId === vaultId && saved.noteId === noteId ) {
+      mapSaved( saved );
+    }
+  }
+  for ( const tab of restoredTabPositions.values() ) {
+    const saved = tab.vaultId === vaultId ? tab.positions.get( noteId ) : undefined;
+    if ( saved ) {
+      mapSaved( saved );
+    }
   }
 }
 
@@ -302,6 +357,14 @@ export function deleteNoteEditorPosition( vaultId: string, noteId: string ): voi
       tabPositions.delete( key );
     }
   }
+  for ( const [ key, tab ] of restoredTabPositions ) {
+    if ( tab.vaultId === vaultId ) {
+      tab.positions.delete( noteId );
+      if ( !tab.positions.size ) {
+        restoredTabPositions.delete( key );
+      }
+    }
+  }
   removePositionCaptures( vaultId, new Set([ noteId ]) );
   const vault = positionVaults.get( vaultId );
   if ( vault?.positions.delete( noteId ) ) {
@@ -314,6 +377,18 @@ export function pruneNoteEditorPositions( vaultId: string, notes: Note[]): void 
   for ( const [ key, saved ] of tabPositions ) {
     if ( saved.vaultId === vaultId && !noteIds.has( saved.noteId ) ) {
       tabPositions.delete( key );
+    }
+  }
+  for ( const [ key, tab ] of restoredTabPositions ) {
+    if ( tab.vaultId === vaultId ) {
+      for ( const noteId of tab.positions.keys() ) {
+        if ( !noteIds.has( noteId ) ) {
+          tab.positions.delete( noteId );
+        }
+      }
+      if ( !tab.positions.size ) {
+        restoredTabPositions.delete( key );
+      }
     }
   }
   removePositionCaptures( vaultId, noteIds, true );
